@@ -1,0 +1,46 @@
+{
+  "name": "bfa-platform",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "check-types": "npm run check-types --workspaces --if-present",
+    "dev:web": "npm run dev --workspace web --",
+    "db:push": "npm run db:push --workspace @bfa-platform/db --",
+    "db:studio": "npm run db:studio --workspace @bfa-platform/db --",
+    "db:generate": "npm run db:generate --workspace @bfa-platform/db --",
+    "db:migrate": "npm run db:migrate --workspace @bfa-platform/db --",
+    "check": "biome check --write .",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@bfa-platform/env": "*",
+    "dotenv": "^17.4.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@bfa-platform/config": "*",
+    "@biomejs/biome": "^2.5.6",
+    "@types/node": "^26.2.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.2.0",
+    "typescript": "^6.0.3"
+  },
+  "lint-staged": {
+    "*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc}": [
+      "biome check --write ."
+    ]
+  },
+  "packageManager": "npm@11.17.0",
+  "allowScripts": {
+    "sharp": true,
+    "esbuild@0.18.20": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
+  }
+}

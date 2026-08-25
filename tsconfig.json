@@ -1,0 +1,3 @@
+{
+  "extends": "@bfa-platform/config/tsconfig.base.json"
+}

@@ -1,0 +1,187 @@
+---
+title: Kickoff Runbook
+description: Environment setup, GitHub workflow, and ownership-transfer procedure for the Backflow Assembly Certification Platform
+---
+
+Stack: **Next.js** (frontend) + **Supabase** (database, auth) + **Vercel** (hosting).
+
+Everything in this project is built under the company's accounts first (GitHub org, Supabase, Vercel) — not the client's. The client is non-technical, so ownership transfers to him at the end of the project (full procedure in [Ownership transfer](#9-ownership-transfer)). Two developers work on this together — see [Collaboration workflow](#2-collaboration-workflow) for how to avoid stepping on each other.
+
+## 0. Before you start
+
+Install on both developers' machines: current-LTS Node.js, Git, an IDE, the Supabase CLI, the Vercel CLI.
+
+Accounts needed (all under the company name, not the client's):
+
+- GitHub organization — `Zeroqode-Org` under `Zeroqode-Inc`.
+- Supabase account — `developer@zeroqode.com`.
+- Vercel account — `developer@zeroqode.com`.
+
+## 1. GitHub repository
+
+Repo: **`bfa-platform`**, private, with a README and Node `.gitignore`, no license.
+
+**Branch protection on `main`:** set up a ruleset (Settings → Rulesets → New branch ruleset) targeting the default branch, requiring 1 PR approval, blocking force pushes and deletions.
+
+> **Important catch:** on the GitHub Free plan, rulesets are **not enforced** on private repos — the ruleset exists and looks configured, but nobody is actually stopped from pushing straight to `main`. Set it up anyway (harmless, ready if the plan changes), but the real protection is **team discipline**: both developers explicitly agree to never push directly to `main`, no exceptions, and treat the PR workflow in Section 2 as a firm rule.
+
+**PR merge settings** (Settings → General → Pull Requests): only **Allow squash merging** checked (merge commits and rebase merging off). Check **Automatically delete head branches**. Optionally check **Always suggest updating pull request branches**.
+
+**Collaborators:** both developers added with **Write** access.
+
+## 2. Collaboration workflow
+
+`main` always reflects working, reviewed code. Nobody edits `main` directly — not platform-enforced on Free, so it's a firm team agreement. All work happens on short-lived feature branches, one per task, merged via a reviewed PR.
+
+**Branch naming — tie it to the PRD:**
+
+```
+feature/6.3-certifier-dashboard
+feature/6.6.2-bfa-assets
+feature/6.7-reminder-workflow
+```
+
+**Splitting the work:** divide along the [phase table](/docs/dev-plan) — e.g. once Phase 1 (data model/auth) is done, one developer takes the certifier-facing track (Phase 3) while the other takes the WP Dashboard track (Phase 4). Claim an issue on the tracker before starting it.
+
+**Day to day:**
+
+```bash
+# starting a new task
+git checkout main
+git pull origin main
+git checkout -b feature/6.3-certifier-dashboard
+
+# while working — commit in small chunks
+git add .
+git commit -m "6.3: add drafts table component"
+git push -u origin feature/6.3-certifier-dashboard   # -u only needed the first time
+
+# keeping your branch current with main (every day or two)
+git checkout feature/6.3-certifier-dashboard
+git pull origin main
+# on conflict: resolve the <<<<<<< / ======= / >>>>>>> markers, then
+git add <fixed files>
+git commit -m "merge main into feature branch, resolve conflict"
+git push
+```
+
+**Opening a PR:** push, then use the green "Compare & pull request" banner on the repo's main page (base `main`, compare your branch already set). Title with the PRD number (e.g. "6.3 Certifier Dashboard"), add the other developer as reviewer.
+
+**Reviewing:** Files changed tab → inline comments on hover → Review changes → Approve / Request changes → Submit review.
+
+**Merging (only after approval):** Squash and merge → Confirm. The branch deletes itself automatically.
+
+**Tracking who's doing what:** the tracker in the [development plan](/docs/dev-plan) — one row per PRD subsection, assigned to whoever picks it up.
+
+## 3. Scaffold command
+
+Only one developer runs this, once — push the result so the second developer clones it:
+
+```bash
+npx create-better-t-stack@latest bfa-platform \
+  --frontend next \
+  --backend self \
+  --runtime node \
+  --database postgres \
+  --orm drizzle \
+  --db-setup supabase \
+  --auth none \
+  --addons biome husky skills fumadocs \
+  --web-deploy none \
+  --payments none
+```
+
+Key choices: `--runtime node` (widest hosting compatibility — matters for the FedRAMP-driven portability requirement), `--orm drizzle` (stays close to raw SQL, plays well with hand-written RLS policies), `--auth none` (Better-T-Stack's built-in auth options don't include Supabase Auth — wired in manually), `fumadocs` addon (scaffolds the docs site — landed as **`apps/fumadocs`**, not `apps/docs` — see the [dev plan's noted deviation](/docs/dev-plan#known-deviation-from-the-kickoff-runbook)).
+
+After scaffolding:
+
+```bash
+cd bfa-platform
+npm install
+npm install @supabase/supabase-js @supabase/ssr
+```
+
+Create `.env.local` (gitignored) and a committed `.env.example` with just the variable names:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+```
+
+The one push straight to `main` for the initial scaffold commit is fine — everything after goes through a branch + PR.
+
+## 4. Supabase project
+
+Create the project under the company account. Region: US West (North California) — reasonable default for Hawaii-based initial customers.
+
+**On creation:** leave **Enable Data API** checked (required for the Supabase client libraries). **Uncheck "Automatically expose new tables"** (works against the manual, explicit RLS approach below). **Check "Enable automatic RLS"** — auto-enables RLS on every new table as a safety net, reinforcing the "RLS from the first migration" rule even if a migration file forgets the line.
+
+```bash
+supabase login
+supabase init
+supabase link --project-ref <your-project-ref>   # Project Settings → General → Project ID
+supabase migration new init_schema
+```
+
+Write `CREATE TABLE` statements for every table in the [PRD's data model](/docs/prd#5-data-model-supabase--postgres): `bfa_assets`, `customers`, `certifiers`, `water_purveyors`, `wp_certifier_authorizations`, `repair_companies`, `test_submissions`, `users`/`profiles`, `invitations`. **Include `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;` for every single table in this same file** — RLS from the start, even before the actual policies exist (policies land in later migrations as each feature is built).
+
+```bash
+supabase db push
+```
+
+Turn on email/password auth: Authentication → Sign In/Providers → confirm Email is enabled. Leave Site URL as-is until Section 5 is done.
+
+## 5. Vercel project
+
+Import the repo, root directory pointed at `apps/web`, add the three env vars with real values, deploy. Once live, set the Supabase Site URL to the real `https://your-project.vercel.app` address.
+
+**Portability guardrails** — avoid these Vercel-specific features (per the client's FedRAMP-readiness discussion; full list also lives in the `bfa-requirements` skill):
+
+- Vercel Cron Jobs — use the Node-native scheduler pattern instead.
+- Vercel KV, Vercel Blob, Vercel Postgres — not used; Supabase covers storage and data.
+- Vercel Edge Middleware/Edge Runtime — stick to standard Node.js runtime unless there's a clear, justified performance reason.
+
+## 6. AI-coding rules file
+
+The project's requirements (portability, security/compliance, Docker readiness, documentation maintenance) live in the `bfa-requirements` skill at `.agents/skills/bfa-requirements/SKILL.md` (symlinked from `.claude/skills/`) — loaded automatically by AI-assisted coding whenever relevant.
+
+## 7. Development plan
+
+See the dedicated [Development Plan](/docs/dev-plan) page — it's the durable record, kept current as work completes. Day-to-day tracking happens in Asana (one task per PRD subsection, linked to its PR via Asana's GitHub integration); the docs page is what a future contributor reads to understand where things stand.
+
+## 8. Ownership-transfer checklist
+
+Start this the moment something is created under the company's name:
+
+- [ ] GitHub repository (`bfa-platform`)
+- [ ] Supabase project
+- [ ] Vercel project
+
+## 9. Ownership transfer
+
+Not a "hand over and walk away" transfer — the client becomes primary owner (billing, ultimate control), but the dev team keeps ongoing access at an appropriate role on every platform so it can keep shipping features.
+
+**Cost note:** Vercel does not support multiple collaborators on its free Hobby plan — shared access requires a paid **Vercel Pro** plan. Flag this with the client before starting. GitHub and Supabase both support multiple collaborators on free tiers.
+
+### 9.1 GitHub
+
+Settings → Danger Zone → Transfer, to the client's username or an org they own. If transferring to an org, the client may need to temporarily add the dev team as org members to complete the transfer. Update local remotes afterward: `git remote set-url origin <new-repo-url>`.
+
+**Ongoing access to request:** **Write** (or **Admin**, if the dev team should keep managing repo settings) as Collaborators/Members. No paid plan required — Free supports unlimited private-repo collaborators.
+
+### 9.2 Supabase
+
+Project Settings → General → Transfer project, to the client's organization. URL, API keys, database, and storage carry over — generally no downtime. **Rotate the `service_role` key** at the transfer point as a clean baseline, then update it in Vercel's env vars.
+
+**Ongoing access to request:** **Administrator** role (not Owner) — full access for ongoing development (migrations, DB, API keys) while only Owner can transfer the project or add new Owners.
+
+### 9.3 Vercel
+
+Requires the client on a **Pro** plan with a Team. Settings → General → Transfer Project, to the client's team. Domains, aliases, and env vars carry over automatically; third-party integrations do not — reconnect them. Update `SUPABASE_SERVICE_ROLE_KEY` to the rotated value post-transfer.
+
+**Ongoing access to request:** **Member** role — can deploy, manage env vars, work on projects normally. Reserve Owner for the client alone.
+
+### 9.4 Final check
+
+Confirm the client can independently log into all three platforms as Owner; confirm the dev team's accounts show the roles above rather than being dropped; confirm the live site works end-to-end (submit a test, check a dashboard loads); confirm the rotated Supabase key matches in both Supabase and Vercel. Then prove it works, not just that it's configured: push a trivial change on a feature branch, open a PR, merge it, confirm it deploys.

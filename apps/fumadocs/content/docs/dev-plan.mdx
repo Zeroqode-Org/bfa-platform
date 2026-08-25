@@ -1,0 +1,71 @@
+---
+title: Development Plan
+description: Running phase/status tracker for the Backflow Assembly Certification Platform build — mirrors Section 7 of the kickoff runbook
+---
+
+This page is the durable record of build progress — kept current as [PRD](/docs/prd) subsections move from **planned** → **in-progress** → **done**. Day-to-day task tracking happens in Asana; this page is what a future contributor reads to understand where things stand without reading every commit or PR.
+
+Target delivery: **2026-10-02** (~6 weeks from kickoff on 2026-08-24). Team: **Lina** and **Daniil**.
+
+## Phase order
+
+| Phase | PRD Section(s) | Why this order |
+|---|---|---|
+| 0 | Kickoff runbook | Infra must exist before any feature work starts |
+| 1 | 6.1 Data Model, Auth & Backend Setup | Everything else depends on this — both developers pair on it |
+| 2 | 6.2 Invitation & Onboarding | Needed before any real user can log in |
+| 3 | 6.3–6.5 Certifier Dashboard → WP Selector → Wizard | One consistent flow — Lina's track |
+| 4 | 6.6 WP Dashboard (all 7 subsections) | BFA Assets (6.6.2) and Repair Companies (6.6.5) must exist before Phase 5 — Daniil's track, parallel with Phase 3 |
+| 5 | 6.7–6.10 Workflows | Depends on the scheduler pattern plus BFA Assets and Repair Companies. Both developers converge here |
+| 6 | 6.11 Super-Admin | Parallel with Phase 4–5 once Phase 1–2 are done |
+| 7 | 6.12–6.15 Statements, Landing Page, Email Integration, Shell polish | Lower-dependency, slots in wherever there's room |
+| 8 | 6.16–6.17 Project Management & QA | Runs throughout |
+
+## Task tracker
+
+Status as of **2026-08-25**. Update this table as work progresses — this is the source of truth, not the phase table above.
+
+| Task | PRD § | Owner | Start | End | Status |
+|---|---|---|---|---|---|
+| Project Management | 6.16 | — | 08/24 | 10/02 | in-progress |
+| App Shell, Navigation & Design System | 6.15 | Lina | 08/24 | 08/28 | in-progress |
+| Super-Admin (incl. Impersonate) | 6.11 | Daniil | 08/24 | 08/28 | in-progress |
+| Invitation & Onboarding Flow | 6.2 | Daniil | 08/24 | 08/28 | in-progress |
+| Transactional Email Integration | 6.14 | Daniil | 08/24 | 10/02 | in-progress |
+| Data Model, Auth & Backend Setup | 6.1 | Lina | 08/31 | 09/04 | planned |
+| Certifier Dashboard | 6.3 | Lina | 08/31 | 09/04 | planned |
+| WP Dashboard — Core & Analytics | 6.6.1 | Daniil | 09/07 | 09/11 | planned |
+| WP Dashboard — BFA Assets | 6.6.2 | Daniil | 09/07 | 09/11 | planned |
+| WP Dashboard — Certifiers | 6.6.3 | Daniil | 09/07 | 09/11 | planned |
+| WP Dashboard — Repair Companies | 6.6.5 | Daniil | 09/07 | 09/11 | planned |
+| Certifier WP Selector | 6.4 | Lina | 09/07 | 09/11 | planned |
+| WP Dashboard — Submitted Tests | 6.6.6 | Lina | 09/14 | 09/18 | planned |
+| WP Dashboard — Notices & Email Settings | 6.6.7 | Daniil | 09/14 | 09/18 | planned |
+| Workflow 1: Reminder + Late Notices | 6.7 | Daniil | 09/14 | 09/18 | planned |
+| Workflow 2: AG Rate Renewal Notice | 6.9 | Daniil | 09/14 | 09/18 | planned |
+| Workflow 3: Failure Notice + 30-Day Fail List | 6.8 | Daniil | 09/14 | 09/18 | planned |
+| Certifier Test Wizard (all 8 BFA types) | 6.5 | Lina | 09/21 | 09/25 | planned |
+| Workflow 4: General Info Email | 6.10 | Daniil | 09/21 | 09/25 | planned |
+| Monthly Statements (Basic Export) | 6.12 | Lina | 09/28 | 10/02 | planned |
+| Landing Page | 6.13 | Lina | 09/28 | 10/02 | planned |
+| QA & Testing | 6.17 | — | 08/24 | 10/02 | in-progress |
+
+## Known deviation from the kickoff runbook
+
+The runbook (and this repo's `bfa-requirements` skill / compliance checks) refer to the docs app as `apps/docs`. Better-T-Stack actually scaffolded it as **`apps/fumadocs`** (package name `fumadocs`). All documentation-path references in this repo use the real path — `apps/fumadocs/content/docs` — not `apps/docs`.
+
+## Open questions blocking phase completion
+
+Carried from [PRD § 10](/docs/prd#10-open-questions-for-the-client) — resolve before the owning phase is marked done:
+
+- **Phase 2:** WPAdmin/WPsubAdmin/WPEmployee permission differences; second-WP-invite notification behavior.
+- **Phase 3:** signature vs. certify-checkbox; legacy PDF/results-document layout match (reference wizard: [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard)).
+- **Phase 4:** whether a WP can reassign the BIN itself on an existing asset (vs. one-time assignment only).
+- **Phase 5:** dynamic variables for notice text; AG Renewal Date auto-update behavior; monthly CSV export field list.
+
+Resolved since the last pass (no longer blocking): mid-wizard pass/fail handling, scope of "edit submitted test data" for a WP, asset↔customer cardinality, email routing for suspended customers — see [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log).
+
+## Related pages
+
+- [Product Requirements Document](/docs/prd) — full feature backlog and data model.
+- [Kickoff Runbook](/docs/kickoff-runbook) — environment setup, GitHub workflow, ownership-transfer procedure.

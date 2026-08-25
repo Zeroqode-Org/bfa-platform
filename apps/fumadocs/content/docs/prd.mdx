@@ -1,0 +1,188 @@
+---
+title: Product Requirements Document
+description: Backflow Assembly Certification Platform — PRD v2 (Native Code Build)
+---
+
+Prepared for Nathan (Backflow Certifier, Hawaii) — prospect and product owner. Ground-up custom application (Next.js + Supabase), replacing a prior Bubble-based scope. Effort estimate: ~170 hours (~6 weeks, AI-assisted development).
+
+## 1. Overview
+
+A multi-tenant SaaS application, built natively, that replaces a manual paper/mail workflow end-to-end. Certifiers submit test results from their phone in the field, reminder and failure notices go out automatically by email, and each water company gets a dashboard showing incoming and delinquent tests in one place.
+
+- **Who pays:** the water companies (Water Purveyors, WPs). Nathan and his certifiers use the app for free. The Water Purveyor dashboard is the core commercial product.
+- **Access model:** invite only. No public signup. Nathan invites WPs, WPs invite their certifiers, and a certifier can work for more than one WP.
+
+**What's different in this version**
+
+- Ground-up build in code (Next.js on Vercel) instead of extending the existing Bubble app.
+- Supabase (Postgres) replaces Bubble's native database, with Postgres Row-Level Security (RLS) enforcing multi-tenant isolation in place of Bubble's privacy rules.
+- No data migration required — clean slate, no legacy records to carry over (client-confirmed).
+- Development is AI-assisted (an agent writes implementation code under engineering supervision) — more time on architecture, review, and QA, less on reverse-engineering someone else's build.
+
+**Assumption:** Next.js + Supabase (backend/auth) + Vercel (hosting) is the assumed/confirmed stack — the standard, best-supported combination for this profile.
+
+## 2. Goals and Success Criteria
+
+**Primary goals**
+
+- Certifier submits a completed test from a phone in the field, across all 8 BFA assembly types, replacing paper and manual PDF entry.
+- Annual reminders, escalating late notices, and failure notices go out automatically by email.
+- Each Water Purveyor gets a single dashboard showing incoming reports, delinquent tests, key counts, and compliance trends — scoped to only their own data.
+- Nathan gets a super-admin view across all WP tenants, an invite flow to onboard new WPs, and the ability to Impersonate a WP or certifier.
+
+**What success looks like for v1**
+
+- Nathan can demo a working end-to-end flow: certifier submits → notice fires → WP sees it on the dashboard.
+- A WP can log in, see who is delinquent and what is coming in, and download their records over a chosen date range.
+- Build lands at roughly 120–125 engineering hours, positioned as a real, sellable MVP.
+
+## 3. Users and Personas
+
+| Persona | Role and needs |
+|---|---|
+| **Certifier** (field tester) | Independent tester. Mostly on a phone: launches the test wizard, saves drafts at any step, submits completed tests. Can work for more than one WP. Free user. |
+| **Water Purveyor** (WPAdmin / WPsubAdmin / WPEmployee) | The paying customer, desktop clerk workflow. Sees incoming/delinquent tests, manages their own BFA assets, customers, certifiers, and repair companies, customizes notice text, downloads statements. Exact permission differences between the three sub-roles are an open question. |
+| **Super-Admin** (Nathan / internal team) | Cross-tenant view of all WPs, invites new WPs, can Impersonate a WP or Certifier account. No audit log required for impersonation in v1 (client-confirmed). |
+| **Customer** (property owner / occupant) | Receives emails only (reminder, late notices, failure notice, AG renewal, general info). No login, doesn't touch the app. Records attach to the physical asset, not the customer, since occupants change over time. |
+
+## 4. Technology and Architecture
+
+- **Frontend:** Next.js (React), deployed on Vercel (client-confirmed hosting).
+- **Backend / data:** Supabase — Postgres, Supabase Auth (email/password), Row-Level Security for multi-tenant isolation, Supabase Storage for photo uploads and generated PDFs.
+- **Transactional email:** Resend or Postmark, wired into the notice/reminder workflows.
+- **Development approach:** AI-assisted — an agent handles the bulk of implementation coding, with engineering oversight for architecture, review, and QA.
+
+**Multi-tenant isolation:** each WP sees only their own data, enforced with Postgres RLS policies keyed off the authenticated user's WP association. This must be correctly designed once, up front — RLS bugs are a security issue, not just a display bug.
+
+**Authentication (confirmed):** Email/password. Invited users set their own password and complete their profile on first login, arriving via a unique invite link — no public signup.
+
+## 5. Data Model (Supabase / Postgres)
+
+The asset-centric principle (Nathan's core idea): the BIN and test history stay attached to the physical asset and meter location, not the customer, because occupants change over time. Only the meter location and its BIN are permanent. The `annual_test_date` field on `bfa_assets` is the single most important field in the schema — it drives the reminder engine (Section 6.7).
+
+**Asset ↔ customer relationship (confirmed):** asset and customer are equally important — a wizard submission can correct any field except the BIN, which is the one truly protected value. Over time, one asset can have several customers attached in sequence (occupant changes), and one customer can be attached to several assets. `bfa_assets.current_customer_id` is a live pointer, not a fixed relationship — model the historical assignments too (a `customer_assignments` join table with a start/end date, or equivalent), not just the current pointer, so past occupancy isn't lost when a customer is swapped.
+
+**Email routing rule (confirmed):** every automated email (reminder, late notices, failure notice, AG renewal) is sent to whichever customer is *currently* attached to the asset's BIN via `current_customer_id`. If that customer is suspended (`customer_status`), no email goes out for that asset until the WP attaches a new customer to the BIN — suspension is not a per-email skip, it's a hold on the whole asset's notice pipeline.
+
+| Table | Purpose / key fields |
+|---|---|
+| `bfa_assets` | The physical valve — permanent record. BIN (protected, not correctable via a test-submission edit), serial number, make, model, size, bfa_type, service address, assembly location, annual_test_date, asset_status, water_purveyor_id, current_customer_id. |
+| `customers` | Occupant/billing entity, potentially one of several attached to an asset over time. account_number, name, address, email, rate_category (e.g. Agricultural), ag_renewal_date, customer_status, water_purveyor_id. |
+| `customer_assignments` | History of which customer was attached to which asset and when — needed because occupants change and both past and current assignments matter. bfa_asset_id, customer_id, start_date, end_date (null = current). |
+| `certifiers` | The field tester. name, company, id_number, license info, expiration_date, status (active/blocked), linked user_id. |
+| `water_purveyors` | The paying municipal client. company, address, PWSID, subdomain/branding, notice email templates, notification lead time (fixed platform-wide), approved testers list. |
+| `wp_certifier_authorizations` | Join table linking a certifier to the WPs they're authorized to work for. authorization_status. Drives the WP selector dropdown. |
+| `repair_companies` | Approved repair firms per WP. company, phone, email, status. Feeds the failure notice email. |
+| `test_submissions` | The test record. Status (draft/submitted), values per BFA type, linked bfa_asset_id and certifier_id. Editable by the certifier only while in Draft; locked after submit for the certifier, but a WP can correct any field of a submitted test (Section 6.6.6). Draft state saves at every conditional step, not just the top level. Fields that were pre-filled from a prior submission (existing-BIN flow) and then overwritten by the certifier need an `overridden_fields` marker (or equivalent) so the WP can see what changed, not just the final value. |
+| `users` / `profiles` | Supabase Auth user plus profile table. name, global_role (SuperAdmin, WPAdmin, WPsubAdmin, WPEmployee, Certifier), status (active/blocked). |
+| `invitations` | Invite token log. email, role, status, token, expires_at, associated_wp_id, is_redeemed. |
+
+**Open question:** when a certifier already in the system is invited by a second WP — silently add the authorization, or notify the certifier by email?
+
+## 6. Feature Requirements by Module
+
+Estimates reflect the AI-assisted development model.
+
+| # | Module | Estimate (h) |
+|---|---|---|
+| 6.1 | Data Model, Auth & Backend Setup — Supabase schema, RLS policies, Auth config, Storage buckets. Clean-slate build, no migration. | 15 |
+| 6.2 | Invitation & Onboarding Flow — invite link, self-service password + profile setup. Open: WPAdmin/WPsubAdmin/WPEmployee permission differences; second-WP invite behavior. | 6 |
+| 6.3 | Certifier Dashboard — drafts/submissions overview, drafts table (resume/delete), submitted tests table with detail view, profile page. | 7 |
+| 6.4 | Certifier WP Selector — dropdown reading `wp_certifier_authorizations`, determines which WP a test submits against. | 2 |
+| 6.5 | Certifier Test Wizard (all 8 BFA types: RP, RPDA, RPDA-2, DC, DCDA, DCDA-2, PVB, SVB) — shared shell (assembly details, meter readings, customer info, signature/certify, photo upload) + type-specific conditional steps. BIN-found vs no-BIN is the same form, not two layouts. Draft-saves at every conditional step. Pass/fail is answered by a dedicated question but does not end the wizard early — it keeps collecting the remaining fields and ends in a results document (reference: the client's existing wizard at [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard)). Existing-BIN entry pre-fills the questionnaire from the asset's prior submission, and the certifier can overwrite any pre-filled value. Full per-type field breakdown: [Wizard Field Reference](/docs/wizard-field-reference). Open: signature vs checkbox; legacy PDF layout match. | 20 |
+| 6.6.1 | WP Dashboard — Core & Analytics: metric cards, incoming/delinquent lists, compliance trend + pass/fail charts. | 10 |
+| 6.6.2 | WP Dashboard — BFA Assets: register/manage assets, assign BIN, set Annual Test Date (drives Workflow 1), associate customer. | 5 |
+| 6.6.3 | WP Dashboard — Certifiers: table, block/unblock. | 3 |
+| 6.6.4 | WP Dashboard — Customers: table, WP-driven creation (customers don't log in). | 3 |
+| 6.6.5 | WP Dashboard — Repair Companies: table, add/edit/deactivate. Feeds the failure notice. | 2 |
+| 6.6.6 | WP Dashboard — Submitted Tests: cross-certifier table; a submission opens as a document-style view of the full wizard result, and the WP can correct any field on it (confirmed — full field-level edit, not limited corrections). | 3 |
+| 6.6.7 | WP Dashboard — Notices & Email Settings: edit reminder/late/final notice text, compose General Info broadcast, view repair-company list. | 5 |
+| 6.7 | Workflow 1: Reminder + Escalating Late Notices — reminder ~2 months before due date; Late Notice 1 (+1 day), Late Notice 2 (+31 days), Final Notice (+31 days); per-WP customizable text; intervals fixed platform-wide. | 7 |
+| 6.8 | Workflow 3: Failure Notice + 30-Day Fail List — failure email with repair-company list; asset appears on fail list after 30 days without a passing re-test; clears on next pass. | 6 |
+| 6.9 | Workflow 2: Agricultural (AG) Rate Renewal Notice — one-time annual notice, no escalation. Open: does the AG renewal date auto-update after sending? | 3 |
+| 6.10 | Workflow 4: General Info Email — flexible broadcast (subject, body, recipient selection), no personalization needed. | 3 |
+| 6.11 | Super-Admin — invite WPs, WP list table, Impersonate (view/act as WP or Certifier). No audit log required for impersonation in v1. | 10 |
+| 6.12 | Monthly Statements (Basic Export) — on-demand CSV over a chosen date range, not scheduled. Open: exact export fields. | 3 |
+| 6.13 | Landing Page — public marketing page, name+email capture only, not connected to the app. Content/positioning references: [Syncta](https://www.syncta.com/backflow-testers), [SwiftComply](https://www.swiftcomply.com/backflow-prevention-software/), [Mach Backflow](https://www.machbackflow.com/), [The Backflow Assistant (App Store)](https://apps.apple.com/us/app/the-backflow-assistant/id6746165015) — more may be added while content is being developed. | 5 |
+| 6.14 | Transactional Email Integration — provider account, sender domain/DKIM, template plumbing. | 2 |
+| 6.15 | App Shell, Navigation & Responsive Design System — one coherent shell per user type; phone-first for certifiers, desktop-optimized for WP/Super-Admin. | 8 |
+| 6.16 | Project Management | 25 |
+| 6.17 | QA & Testing — including multi-tenant RLS isolation testing and end-to-end flow testing. | 10 |
+
+**Total:** ~170 hours (~6 weeks). Runs above the original ~100h target mainly because BFA Asset management and Repair Company management turned out to be prerequisites for workflows already in scope.
+
+**If trimming becomes necessary:** the WP Dashboard analytics layer (6.6.1, partial) and General Info Email (6.10) are the two lowest-dependency modules — deferrable with the least ripple effect.
+
+## 7. Key User Flows
+
+1. **Test submission (existing asset)** — certifier enters BIN, specs pre-populate, runs test, submits; record locks, PDF generates; result lands on the WP dashboard.
+2. **Test submission (new install, no BIN)** — same wizard, certifier-entered fields; WP reviews and assigns a BIN in BFA Assets, which is also where the Annual Test Date gets set (puts the asset on the reminder schedule).
+3. **Direct BFA Asset registration by the WP** — WP registers an asset directly from the dashboard, independent of any certifier submission.
+4. **Notice escalation** — reminder ~2 months ahead → Late Notice 1 (+1 day) → Late Notice 2 (+31 days) → Final Notice (+31 days). A passing test stops the escalation.
+5. **Failure to repair** — failed test triggers an immediate failure email; asset appears on the WP fail list after 30 days without a passing re-test; clears on the next pass.
+6. **Invitation onboarding** — inviter sends invite → invited person sets password + completes profile on first login → an already-registered certifier authorized for an additional WP skips repeating profile setup.
+7. **Correcting a mistaken submission** — two paths, both confirmed in scope: (a) the certifier re-runs the wizard for the same BIN and the new submission replaces the prior answers (existing-BIN prefill, any field overwritable); or (b) the certifier flags it to the WP, who opens the submission's document view (Section 6.6.6) and corrects any field directly — including cases where the certifier left BIN blank and the WP needs to work out which asset it belongs to.
+
+## 8. Non-Functional Requirements
+
+- **Multi-tenant isolation:** each WP sees only their own data, enforced by Postgres RLS. Verified by explicit cross-tenant QA testing.
+- **Invite-only access:** no public signup for the app; only the landing-page lead-capture form is public.
+- **Data immutability:** a certifier can edit a test only while it's a Draft; locked after submit. A WP can correct any field of a submitted test (confirmed — full field-level edit); a certifier's only path to change a submitted test is re-running the wizard for the same BIN, which overwrites the prior answers. The one field neither path treats casually is the BIN itself — it's the most protected value in a submission.
+- **Mobile-first certifier experience:** wizard and dashboard must work well on a phone. WP and Super-Admin dashboards are desktop-oriented.
+- **No payment handling:** the app processes no money; WP billing happens outside the app by invoice.
+
+## 9. Confirmed Decisions (Client Q&A Log)
+
+| Topic | Confirmed answer |
+|---|---|
+| BIN Found vs No BIN wizard | Same form; only BIN-linked fields switch between auto-filled and certifier-typed. |
+| Draft-saving granularity | Resumes at any conditional step within a BFA type's flow, not just the top level. |
+| Data migration | None needed — clean slate in Supabase. |
+| Auth method | Email/password; invited users set password + complete profile on first login via invite link. |
+| WP dashboard analytics | Include charts (trend + pass/fail breakdown) — in scope. |
+| Impersonate | In scope; no audit log required for v1. |
+| Late-notice intervals | Fixed platform-wide (1 day / 31 days / 31 days) — not WP-customizable. |
+| Reminder interval | ~2 months before the due date. |
+| Annual Test Date | Set by the WP when they assign the BIN. |
+| Failure fail-list clearing | Clears once a new passing test is submitted. |
+| AG Renewal Date | Set by the WP at customer creation. |
+| General Info Email | Included in scope for this build. |
+| Hosting | Vercel. |
+| Pass/fail question | A dedicated question in the wizard, but it does not end the questionnaire early — remaining fields are still collected either way, ending in a results document. Reference: client's existing wizard at [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard). |
+| Asset vs. customer importance | Equally important. Any wizard answer can be corrected except the BIN — the BIN is the single most protected field. |
+| Asset ↔ customer cardinality | Many-changing-over-time in both directions: one asset can have several customers attached in sequence; one customer can have several assets. |
+| Correcting a submitted test | Two confirmed paths: certifier re-runs the wizard for the same BIN (overwrites prior answers), or the WP opens the submission as a document and edits any field directly. |
+| Existing-BIN wizard entry | Pre-fills the questionnaire from the asset's prior submission; the certifier can overwrite any field. Overwritten fields should be visibly flagged to the WP, not silently replaced. |
+| Empty-BIN wizard entry | The certifier can leave BIN blank and fill in the rest of the form; resolving which asset it belongs to (and fixing anything) is the WP's job afterward. |
+| Email routing / suspended customers | Automated emails go to whichever customer is currently attached to the asset's BIN. If that customer is suspended, the asset's emails stop entirely until the WP attaches a new customer to the BIN. |
+
+## 10. Open Questions for the Client
+
+None of these block starting the build, but each should close out before the relevant module is finalized:
+
+- Signature vs. certify-checkbox (client leans checkbox-only, not fully locked).
+- Does the submitted test PDF/results document need to visually match the legacy system's layout per BFA type, beyond the general shape of the reference wizard linked above?
+- Can a WP reassign/correct the BIN itself on an existing asset, or is BIN assignment only ever a one-time step during the no-BIN new-install flow? (The BIN is confirmed as the one field that isn't casually overwritable, but reassignment specifically is still unconfirmed.)
+- Concrete permission differences between WPAdmin / WPsubAdmin / WPEmployee.
+- Behavior when a certifier already in the system is invited by a second WP — silent authorization, or notification email?
+- Full list of dynamic variables for customizable notice email text, beyond customer name / BFA info / due date.
+- Whether the AG Renewal Date auto-updates after the renewal notice sends (confirm post-signing).
+- Exact fields required in the monthly CSV export, beyond customers / tests / BFA assets.
+
+## 12. Deferred — Out of Scope for v1
+
+- Automated monthly statements (midnight cron, white-labeled PDF, auto-email to WP admins) — heavier than the basic on-demand CSV export included above.
+- Master audit ledger for Super-Admin actions.
+- Certifier-level analytics/charts (WP and Super-Admin get analytics; certifiers do not, for v1).
+- Help center, quick-start video, or in-app AI copilot.
+- Interactive demo sandbox with a role-picker on the landing page.
+- Bulk CSV/XLSX import wizard for onboarding a new WP's historical data (not needed — clean-slate build).
+- In-app payment or checkout — WPs are invoiced separately outside the app.
+
+## 13. Team Notes
+
+The wizard (Section 6.5) is the single largest and most detail-sensitive module — 8 distinct BFA types with real conditional branching, and several open questions concentrate there; resolving those early reduces rework risk more than any other single action.
+
+The WP Dashboard (Section 6.6) is the second-largest module and, commercially, the more important one — it's what a Water Purveyor is actually paying for. It's structured and estimated as one task with seven clear subsections so it can be reviewed section-by-section with the client.
+
+See the [Development Plan](/docs/dev-plan) for how this backlog maps to build phases, and the [Kickoff Runbook](/docs/kickoff-runbook) for environment setup and the day-to-day GitHub workflow.

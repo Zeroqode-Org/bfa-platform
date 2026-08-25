@@ -1,0 +1,92 @@
+---
+title: Wizard Field Reference
+description: Field-by-field structure of the certifier test wizard, per BFA assembly type, from the client's wizard data-collection spreadsheet
+---
+
+Source: the client-supplied "Wizard data collection" spreadsheet, one column per BFA assembly type. This is the field-level spec for [PRD § 6.5](/docs/prd#6-feature-requirements-by-module) — read it alongside that section, not instead of it.
+
+> **Before building the wizard:** the source spreadsheet is a dense, color-coded grid that doesn't linearize cleanly to text. The shared shell and the closing block below are high-confidence; the per-type valve/test grouping is reconstructed from the sheet plus standard backflow-assembly test structure and should get a quick confirm-by-walkthrough with the client (or against the reference wizard at [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard)) before it's locked into the wizard's step logic.
+
+## Shared shell (every assembly type)
+
+**Assembly details** — BIN Found vs No BIN changes only how these populate, never the layout:
+
+| Field | BIN Found | No BIN |
+|---|---|---|
+| Type | dropdown, one of the 8 types | same |
+| Service Address | auto-filled | certifier input |
+| Make | auto-filled | certifier input |
+| Model | auto-filled | certifier input |
+| Serial No. | auto-filled | certifier input |
+| Size | auto-filled | certifier input |
+| BFA Location | auto-filled | certifier input |
+
+**Closing block** — identical across all 8 types, always certifier-entered:
+
+- Comments (optional)
+- Customer Name (required), Customer Email (required)
+- Water Meter Start / Water Meter End (values)
+- Upload pictures — optional, up to 2
+- Sign-off — choose one: **Signature** (sign on mobile phone) or, if unavailable, the **checkbox** "THE ABOVE REPORT IS CERTIFIED TO BE TRUE"
+- Test Date
+
+**Context fields before the test block** (present on the reduced-pressure/double-check families — RP, RPDA, RPDA-2, DC, DCDA, DCDA-2; not on PVB/SVB): ADP (optional), Line Pressure (optional). PVB/SVB carries Line Pressure only.
+
+## Per-type test block
+
+The differentiator between types is entirely in this middle block — everything before and after it (assembly details, closing block) is identical.
+
+**RP — Reduced Pressure Zone Assembly** (single line, no bypass)
+
+- Relief Valve Opened? Yes/No — if Yes, value
+- Check Valve #1 shut tight? Yes/No
+- Check Valve #2 shut tight? Yes/No
+- Initial Test: Pass/Fail
+- Does this assembly isolate the entire property? Yes/No/Undetermined
+
+**DC — Double Check Assembly** (single line, no bypass, no relief valve)
+
+- Check Valve #1 shut tight? Yes/No
+- Check Valve #2 shut tight? Yes/No
+- Initial Test: Pass/Fail
+- Does this assembly isolate the entire property? Yes/No/Undetermined
+
+**RPDA — RP Detector Assembly** (main line = RP test block, plus a bypass/detector meter line)
+
+- Main assembly: same as the RP block above (Relief Valve, Check Valve #1, Check Valve #2, Initial Test Pass/Fail)
+- Bypass assembly ("DA TEST — BYPASS ASSEMBLY"): its own Relief Valve Opened? (if Yes, value), Check Valve #1 shut tight?, Check Valve #2 shut tight?, own Initial Test Pass/Fail
+- Does this assembly isolate the entire property? Yes/No/Undetermined
+
+**DCDA — DC Detector Assembly** (main line = DC test block, plus a bypass/detector meter line)
+
+- Main assembly: same as the DC block above (Check Valve #1, Check Valve #2, Initial Test Pass/Fail)
+- Bypass assembly ("DA TEST — BYPASS ASSEMBLY"): its own Check Valve #1 shut tight?, Check Valve #2 shut tight?, own Initial Test Pass/Fail
+- Does this assembly isolate the entire property? Yes/No/Undetermined
+
+**RPDA-2 — Double RP Detector Assembly** (two parallel main lines + one shared bypass/detector line)
+
+- Main assembly, **Test #1**: RP block (Relief Valve, Check Valve #1, Check Valve #2, Initial Test Pass/Fail)
+- Main assembly, **Test #2**: same RP block again, for the second parallel line
+- Bypass assembly: RP-style bypass block (own Relief Valve, checks, Initial Test Pass/Fail)
+- Does this assembly isolate the entire property? Yes/No/Undetermined
+
+**DCDA-2 — Double DC Detector Assembly** (two parallel main lines + one shared bypass/detector line)
+
+- Main assembly, **Test #1**: DC block (Check Valve #1, Check Valve #2, Initial Test Pass/Fail)
+- Main assembly, **Test #2**: same DC block again, for the second parallel line
+- Bypass assembly: DC-style bypass block (own checks, Initial Test Pass/Fail)
+- Does this assembly isolate the entire property? Yes/No/Undetermined
+
+**PVB — Pressure Vacuum Breaker** / **SVB — Spill-resistant Vacuum Breaker** (marked "input same" on the source sheet — one field set covers both)
+
+- Air Inlet Valve Opened (fully)? Yes/No — if Yes, value
+- Check Valve shut tight? Yes/No
+- Initial Test: Pass/Fail
+- Does this assembly isolate the entire property? Yes/No/Undetermined
+- No relief valve, no bypass/detector line, no ADP field — the simplest of the 8 flows.
+
+## What this confirms vs. what's still open
+
+Confirms from [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log): every type shares the same assembly-details/closing-block shell; only the middle test block differs; "Does this assembly isolate the entire property?" and Initial Test Pass/Fail are asked **before** the wizard reaches the closing block, which is consistent with the confirmed behavior that a pass/fail answer doesn't end the questionnaire early.
+
+Still open, unchanged from [PRD § 10](/docs/prd#10-open-questions-for-the-client): whether a failed check/relief valve reading should visually flag anything extra to the WP beyond the Pass/Fail value itself, and whether the results document needs to visually match the legacy PDF layout per type.
