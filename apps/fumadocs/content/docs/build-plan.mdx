@@ -1,0 +1,836 @@
+---
+title: Build Plan
+description: Executable, step-by-step build plan for bfa-platform — schema, per-feature tasks, file paths, and acceptance criteria
+---
+
+Working document for two developers (Lina, Daniil) and for AI-assisted coding. Every feature below is written to be executable without further clarification: exact file paths, route names, component names, and a testable definition of done.
+
+Read this together with the design system page before writing any UI, and with the `bfa-requirements` skill before adding any dependency, scheduler, or PDF code.
+
+## Ground rules
+
+**Non-negotiables:**
+
+- Every new table gets `ENABLE ROW LEVEL SECURITY` in the same migration that creates it. Policies land in a later migration, per feature.
+- No Vercel Cron, KV, Blob, Postgres, or Edge Runtime. Background jobs use the Node-native scheduler.
+- All config from env vars. Never hardcoded, never committed.
+- Auth events and sensitive row writes emit `console.log(JSON.stringify({ event, actor_id, target_id, timestamp }))` — structured, not a plain string.
+- Crypto/token/auth dependencies must use FIPS-compatible algorithms (AES-256, SHA-256). Flag MD5/SHA-1/DES for review before adding.
+- Docs update ships in the same PR as the code change.
+
+**Conventions to apply without being asked:**
+
+- **Validation.** Every tRPC procedure input is a Zod schema. No untyped `any` crossing a procedure boundary.
+- **Pagination.** Every list procedure takes `{ limit, cursor }` and returns `{ items, nextCursor }`. Cursor-based, not offset. Default limit 25, max 100.
+- **Timezone.** Every date the business cares about — `annual_test_date`, notice due dates, AG renewal — is evaluated in **Pacific/Honolulu**, not the server's local time and not UTC. Store `timestamptz`, compute due dates and scheduler windows against that zone explicitly. Getting this wrong sends notices on the wrong day.
+- **Errors.** Procedures throw typed `TRPCError` with a proper code (`UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `BAD_REQUEST`). Never return `null` to signal a permission failure — that hides RLS bugs behind an empty state.
+- **Money and measurements.** No floats for meter readings. Store as text or numeric with an explicit scale.
+
+## Per-feature workflow
+
+Run this for every feature below, without exception.
+
+```bash
+git checkout main
+git pull origin main
+git checkout -b feature/<short-slug>
+```
+
+1. **Migration first** (if the feature needs schema or policy changes). One migration per feature. Edit the schema in `packages/db/src/schema/*.ts`, run `npm run db:generate` (drizzle-kit), hand-add any `ENABLE ROW LEVEL SECURITY` / `CREATE POLICY` SQL the schema DSL can't express to the generated file, then `npm run db:migrate` and verify in the Supabase dashboard before writing app code.
+2. **Backend** — tRPC procedures in `packages/api`. Every procedure that touches tenant data must resolve the caller's `profiles` row server-side; never accept `water_purveyor_id` from the client as an authorization input.
+3. **Frontend** — components in `apps/web`, built from `packages/ui` primitives. Map design tokens to CSS variables once in `packages/ui/src/styles/globals.css`; never hardcode hex values in a component.
+4. **Docs** — update the relevant page in `apps/fumadocs/content/docs/` if behavior changed.
+5. **PR** — title it with the feature name, assign the other developer as reviewer, squash merge after approval.
+
+**Definition of done (every feature):**
+
+- Works end-to-end against real data, not seed data only.
+- If RLS-backed tables were touched: seed two water purveyors, log in as each, confirm zero cross-tenant reads and zero cross-tenant writes.
+- `npm run check-types` passes. Biome clean.
+- Docs updated in the same PR.
+- Reviewed and approved by the other developer.
+
+---
+
+# Part 1 — Database
+
+Build the whole schema in one migration, then layer policies per feature. Thirteen tables, created in FK order.
+
+## Shared conventions
+
+- Primary keys: `uuid`, default `gen_random_uuid()`.
+- Timestamps: `created_at`, `updated_at` as `timestamptz`, default `now()`.
+- Enums: declare once as Postgres enums, reuse across tables. Do not redeclare per column.
+- `updated_at` is maintained by a single shared trigger function, applied to every table that has the column. Do not rely on the application to set it.
+- Every policy resolves the caller through their own `profiles` row via `auth.uid()`, reading `global_role` and `water_purveyor_id` from it.
+
+**Indexes to create in the same migration.** RLS policies filter on these columns on every single query — without indexes the whole app degrades as soon as there is real data:
+
+- `water_purveyor_id` on `profiles`, `customers`, `bfa_assets`, `repair_companies`, `test_submissions`, `wp_certifier_authorizations`, `notice_templates`, `wp_feature_flags`, `scheduled_jobs`.
+- (`water_purveyor_id`, `bin`) unique on `bfa_assets` — doubles as the BIN lookup index.
+- (`certifier_id`, `status`) on `test_submissions` — the certifier dashboard's two queries.
+- (`bfa_asset_id`, `end_date`) on `customer_assignments` — resolving the current occupant.
+- (`status`, `run_at`) on `scheduled_jobs` — the scheduler's claim query.
+- (`water_purveyor_id`, `notice_type`) unique on `notice_templates`.
+- (`water_purveyor_id`, `feature`) unique on `wp_feature_flags`.
+- `token` unique on `invitations`.
+
+**Roles:** `super_admin`, `wp_admin`, `wp_sub_admin`, `wp_employee`, `certifier`.
+
+**Two things row-level RLS cannot express on its own** — enforce these in the tRPC procedure layer, on top of the row policy:
+
+- Column-level write limits (e.g. a WP may update only `certifiers.status`, not the whole row).
+- Cross-role visibility that needs a join rather than a flat `water_purveyor_id = mine` check.
+
+## Table creation order
+
+1. `water_purveyors`
+2. `profiles`
+3. `certifiers`
+4. `customers`
+5. `bfa_assets`
+6. `customer_assignments`
+7. `wp_certifier_authorizations`
+8. `repair_companies`
+9. `notice_templates`
+10. `wp_feature_flags`
+11. `test_submissions`
+12. `invitations`
+13. `scheduled_jobs`
+
+## Table specs
+
+### `water_purveyors`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `company_name` | text not null | |
+| `address` | text | |
+| `pwsid` | text | Public Water System ID |
+| `subdomain` | text unique | branding |
+| `status` | enum `active` / `blocked` | default `active` |
+| `created_at`, `updated_at` | timestamptz | |
+
+Notice text lives in `notice_templates`, one row per notice type, not in columns here. Notice lead time and escalation intervals are fixed platform-wide — application constants, not columns.
+
+**Access:** Super-Admin full. WP Admin reads and updates own row, branding columns only; `company_name` and `pwsid` changes route through Super-Admin — enforce in the procedure. WP SubAdmin and Employee read own row. Certifier has no direct access; WP names reach them through a join on `wp_certifier_authorizations`.
+
+### `profiles`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | equals `auth.users.id` |
+| `water_purveyor_id` | uuid FK → `water_purveyors.id`, nullable | null for Super-Admin and Certifier |
+| `full_name` | text | |
+| `global_role` | enum, not null | the five roles above |
+| `status` | enum `active` / `blocked` | default `active` |
+| `created_at`, `updated_at` | timestamptz | |
+
+**Access:** Super-Admin full. Any authenticated user reads and updates their own row (`id = auth.uid()`). Inserts happen only through the invite-redemption server action using the service-role key. WP Admin and SubAdmin read rows where `water_purveyor_id` matches their own.
+
+### `certifiers`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `profile_id` | uuid FK → `profiles.id`, not null, unique | |
+| `company` | text | |
+| `id_number` | text | license number |
+| `license_expiration_date` | date | |
+| `status` | enum `active` / `blocked` | blocked prevents login |
+| `created_at`, `updated_at` | timestamptz | |
+
+**Access:** Super-Admin full. WP Admin and SubAdmin read via a join through `wp_certifier_authorizations` where the WP matches their own, and update `status` only. WP Employee gets the same read. Certifier reads and updates their own row, excluding `status`.
+
+### `customers`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `water_purveyor_id` | uuid FK, not null | |
+| `account_number` | text | |
+| `name` | text not null | |
+| `address` | text | |
+| `email` | text not null | |
+| `rate_category` | enum `standard` / `agricultural` | default `standard` |
+| `ag_renewal_date` | date nullable | set when agricultural |
+| `status` | enum `active` / `suspended` | suspended holds the asset's whole notice pipeline |
+| `created_at`, `updated_at` | timestamptz | |
+
+**Access:** Super-Admin full. All three WP roles read, insert, and update rows where `water_purveyor_id` matches their own; no delete. Certifier reads rows reachable through `bfa_assets.current_customer_id` for assets belonging to a WP they're authorized for — needed for wizard prefill.
+
+### `bfa_assets`
+
+The permanent physical-valve record. `annual_test_date` drives the reminder engine.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `water_purveyor_id` | uuid FK, not null | |
+| `bin` | text not null | unique per `water_purveyor_id` (composite constraint) |
+| `current_customer_id` | uuid FK → `customers.id`, nullable | live pointer; history in `customer_assignments` |
+| `bfa_type` | enum | `RP` / `RPDA` / `RPDA-2` / `DC` / `DCDA` / `DCDA-2` / `PVB` / `SVB` |
+| `make`, `model`, `serial_number`, `size` | text | |
+| `service_address` | text not null | |
+| `assembly_location` | text | |
+| `annual_test_date` | date | |
+| `asset_status` | enum `active` / `due_soon` / `past_due` | recomputed by the scheduler, never set directly by a user |
+| `created_at`, `updated_at` | timestamptz | |
+
+**Access:** Super-Admin full. WP roles read, insert, and update rows where `water_purveyor_id` matches their own, including reassigning the BIN on an existing row — a WP may correct any data it owns. Every BIN change emits a structured JSON log line with the old and new value. Certifier reads rows where the WP is one they're authorized for (BIN lookup and prefill).
+
+### `customer_assignments`
+
+Occupancy history. One asset can have several customers in sequence; one customer can hold several assets. `bfa_assets.current_customer_id` stays as the live pointer — this table is what preserves past occupancy when that pointer changes.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `bfa_asset_id` | uuid FK, not null | |
+| `customer_id` | uuid FK, not null | |
+| `start_date` | date not null | |
+| `end_date` | date nullable | null means current |
+| `created_at` | timestamptz | |
+
+**Access:** Super-Admin full. WP roles read, insert, and update via a join on `bfa_assets.water_purveyor_id`. Certifier has no access.
+
+### `wp_certifier_authorizations`
+
+Drives the certifier's WP selector.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `certifier_id` | uuid FK, not null | |
+| `water_purveyor_id` | uuid FK, not null | |
+| `authorization_status` | enum `pending` / `active` / `revoked` | |
+| `created_at` | timestamptz | |
+| | | unique (`certifier_id`, `water_purveyor_id`) |
+
+**Access:** Super-Admin full. WP Admin and SubAdmin full CRUD scoped to their own WP. WP Employee reads only. Certifier reads their own rows.
+
+### `repair_companies`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `water_purveyor_id` | uuid FK, not null | |
+| `company_name` | text not null | |
+| `phone` | text | |
+| `email` | text | |
+| `status` | enum `active` / `inactive` | |
+| `created_at`, `updated_at` | timestamptz | |
+
+Read by the failure workflow at send time, joined on `water_purveyor_id`. No FK from `test_submissions`.
+
+**Access:** Super-Admin full. WP roles read, insert, and update their own WP's rows. Deactivate via `status`; no hard delete. Certifier has no access.
+
+### `notice_templates`
+
+One row per WP per notice type. A missing row means the WP has not customized that notice — fall back to the platform default text rather than backfilling rows on WP creation.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `water_purveyor_id` | uuid FK, not null | |
+| `notice_type` | enum | `reminder` / `late_notice_1` / `late_notice_2` / `final_notice` — the same enum `scheduled_jobs.job_type` draws from, declared once |
+| `subject` | text | |
+| `body` | text | |
+| `is_enabled` | boolean | default true |
+| `created_at`, `updated_at` | timestamptz | |
+| | | unique (`water_purveyor_id`, `notice_type`) |
+
+`is_enabled` is stored now but stays unwired. The client's toggle requirement operates a level up — automated notices are a paid add-on the SaaS owner switches on per WP, not a per-notice-type switch the WP controls. Until that is scoped, the workflow ignores this column and the UI does not expose it.
+
+**Access:** Super-Admin full. WP Admin reads, inserts, and updates rows for their own WP. WP SubAdmin and Employee read only. Certifier has no access. The workflow reads through the service-role client.
+
+### `wp_feature_flags`
+
+Which optional features are switched on for a given WP. Super-Admin controls these; a WP cannot toggle its own. No billing attached — the switch exists, what it costs is handled outside the app.
+
+Same shape as `notice_templates` and for the same reason: a boolean column per feature on `water_purveyors` would mean a migration every time a feature becomes optional.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `water_purveyor_id` | uuid FK, not null | |
+| `feature` | enum | `automated_notices` / `ag_renewal_notice` — extend as more features become optional |
+| `is_enabled` | boolean | default false |
+| `updated_by_profile_id` | uuid FK → `profiles.id` | who last flipped it |
+| `created_at`, `updated_at` | timestamptz | |
+| | | unique (`water_purveyor_id`, `feature`) |
+
+**A missing row means off.** Optional features default to disabled and must be switched on deliberately, so a new WP never starts sending automated mail to its customers by surprise.
+
+**Access:** Super-Admin full. All WP roles read their own WP's rows — a WP should be able to see that automated notices are off and ask for them, not silently wonder why nothing sends. No WP role writes. The scheduler reads through the service-role client.
+
+### `test_submissions`
+
+The most access-sensitive table. Draft versus submitted state decides who may write.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `bfa_asset_id` | uuid FK, nullable | nullable to support the no-BIN flow |
+| `certifier_id` | uuid FK, not null | |
+| `water_purveyor_id` | uuid FK, not null | denormalized from the WP selector at submit time, for simple RLS filtering |
+| `status` | enum `draft` / `submitted` | |
+| `bfa_type` | enum | same eight values as `bfa_assets` |
+| `wizard_data` | jsonb not null | per-type field values; jsonb because the field set varies by type |
+| `submitted_bin_text` | text nullable | what the certifier typed when no BIN resolved |
+| `test_date` | date | |
+| `test_result` | enum `pass` / `fail`, nullable | |
+| `current_step` | integer | draft resume point |
+| `overridden_fields` | jsonb nullable | which prefilled values the certifier overwrote |
+| `signature_method` | enum `signed` / `owner_absent` | which sign-off path was taken |
+| `signature_data` | text nullable | captured signature when `signed`; the stored disclaimer text when `owner_absent` |
+| `superseded_by_submission_id` | uuid FK → self, nullable | set when a certifier re-runs the wizard for the same BIN |
+| `edited_by_wp_profile_id` | uuid FK → `profiles.id`, nullable | audit trail for WP corrections |
+| `created_at`, `updated_at` | timestamptz | |
+
+**Access:** Super-Admin full. Certifier reads their own rows at any status; updates only their own rows where `status = 'draft'`; deletes only their own drafts. WP Admin and SubAdmin read rows where the WP matches and `status = 'submitted'` — drafts stay private to the certifier — and may update any field on those rows, setting `edited_by_wp_profile_id` on write. WP Employee gets the same read; write access pending the role-differences answer.
+
+### `invitations`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `email` | text not null | |
+| `role` | enum | `wp_admin` / `wp_sub_admin` / `wp_employee` / `certifier` |
+| `token` | text unique, not null | |
+| `status` | enum `pending` / `redeemed` / `expired` | |
+| `expires_at` | timestamptz not null | |
+| `associated_wp_id` | uuid FK, nullable | null when Super-Admin invites a brand-new WP |
+| `invited_by_profile_id` | uuid FK → `profiles.id` | |
+| `is_redeemed` | boolean | default false |
+| `created_at` | timestamptz | |
+
+**Access:** Super-Admin full. All three WP roles — Admin, SubAdmin, and Employee — read and insert rows where `associated_wp_id` matches their own; inviting certifiers is not restricted to the Admin. Only Super-Admin may insert a row with a null `associated_wp_id`, which is what provisions a new WP. Certifier has no access. Token redemption runs through a server action with the service-role key — there is no anonymous RLS read path, so tokens are not enumerable.
+
+### `scheduled_jobs`
+
+Not in the original data model. Required because Vercel Cron is off the table and job state must survive restarts.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `job_type` | enum | `reminder` / `late_notice_1` / `late_notice_2` / `final_notice` / `ag_renewal` / `fail_list_check`. The four notice values are the same enum `notice_templates.notice_type` uses — declare the notice enum once and extend it here rather than defining two overlapping lists |
+| `bfa_asset_id` | uuid FK, nullable | |
+| `customer_id` | uuid FK, nullable | |
+| `water_purveyor_id` | uuid FK, not null | |
+| `run_at` | timestamptz not null | |
+| `status` | enum `pending` / `running` / `completed` / `failed` / `cancelled` | |
+| `attempts` | integer | default 0 |
+| `last_error` | text nullable | |
+| `completed_at` | timestamptz nullable | |
+| `created_at`, `updated_at` | timestamptz | |
+
+Index on (`status`, `run_at`) — the scheduler's hot path.
+
+**Access:** Super-Admin reads all. WP roles read their own WP's rows (useful for debugging a missing notice). All writes go through the service-role scheduler process; no user-facing write path.
+
+Two open questions affect policies above — permission differences between the three WP roles, and whether a WP may reassign a BIN. Neither blocks writing the migration; both are tracked in the open-questions table at the end of this document.
+
+---
+
+# Part 2 — Features
+
+Grouped by delivery week. Each feature carries its hour budget, its prerequisite, its steps in build order, and a testable definition of done. Where a feature is scheduled ahead of something it depends on, it says what to build in the meantime.
+
+## Week 1 — Foundation
+
+Lina 23h · Daniil starts super-admin. Nothing here depends on anything else in the project, and everything after depends on the schema.
+
+### App shell, navigation, and design tokens
+
+**Owner:** Lina.
+**Week 1** · 8h.
+**Prerequisite:** none — safe to run in parallel with the schema work.
+
+1. Map the design system's color, typography, spacing, and radius tokens into CSS variables in `packages/ui/src/styles/globals.css`, and wire them into the Tailwind theme.
+2. Restyle the shadcn primitives once against those tokens: `Button`, `Badge`, `Card`, `Table`, `Dialog`, `Input`. Where a shadcn default and the prototype disagree, the prototype wins.
+3. Build the certifier shell: bottom tab bar (Dashboard, Profile) under 780px; the same 216px left sidebar at 780px and above. Form content max-width 480px centered on desktop, tables full-width.
+4. Build the WP and Super-Admin shell: fixed 216px white left sidebar with a right border, icon-plus-label nav items, active item on the primary tint background with primary text.
+5. Build the top header bar: current company name on the left, contextual action on the right.
+6. Build the impersonation banner: full-width warning-tint bar above the shell with an underlined exit link. Always visible while impersonating; never collapsed into a menu.
+
+**Done when:** all three role shells render with placeholder content, the responsive switch works at the 780px breakpoint, and no component contains a hardcoded hex value.
+
+### Schema and initial migration
+
+**Owner:** Lina writes the schema, Daniil drives drizzle-kit, done as a pair session.
+**Week 1** · 15h, shared budget with auth and environment setup below.
+**Prerequisite:** `DATABASE_URL` set in `apps/web/.env` (Supabase → Project Settings → Database).
+**Blocks:** everything below.
+
+1. Write Drizzle enums in `packages/db/src/schema/enums.ts` — every enum listed in Part 1, declared once.
+2. Write one file per table in `packages/db/src/schema/`, in the creation order from Part 1. Export all from `index.ts`.
+3. `npm run db:generate` — `drizzle-kit generate` emits the migration SQL into `packages/db/src/migrations/` from the schema (`CREATE TYPE` for each enum, `CREATE TABLE` for all thirteen in FK order, plus the composite unique on (`water_purveyor_id`, `bin`) and the (`status`, `run_at`) index on `scheduled_jobs`).
+4. Hand-edit the generated SQL file: append `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;` for every one of the thirteen tables. No policies in this migration.
+5. `npm run db:migrate` — `drizzle-kit migrate` applies it. (`db:push` is dev-only; the shared history goes through generated migration files.)
+
+**Done when:** `db:migrate` completes with zero errors, `npm run check-types` passes, and the Supabase Table Editor shows the RLS-enabled lock on all thirteen tables.
+
+**Pair note:** Lina runs `db:generate` / `db:migrate` herself at least once in this session rather than only reviewing.
+
+### Seed and fixture data
+
+**Owner:** Daniil.
+**Week 1** · 3h, folded into the schema budget.
+**Prerequisite:** schema migration applied.
+**Blocks:** every isolation check and every feature scheduled ahead of its data.
+
+Half the definitions of done in this plan say "seed two water purveyors" or "build against seed data". That script has to exist, and it has to be the same script for both developers, or the two of you will be testing against different worlds.
+
+1. Write `packages/db/src/seed.ts`, runnable with `npm run db:seed`, idempotent — safe to run twice.
+2. Seed two complete water purveyors with deliberately similar-looking data (same customer names, overlapping BINs across the two WPs). Similar data is what makes a cross-tenant leak visible instead of plausible.
+3. Per WP: one WP Admin, one WP Employee, two customers (one standard, one agricultural with a renewal date), three BFA assets covering different types and different `annual_test_date` values — one past due, one due soon, one comfortably current.
+4. Two certifiers: one authorized for a single WP, one authorized for both — the second is what proves the WP selector works.
+5. A handful of `test_submissions`: drafts at various `current_step` values, submitted passes, and one submitted fail — enough for the certifier dashboard, submitted-tests view, and analytics to render before the wizard exists.
+6. Notice templates: customize one or two types for the first WP, leave the second WP with none — that difference is what proves the platform-default fallback works.
+7. Feature flags: switch `automated_notices` on for the first WP, leave the second with no rows at all — that difference is what proves the default-off behaviour and the flag check in the workflows.
+8. Print the seeded login credentials at the end of the run.
+
+**Done when:** a fresh developer can clone, migrate, seed, and log in as any of the six seeded users without asking anyone for credentials.
+
+### Auth, storage, and environment
+
+**Owner:** Daniil.
+**Week 1** · same budget as the schema — the two are one work item.
+**Prerequisite:** schema migration applied.
+**Blocks:** invitations and everything after.
+
+1. Supabase dashboard: Authentication → Providers → enable Email. Leave Site URL as the placeholder until the Vercel URL exists.
+2. Create two Storage buckets: `test-photos`, `result-documents`. Both private.
+3. `npm install @supabase/supabase-js @supabase/ssr` in `apps/web`.
+4. Extend `packages/env/src/web.ts` with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; extend `server.ts` with `SUPABASE_SERVICE_ROLE_KEY`. These currently validate nothing.
+5. Create `apps/web/src/lib/supabase/client.ts` (browser client) and `server.ts` (server client via `@supabase/ssr` cookie handling).
+6. Create the caller-resolution helper used by every protected procedure: reads `auth.uid()`, loads the `profiles` row, returns `{ profileId, globalRole, waterPurveyorId }`. Put it in `packages/api/src/context.ts` and make it the basis of the protected-procedure middleware.
+
+**Done when:** a server component and a client component can each create a Supabase client without a runtime env error, and a protected tRPC procedure returns the caller's resolved role.
+
+### Super-admin
+
+**Owner:** Daniil.
+**Weeks 1 and 4** · 12h total, split across two passes. Week 1 lands before auth and onboarding exist, so it is UI only.
+
+**Week 1 — layout, no data:**
+
+1. WP list table shell — columns for company, assets, certifiers, submissions. Renders against fixture data.
+2. Impersonation banner, always visible while impersonating, per the design system.
+3. Invite-new-WP form layout.
+
+**Week 4 — wiring, once auth and onboarding exist:**
+
+4. `listWaterPurveyors` procedure — all WPs with per-WP counts of assets, certifiers, and submissions, plus which optional features each has switched on.
+5. Invite-new-WP action — reuses the invitation machinery with `associated_wp_id` null; redemption creates the `water_purveyors` row and the first WP Admin profile together, in one transaction.
+6. `startImpersonation` and `endImpersonation` procedures, storing the impersonated identity in a signed, httpOnly cookie separate from the real session. Every procedure resolves the effective identity through the shared context helper, so no individual feature needs impersonation-specific code.
+7. `setFeatureFlag` procedure — upserts one row in `wp_feature_flags` for a given WP and feature, recording `updated_by_profile_id`. Super-Admin only; reject the call outright for every other role rather than relying on the row policy alone.
+8. Feature toggles on the WP detail view — one switch per optional feature (`automated_notices`, `ag_renewal_notice`), showing the current state and who last changed it. Off is the default and the toggle must read as off, not as absent.
+9. Structured JSON log on impersonation start and end, and on every feature-flag change. No audit-log UI is required for v1, but emitting the events costs nothing and cannot be added retroactively.
+
+**Done when:** week 1 — all three screens render against fixtures with correct styling. Week 4 — a super-admin can act as a WP or certifier, every screen behaves exactly as it does for the real user, the banner cannot be dismissed without ending impersonation, and switching a feature flag on for one WP visibly changes what its workflows do without touching any other WP.
+
+## Week 2 — Onboarding and the first WP screens
+
+Daniil 21h · Lina has no scheduled row — the natural window to start on the wizard, which is 20h in a single week later on.
+
+### Invitations and onboarding
+
+**Owner:** Daniil.
+**Week 2** · 6h.
+**Prerequisite:** auth done. The email provider is not required — the console driver covers it.
+**Blocks:** every role-gated screen — this is the fan-out point of the project.
+
+1. Migration: RLS policies for `invitations` and `profiles` as specified in Part 1.
+2. Build the send helper and its `consoleDriver` — see step 1 of transactional email integration. The provider lands in week 5; until then the console driver prints the invite link so the flow is fully testable.
+3. `createInvitation` procedure — inserts the row with a cryptographically random token (SHA-256 based, not a UUID), an expiry, the target role, and `associated_wp_id`; sends the invite email through the helper.
+4. `redeemInvitation` server action — looks the token up with the service-role client, not a client-side query. Validates expiry and `is_redeemed`. Creates the `auth.users` record, the `profiles` row, and for a certifier also the `certifiers` row plus a `wp_certifier_authorizations` row. Marks the invitation redeemed.
+5. First-login screen: set password, complete profile (full name, and for a certifier: company, ID number, license expiration).
+6. Second-WP path: if the email already resolves to an existing certifier, skip profile setup entirely and insert only the new `wp_certifier_authorizations` row.
+7. Structured JSON log on both invitation creation and redemption.
+
+**Done when:** an invite link taken from the console output produces a logged-in user with the correct `global_role`, and — for WP roles — the correct `water_purveyor_id`; an already-registered certifier invited by a second WP lands on their dashboard with two WPs in the selector and no repeated profile form. Real delivery is verified in week 5; nothing here changes when it is.
+
+### WP dashboard — BFA assets
+
+**Owner:** Daniil.
+**Week 2** · 5h.
+**Prerequisite:** onboarding done.
+**Blocks:** the reminder workflow.
+
+1. Migration: RLS policies for `bfa_assets` and `customer_assignments`.
+2. `listAssets` procedure — paginated, WP-scoped, filterable by status and searchable by BIN or service address.
+3. `createAsset` procedure — assigns the BIN, sets assembly details, sets the initial annual test date.
+4. `updateAsset` procedure — every field including the BIN. A BIN change is allowed but logged: emit a structured JSON line carrying the asset id, the old BIN, the new one, and the acting profile.
+5. `assignCustomer` procedure — closes the current `customer_assignments` row by setting `end_date`, inserts a new row with today's `start_date`, and updates `current_customer_id`. All three in one transaction. Validates that the customer belongs to the same WP as the asset.
+6. `AssetsTable` component — BIN, type, service address, current customer, annual test date, status badge (active / due soon / past due, using the palette's success, warning, and danger tints).
+7. `AddAssetForm` and `EditAssetForm` in a modal.
+8. Customer-association control on the asset detail view, showing assignment history, not only the current occupant.
+
+**Done when:** a WP can register an asset and set its annual test date; reassigning a customer preserves the prior assignment with an `end_date`; attaching a customer from another WP is rejected server-side; two seeded WPs see completely separate asset lists.
+
+### WP dashboard — core and analytics
+
+**Owner:** Daniil.
+**Week 2** · 10h. Scheduled a week before the customers, certifiers, and repair-company tables it summarizes — build against seed data, reconcile in week 3.
+**Prerequisite:** assets, certifiers, and customers all done — it summarizes their rows. Scaffold against seed data earlier if useful.
+
+1. `dashboardMetrics` procedure — one call returning all card values: total assets, tests this month, past due count, submissions awaiting review, no-BIN submission count.
+2. `complianceTrend` procedure — monthly pass rate over the trailing twelve months.
+3. `passFailBreakdown` procedure — counts by result over a selectable range.
+4. Stat cards per the design system: 3px colored top accent, icon chip in the matching tint, muted label, large bold number. Primary tint for primary metrics, accent for computed ones, danger for past due.
+5. Incoming list and delinquent list, both drilling into their respective detail views.
+6. Two charts: compliance trend line and pass/fail breakdown.
+
+**Done when:** every card and chart reflects real rows for the caller's WP only, and the numbers reconcile with the underlying tables when checked by hand.
+
+## Week 3 — Remaining tables and both dashboards
+
+Lina 10h · Daniil 13h. The widest week — six features, no hard ordering between them.
+
+### Certifier dashboard
+
+**Owner:** Lina.
+**Week 3** · 7h.
+**Prerequisite:** onboarding done.
+
+1. Migration: RLS policies for `test_submissions` as specified — certifier reads own rows at any status, writes only own drafts.
+2. `listDrafts` procedure — paginated, filtered to `certifier_id` derived from the caller's profile, `status = 'draft'`, ordered by `updated_at` descending.
+3. `listSubmissions` procedure — same scoping, `status = 'submitted'`, ordered by `test_date` descending.
+4. `deleteDraft` procedure — deletes one draft, rejecting anything not owned by the caller and anything already submitted.
+5. Dashboard navigation — four entries: Wizard (launches a fresh wizard against the active WP), Drafts, Submitted PDFs, Log Out.
+6. `DraftsTable` component — columns: BIN (or the typed text when unresolved), type, current step, last saved. Row actions: resume, delete. Resume routes into the wizard at `current_step`.
+7. `SubmissionsTable` component — the Submitted PDFs archive. Columns: BIN, type, test date, result badge. Row click opens the generated document, read-only. No edit affordance anywhere on this screen — submitted records are immutable for the certifier.
+8. Profile page — view and edit own profile fields, change password.
+
+**Done when:** a certifier sees only their own rows, resume opens the wizard at the saved step with saved values intact, and a second certifier logged in simultaneously sees a completely different list.
+
+### WP dashboard — submitted tests
+
+**Owner:** Lina.
+**Week 3** · 3h. The wizard that produces these rows is week 4 — build against seeded submissions, verify end to end once it ships.
+**Prerequisite:** the schema; genuinely testable once the wizard produces real rows.
+
+The certifier's own immutability rule does not extend to the WP — full field-level editing is confirmed, and a WP correcting a submitted test is an intentional, attributed path. The two rules coexist: locked for the person who filed it, editable by the purveyor who receives it. A certifier who made a mistake files a new test rather than asking for the old one to be reopened.
+
+1. Migration: the WP read and write policies on `test_submissions` — submitted rows only, drafts excluded.
+2. `listSubmittedTests` procedure — cross-certifier, WP-scoped, paginated, filterable by result and date range.
+3. `updateSubmittedTest` procedure — writes any field on the row and sets `edited_by_wp_profile_id`. Structured JSON log on every edit.
+4. Document-style detail view matching the certifier's results document, with fields editable inline rather than in a separate form.
+5. Visual flag on any field present in `overridden_fields`, so a WP can see what the certifier changed from the prefilled value.
+6. Unresolved-BIN handling: submissions with a null `bfa_asset_id` surface a "link to asset" action that searches the WP's assets and attaches the submission.
+
+**Done when:** a WP can correct any field on a submitted test, the edit is attributed, drafts never appear in this list, and an unresolved submission can be linked to the right asset.
+
+### WP dashboard — customers
+
+**Owner:** Daniil.
+**Week 3** · 3h.
+**Prerequisite:** onboarding done.
+
+1. Migration: RLS policies for `customers`.
+2. `listCustomers`, `createCustomer`, `updateCustomer` procedures — WP-scoped.
+3. Table: name, account number, email, rate category badge (agricultural uses the purple tint), status.
+4. Create and edit forms. When rate category is agricultural, the AG renewal date becomes required.
+5. Suspend and reactivate control on `status`, with an inline note that suspending holds all automated email for that customer's assets.
+
+**Done when:** a WP can create a customer, mark them agricultural with a renewal date, and suspend them; suspension is visible from the asset view too, not only the customer list.
+
+### WP dashboard — certifiers
+
+**Owner:** Daniil.
+**Week 3** · 3h.
+**Prerequisite:** onboarding done.
+
+1. Migration: the join-based RLS policy for `certifiers`.
+2. `listWpCertifiers` procedure — joins through `wp_certifier_authorizations` for the caller's WP.
+3. `setCertifierStatus` procedure — writes `certifiers.status` and nothing else. Enforce the column restriction here, in the procedure; the row policy alone cannot.
+4. Table: name, company, ID number, license expiration, status badge. Block and unblock actions.
+5. Structured JSON log on every block and unblock.
+
+**Done when:** blocking a certifier prevents their login, and the procedure rejects an attempt to update any column other than `status`.
+
+### WP dashboard — repair companies
+
+**Owner:** Daniil.
+**Week 3** · 2h.
+**Prerequisite:** onboarding done.
+**Blocks:** the failure workflow.
+
+1. Migration: RLS policies for `repair_companies`.
+2. `listRepairCompanies`, `createRepairCompany`, `updateRepairCompany` procedures — all WP-scoped.
+3. Table plus add and edit modals. Deactivation flips `status` to `inactive`; no delete action anywhere in the UI.
+
+**Done when:** deactivating a company removes it from the active list used by the failure notice, without deleting history.
+
+### WP dashboard — notices and email settings
+
+**Owner:** Daniil.
+**Week 3** · 7h.
+**Prerequisite:** the send helper exists (built in week 2 with onboarding). The provider itself is not required — the general-info broadcast sends through the console driver until week 5.
+**Blocks:** the reminder workflow.
+
+1. Migration: RLS policies for `notice_templates`.
+2. `listNoticeTemplates` procedure — returns one entry per notice type for the caller's WP, merging the saved row with the platform default where no row exists, so the UI never has to special-case a missing template.
+3. `upsertNoticeTemplate` procedure — takes `{ noticeType, subject, body }`, writes one row keyed on (`water_purveyor_id`, `notice_type`). Upsert, not update — the first save for a type creates the row.
+4. Template editor — one editable block per notice type, rendered by looping over the returned list rather than four hardcoded field groups. Subject and body per type.
+5. Variable reference panel listing supported placeholders. Implement customer name, BFA type, BIN, service address, and due date now; keep the substitution layer open so adding variables later is a list edit, not a rewrite.
+6. Preview control rendering subject and body against a sample record with variables substituted.
+7. General info composer: subject, body, recipient selection (all customers, agricultural only, or past-due only), send action. This is the entire general-info broadcast feature — no scheduler involvement, and it does not use `notice_templates`.
+8. Read-only repair-company list on the same page.
+
+Do not build the `is_enabled` toggle yet — the column exists, but what disabling a middle step means for the escalation chain is unanswered. Shipping the toggle before that answer gives WPs a control with undefined behavior.
+
+**Done when:** a WP can edit subject and body for all four notice types, an untouched type falls back to the platform default rather than sending blank, preview substitutes variables correctly, and a general-info broadcast reaches a filtered recipient set.
+
+## Week 4 — The wizard
+
+Lina 22h · Daniil finishes super-admin. The wizard is the largest module in the project; treat the rest of this week as protected time.
+
+### Certifier WP selector
+
+**Owner:** Lina.
+**Week 4** · 2h.
+**Prerequisite:** certifier dashboard done.
+
+1. Migration: RLS policy for `wp_certifier_authorizations` — certifier reads own rows.
+2. `listAuthorizedWps` procedure — returns WPs joined through the caller's authorizations where `authorization_status = 'active'`.
+3. `WpSelector` component — dropdown in the certifier shell header. Persists the selection in client state for the session. The open dropdown lists the other authorized WPs and omits the one currently active.
+4. Scope locking: the active WP filters the entire dashboard — drafts, submitted tests, and every lookup. Switching WPs re-filters everything, it does not merge.
+5. Wire the selection into draft creation: the selected WP becomes `water_purveyor_id` on the new `test_submissions` row. The procedure re-validates that the caller is actually authorized for that WP — never trust the client value.
+
+**Done when:** switching WPs re-filters the whole dashboard and changes which WP a new draft is created against, the dropdown never offers the active WP, and a forged WP id in the request is rejected server-side.
+
+### Certifier test wizard
+
+**Owner:** Lina.
+**Week 4** · 23h — the largest single module in the project. It and the WP selector are Lina's entire week.
+**Prerequisite:** WP selector done, and the send helper from onboarding exists — submit distributes the generated document by email.
+
+Build in this order — do not start the per-type blocks before the shared shell works end to end for one type.
+
+**Step 1 — Shared shell, chrome, and draft persistence**
+
+1. `saveDraftStep` procedure — upserts `wizard_data` (partial) and `current_step`. Rejects writes to anything not a draft owned by the caller. **Draft saves skip validation entirely** — a half-filled step must save exactly as typed. Required-field checks belong to submit, not to save.
+2. Save to Draft button, available on every step, not only the last one.
+3. Exit control, upper left, available on every step — leaves the wizard and returns to the dashboard.
+4. `WizardProgress` component — thin rounded segments, one per step, filled to the current step, with a step label underneath.
+5. Certifier identity is never asked for. Name, company, and certifier ID come from the session and the `certifiers` row, and appear on the generated document without ever being a wizard field.
+
+**Step 2 — Identification and prefill**
+
+6. `lookupAssetByBin` procedure — resolves a BIN within the active WP only. Returns the asset plus the field values from its most recent submitted test.
+7. BIN found: prefill assembly details from the asset and the rest of the questionnaire from the prior submission. Every prefilled field stays editable.
+8. Track overwrites: when a certifier edits a prefilled value, record the field key in `overridden_fields`. The WP must be able to see what changed, not just the final value.
+9. BIN blank or not found: unlock all downstream fields for manual entry, store what was typed in `submitted_bin_text`, leave `bfa_asset_id` null.
+
+**Step 3 — Assembly information**
+
+10. Assembly location, make, model, serial number, size, assembly type, service address. Read-only styling (flat tint background, secondary text) for prefilled fields, normal inputs when certifier-entered — same layout in both cases, never two different screens.
+
+**Step 4 — Customer information**
+
+11. Customer name and customer email, prefilled from the asset's current customer when the BIN resolved, editable either way. Both required at submit.
+
+**Step 5 — Context fields**
+
+12. For RP, RPDA, RPDA-2, DC, DCDA, DCDA-2: optional ADP and optional Line Pressure before the test block.
+13. For PVB and SVB: Line Pressure only, no ADP.
+
+**Step 6 — Per-type test blocks**
+
+Build four component families, not eight separate flows. Every family ends with "Does this assembly isolate the entire property?" (Yes / No / Undetermined).
+
+14. **Single-line family — RP and DC.** RP: relief valve opened (yes/no, plus a value when yes), check valve 1 shut tight, check valve 2 shut tight, initial test pass/fail. DC: the same without the relief valve.
+15. **Detector family — RPDA and DCDA.** The single-line block for the main assembly, then a separate bypass-assembly block with its own valves and its own pass/fail.
+16. **Double-detector family — RPDA-2 and DCDA-2.** Two parallel main-assembly blocks (Test 1 and Test 2), then one shared bypass block with its own pass/fail.
+17. **Vacuum-breaker family — PVB and SVB.** Identical field sets: air inlet valve opened fully (yes/no, plus a value when yes), check valve shut tight, initial test pass/fail. No relief valve, no bypass, no ADP.
+
+A pass/fail answer never ends the wizard early — the remaining fields are still collected either way.
+
+**Step 7 — Closing block** (identical for all eight types)
+
+18. Comments (optional), water meter start and end readings, test date, photo upload (optional, maximum two, to the `test-photos` bucket).
+19. Sign-off — signature is the default path, the checkbox is the exception:
+    - Capture the **owner or property manager's** signature on screen. This is not the certifier's signature.
+    - If the owner is not present, the certifier ticks a bypass checkbox. Ticking it displays this exact mandatory text, which must also appear on the generated document: *"Owner was not present - I certify under penalty of law and regulatory compliance guidelines that the assembly test values recorded above are true and accurate. The property manager was not present to sign the physical digital screen at the time of service."*
+    - Store which path was used, and store the disclaimer text with the record when the bypass was taken.
+
+**Step 8 — Submit**
+
+20. `submitTest` procedure — validates all required fields and test results, sets `status = 'submitted'`, writes `test_result`. When the same BIN already has a submitted test from this certifier, set `superseded_by_submission_id` on the prior row rather than mutating it.
+21. Immutability: once submitted, the certifier cannot edit, delete, or resubmit that record under any circumstances. Enforce in the RLS policy and again in the procedure. This restricts the certifier only — a WP editing a submitted test is a separate, intentional path with its own audit column.
+22. Results document render — a document-style PDF of the completed wizard, generated with a lightweight PDF library, no headless-Chrome dependency. Store it in the `result-documents` bucket.
+    - **One layout per BFA type**, not one shared layout. The document must show the test that was actually performed, so an RP report carries relief-valve rows and a PVB report carries air-inlet rows, with no empty or irrelevant sections.
+    - Build it as a shared frame plus a swappable test-block section, mirroring the four component families from step 6 — a shared header, assembly block, customer block, and sign-off block, with the per-type test table dropped in between. Eight fully independent templates would triple the maintenance for no benefit.
+    - Shared frame: WP information block upper left, certifier block (name, company, ID) — both pulled from the database, never from wizard input.
+    - When the sign-off used the bypass path, the disclaimer text appears on the document.
+23. Automatic distribution on submit — send the generated document through the email helper to three recipients: the active water purveyor, the customer email captured in step 4, and the certifier. Skip any recipient whose address is missing rather than failing the submit. Until the provider lands in week 5 this runs through the console driver, which prints the payload and the recipient list.
+24. Completion dialog after both Submit and Save to Draft — a modal with two actions: **Do Another Test** (restarts the wizard fresh, same active WP) and **Exit** (returns to the dashboard).
+25. Structured JSON log on submit and on each distribution send.
+
+**Done when:** all eight types can be drafted with validation skipped, interrupted mid-flow, resumed at the exact step with values intact, and submitted; a same-BIN re-run links the prior submission; overwritten prefill fields are visible on the resulting record; the certifier cannot modify a submitted record through the UI or a direct procedure call; the generated document carries WP and certifier blocks from the database; and a submit produces three distribution sends in the console output.
+
+## Week 5 — Email provider and automation
+
+Daniil 18h+ · Lina has no scheduled row. Provider credentials arrive this week, so everything that actually sends mail becomes verifiable here.
+
+### Transactional email integration
+
+**Owner:** Daniil.
+**Week 5** · 2h. Provider credentials do not exist before this week. Everything that sends mail is built earlier against the console driver below and swaps to the real provider here, with no change to any calling code.
+**Prerequisite:** none — safe to run in parallel.
+**Blocks:** all four workflows.
+
+The send helper is written in week 2, as part of onboarding, with a console-logging driver. Only the driver swap happens here.
+
+1. Build the send helper in `packages/api/src/lib/email.ts` taking `{ to, subject, html, tags }`, behind a driver interface with two implementations: `consoleDriver` (logs the full payload, including any invite link, and returns success) and `providerDriver`. Select by env var. Every feature calls the helper, never a provider SDK directly. **This step happens in week 2 with onboarding, not week 5.**
+2. Emit a structured JSON log line on every send attempt regardless of driver: event type, recipient id, asset id, timestamp.
+3. Week 5 — create the provider account (Resend or Postmark) under the company email.
+4. Configure the sender domain and add the DKIM record.
+5. Add the API key to env validation and to Vercel's environment variables.
+6. Implement `providerDriver` against the helper's existing interface and flip the env var. No calling code changes.
+
+**Done when:** flipping the env var switches every email path in the app from console output to real delivery, with no code edit outside `email.ts`; a test send arrives and the log line has the expected shape.
+
+### Node-native scheduler
+
+**Owner:** Daniil.
+**Week 5** · 5h. Must land before workflows 1–3, which run in the same week.
+**Prerequisite:** the schema, including `scheduled_jobs`.
+**Blocks:** the reminder, failure, and AG renewal workflows.
+
+No Vercel Cron. No OS cron. An application-level scheduler with all state in Postgres.
+
+1. Scheduler module in `packages/api/src/scheduler/` — a tick loop that claims due jobs by updating `status` from `pending` to `running` with a conditional write, so two processes cannot claim the same row.
+2. Startup recovery: on boot, find every `pending` job whose `run_at` is already past and process it, and reset any job stuck in `running` from a previous crash back to `pending`.
+3. Retry policy: increment `attempts`, record `last_error`, back off, and mark `failed` after a fixed attempt ceiling.
+4. Job handlers registered by `job_type`, each idempotent — running the same job twice must not send two emails. A handler for a gated feature checks `wp_feature_flags` before doing anything and marks the job cancelled, not failed, when the flag is off.
+5. `asset_status` recomputation job: sets `due_soon` and `past_due` on `bfa_assets` from `annual_test_date`.
+6. Structured JSON log on claim, completion, and failure.
+
+**Done when:** a job scheduled in the past fires on the next startup, a normal restart does not double-fire a completed job, and killing the process mid-job leaves it recoverable rather than stuck.
+
+### Workflow — reminder and escalating late notices
+
+**Owner:** Daniil.
+**Week 5** · 7h.
+**Prerequisite:** assets, notice templates, email integration, and the scheduler.
+
+Gated on the `automated_notices` flag for the asset's WP. Check the flag when a job runs, not only when it is scheduled — switching the feature off must stop pending notices, not just prevent new ones from being queued.
+
+1. On asset creation or annual-test-date change, schedule the reminder job for roughly two months before the due date.
+2. Reminder job: resolve the recipient through the asset's current `customer_assignments` row. If that customer is suspended, do not send and do not advance the chain — the whole pipeline holds for that asset until a new customer is attached. Otherwise send the WP's `reminder` row from `notice_templates` — falling back to the platform default if no row exists — and schedule late notice 1.
+3. The reminder email carries the list of certifiers the customer can call: every certifier authorized for this WP with `authorization_status = 'active'` and `certifiers.status = 'active'`. Resolved at send time, never cached — a certifier blocked yesterday must not appear in today's email.
+4. Late notice 1 at due date plus one day; late notice 2 at plus thirty-one days; final notice at plus another thirty-one days. Each sends and schedules the next.
+5. Cancellation: a passing test for the asset cancels every pending job in the chain.
+
+**Done when:** the full escalation fires in order against a seeded past-due asset, a passing test mid-chain cancels the rest, and a suspended customer produces no email and no chain advance.
+
+### Workflow — failure notice and fail list
+
+**Owner:** Daniil.
+**Week 5** · 6h.
+**Prerequisite:** repair companies, email integration, the scheduler.
+
+Not gated — the client named automated reminders and the AG renewal as the optional features, not the failure notice. If that turns out to be wrong it is one flag check, in one place.
+
+1. On submission with `test_result = 'fail'`, send the failure email immediately. Include the WP's repair companies with `status = 'active'` — the list is resolved at send time, so a company deactivated yesterday is not in today's email.
+2. The asset joins the WP's fail list the moment the failed test is submitted. There is no waiting period for entry. It stays on the list until a passing test for that asset is submitted, which removes it. Membership is computed from test history, not stored as a flag.
+3. Fail-list view on the WP dashboard, reachable from the past-due metric card. Sortable, defaulting to oldest failure first.
+4. Age colouring on each row, driven by days since the failed test: under 30 days uses the danger tint background, 30 to 60 days a stronger tint, over 60 days the full danger colour. Three visible bands so a clerk can see at a glance who needs chasing.
+5. Nothing here fires from a draft. A failed result sitting in an unsubmitted draft sends no email and puts nothing on the list.
+
+**Done when:** submitting a failed test puts the asset on the list immediately and sends the email with only currently-active repair companies; a row crossing 30 and 60 days changes colour; a passing re-test removes the asset; a failed draft does nothing.
+
+### Workflow — agricultural rate renewal
+
+**Owner:** Daniil.
+**Week 5** · 3h.
+**Prerequisite:** customers, email integration, the scheduler.
+
+Gated on the `ag_renewal_notice` flag for the customer's WP, checked at run time.
+
+1. When a customer is set to agricultural with a renewal date, schedule a one-time notice. No escalation chain.
+2. Send against the customer's own email, not the asset's current occupant — this is a billing-category notice, not an asset notice.
+3. The renewal date does not auto-advance after sending. This is a reminder only — a customer who misses it reapplies, and the WP sets a new date manually when they do.
+
+**Done when:** the notice fires once on the renewal date and does not schedule a follow-up.
+
+## Week 6 — Final modules
+
+Lina 8h · Daniil buffer and QA.
+
+### Monthly statements export
+
+**Owner:** Lina.
+**Week 6** · 3h.
+**Prerequisite:** assets, customers, and submitted tests all carrying real data.
+
+The export covers submitted tests only — passes and failures — not a dump of every table. Enough for a WP to see who passed and who failed in a period.
+
+1. `exportStatement` procedure — takes an arbitrary start and end date, returns submitted tests scoped to the caller's WP. Columns: customer name, BIN, service address, BFA type, test date, result, certifier. Define the column set in one place so adding a field is a single edit.
+2. CSV generation server-side, streamed as a download. On demand only; nothing scheduled.
+3. Arbitrary date-range picker — not fixed months. A WP picks any start and end date, the way a bank statement lets you choose a custom period.
+4. On-screen results table above the download button, showing the same rows. Clicking a row opens that test's result document — the export view doubles as a way to browse past results.
+
+**Done when:** a WP picks an arbitrary range, sees the matching passes and failures on screen, opens one of them from the row, and downloads the same set as CSV containing only their own rows.
+
+### Landing page
+
+**Owner:** Lina.
+**Week 6** · 5h.
+**Prerequisite:** none — no application dependency at all.
+
+1. Public marketing page: hero, problem framing, feature summary, name-and-email capture form.
+2. The form stores leads only. It does not create users, does not touch the app's tables, and is the single public surface in an otherwise invite-only product.
+
+**Done when:** the page is live, responsive, and submitting the form stores a lead without touching auth.
+
+## Cross-cutting
+
+Runs across all six weeks, owned by both developers.
+
+### Multi-tenant isolation testing
+
+Start this the week the first policies land, not at the end. An RLS gap found in week 6 means auditing every policy written since week 1.
+
+Write it as a repeatable script, not a manual click-through: log in as each seeded WP, attempt a read and a write against the other WP's rows on every RLS-backed table, assert zero rows and a thrown error. Add a case each time a feature adds a policy, and run the whole suite before every merge that touched a migration.
+
+The certifier case matters as much as the WP case — a certifier authorized for two WPs must see exactly the intersection they should, not the union.
+
+### End-to-end flow testing
+
+Playwright is already wired into the repo. Once both dashboard tracks land, automate the spine of the product: invite a WP, invite a certifier under them, register an asset, run the wizard, submit, confirm the result lands on the WP dashboard, confirm the reminder chain scheduled.
+
+That single test failing is the fastest signal that something regressed. Run it on every PR.
+
+### Documentation
+
+Every feature's PR updates its docs page in the same PR. A future contributor should understand the current state of the app from the docs alone.
+
+## Open questions to close before the owning feature ships
+
+Most of the original list is now answered and folded into the features above. What remains:
+
+| Question | Blocks | Consequence if unanswered |
+|---|---|---|
+| Exact permission split between WP Admin, SubAdmin, and Employee | Certifiers, submitted tests | Partially answered — all three roles can invite certifiers, and the Admin has full account control. The middle ground between SubAdmin and Employee is still undefined, so the two share identical policies for now |
+| Full list of dynamic variables for notice text | Notices and email settings | Substitution layer ships open-ended with customer name, BFA type, BIN, service address, and due date. The client has offered to pull the full list from the old Bubble database |
+
+### Answered, for the record
+
+So the answers do not get relitigated when someone rereads an older document:
+
+- **Sign-off** — the property owner signs on the phone; the certifier ticks a bypass checkbox only when the owner is absent, which carries the mandatory disclaimer. A certifier may also leave the test in draft and collect the signature later.
+- **A mid-wizard failure never ends the wizard.** The remaining fields are still collected. The failure email fires only on submit — a failed draft sends nothing.
+- **The results document is per BFA type**, matching the test actually performed.
+- **A WP may correct any data it owns**, including reassigning a BIN and editing a submitted test. A certifier may not: once submitted, they must file a new test instead.
+- **All three WP roles can invite certifiers.**
+- **A certifier invited by a second WP** gets a normal invite email and skips profile setup on redemption.
+- **The AG renewal date does not auto-advance** after the notice sends. Missing it means reapplying.
+- **The fail list has no waiting period** — an asset lands on it the moment a failed test is submitted, and leaves when a passing test arrives.
+- **Optional features are switched per WP by the Super-Admin**, default off, with no billing logic in the app — pricing is handled outside it.
+- **No audit-log UI in v1.** Structured JSON logging still happens on every sensitive write, so the data exists if a visible activity feed is added later.

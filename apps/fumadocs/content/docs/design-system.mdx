@@ -3,38 +3,49 @@ title: Design System
 description: Visual language extracted from the approved click-through prototype
 ---
 
-This page documents the visual language established by the client-approved HTML prototype (role-picker → Super Admin / Water Purveyor / Certifier flows). Treat it as the baseline for the real Next.js + Tailwind implementation — new screens should read as part of the same system, not a fresh design.
+This page documents the visual language for the real Next.js + Tailwind implementation. It started from the client-approved click-through prototype; the color palette below is the client's pixel-verified theme sheet (cyan-blue primary, cool blue-grey neutrals). Layout and component patterns are unchanged from the original prototype — only the color tokens and typography moved.
+
+The prototype's layout — which screen has which sections, the wizard's step sequence, table/modal/sidebar composition — is kept as a readable reference at `.agents/skills/bfa-design-system/reference/prototype-layout.html`. **Colors and fonts in that file are the original prototype's and are superseded by this page** — use it for structure only, then reskin with the tokens below.
 
 ## Color palette
 
 | Token | Hex | Use |
 |---|---|---|
-| Primary | `#2F6FED` | Primary buttons, active nav item, links, focus accents |
-| Primary hover | `#2A63D4` | Primary button hover |
-| Primary tint | `#EAF1FE` | Active nav background, primary badge background, icon chip background |
-| Text primary | `#1D2129` | Headings, body text |
-| Text secondary | `#6B7280` | Labels, meta text, muted descriptions |
-| Text tertiary | `#9AA1AC` | Placeholders, disabled text, inactive tab icons |
-| Border strong | `#E4E7EC` | Card borders, table header border, sidebar border |
-| Border soft | `#EDEFF2` | Section dividers, input read-only background context |
-| Border input | `#D9DDE3` | Input/button borders |
-| Row divider | `#F1F2F4` | Table row borders |
-| Page background | `#F4F5F7` | App shell background |
+| Primary | `#1588C1` | Primary buttons, active nav item, links, focus accents |
+| Primary hover | `#11719E` | Primary button hover |
+| Primary contrast | `#FFFFFF` | Text/icons inside a primary button |
+| Primary tint | `#D9F0FC` | Active nav background, primary badge background, icon chip background, tenant-switcher card background |
+| Primary tint text | `#0E5A81` | Text/icon on the primary tint (active nav label) |
+| Text primary | `#1B242D` | Headings, body text |
+| Text secondary | `#687A8D` | Labels, meta text, muted descriptions |
+| Text tertiary | `#9AA7B2` | Placeholders, disabled text, inactive tab icons |
+| Border strong | `#E1E6EA` | Card borders, table header border, sidebar border |
+| Border soft | `#EEF1F4` | Section dividers, input read-only background context |
+| Border input | `#D5DBE1` | Input/button borders |
+| Row divider | `#EEF1F4` | Table row borders |
+| Page background | `#F5F8FA` | App shell background |
 | Surface | `#FFFFFF` | Cards, sidebar, table, modal |
-| Success | `#16A34A` text / `#DCFCE7` bg | Pass badges, positive stats |
-| Danger | `#DC2626` text / `#FEE2E2` bg | Fail badges, past-due, blocked |
-| Warning | `#D97706` text / `#FEF3C7` bg | Due-soon badges, mid-wizard warnings |
+| Success | `#29A36A` text / `#E1F4EA` bg | Pass badges, positive stats |
+| Danger | `#DD2C3B` text / `#FBE4E6` bg | Fail badges, past-due, blocked, destructive icon actions (delete/trash) |
+| Warning | `#F3A216` text / `#FDEFD5` bg | Due-soon badges, mid-wizard warnings |
 | Accent (secondary) | `#0D9488` text / `#CCFBF1` bg | Secondary stat-card accent (submissions, no-BIN count) |
 | Purple | `#7C3AED` text / `#EDE9FE` bg | Agricultural-rate badge |
+
+Primary, the neutrals, and the success/danger/warning pairs are the client's pixel-verified theme-sheet values. The secondary teal accent and the AG-rate purple were not on that sheet and are carried over unchanged from the original prototype; keep the "saturated text on a pale tint" pairing if new states are added.
 
 Dark colors never appear as full backgrounds in this system — every accent is a saturated text color paired with a pale tint background (badges, stat-card icon chips). Keep that pairing when adding new states rather than inventing new backgrounds.
 
 ## Typography
 
-- Font stack: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif` — no custom webfont.
+Two font families, split by role — not by section:
+
+- **Inter** — everything except page-level titles: nav labels, card/section titles ("Pending Invitations", "Users"), body text, table content, buttons, badges, inputs, labels. Weight 400–700 depending on context.
+- **Sora** — page-level H1 titles only (e.g. "Invitations & Access"). Weight 600–700. Nothing below that heading tier switches to Sora — a card title sitting right under the page title still renders in Inter.
+- Load both via `next/font/google` in the app shell (mirrors how `apps/fumadocs` already loads Inter) — do not self-host or use a CDN `<link>`, per the portability constraints in `bfa-requirements`.
 - Body/UI text: 13–14.5px, weight 400–600.
-- Section/page headings: 15.5–20px, weight 700.
-- Labels above inputs: 12px, `#6B7280`.
+- Section/card headings (Inter): 15.5–20px, weight 700.
+- Page title (Sora): 22–28px, weight 700.
+- Labels above inputs: 12px, `#687A8D`.
 - Badges/pills: 11px, weight 600.
 - Letter-spacing `.03–.05em` + uppercase only on small eyebrow labels (section labels, menu group headers).
 
@@ -42,30 +53,30 @@ Dark colors never appear as full backgrounds in this system — every accent is 
 
 - Card / table / modal radius: **10–12px**. Buttons and inputs: **8px**. Badges/pills: **6px**.
 - Card padding: 16–24px. Table cell padding: `11px 16px`. Input padding: `10px 12px`.
-- Card border: `1px solid #E4E7EC` (or `#EDEFF2` for a lighter nested card) plus a subtle shadow `0 1px 2px rgba(16,24,40,0.04)` — never a heavier shadow.
+- Card border: `1px solid #E1E6EA` (or `#EEF1F4` for a lighter nested card) plus a subtle shadow `0 1px 2px rgba(27,36,45,0.05)` — never a heavier shadow.
 - Gaps between grid items / stat cards: 14–16px.
 
 ## Layout shell
 
 - **Certifier (mobile-first):** phone width uses a bottom tab bar (Dashboard / Profile); desktop width (≥780px) switches to the same 216px left sidebar used by WP/Admin. Content max-width `480px` centered on desktop for forms, full-width for tables.
-- **WP / Super-Admin (desktop-oriented):** fixed 216px left sidebar (white, `1px solid #E4E7EC` right border), icon + label nav items, active item gets `#EAF1FE` background + `#2F6FED` text/icon. Top header bar (white, bottom border) shows the current WP/company name and a "Switch role" or contextual action on the right.
+- **WP / Super-Admin (desktop-oriented):** fixed 216px left sidebar (white, `1px solid #E1E6EA` right border), icon + label nav items, active item gets `#D9F0FC` background + `#0E5A81` text/icon. Top header bar (white, bottom border) shows the current WP/company name and a "Switch role" or contextual action on the right.
 - **Impersonation banner:** full-width `#FEF3C7` bar above the shell, `#92400E` text, with an underlined "Exit impersonation" link — always visible while impersonating, never folded into a menu.
 
 ## Components
 
-**Stat card** — white card, radius 12px, a 3px colored top accent bar (`#2F6FED` primary metrics, `#0D9488` secondary/computed metrics, `#DC2626` for danger metrics like past-due count), a 32–38px icon chip in the matching tint color, a 12px muted label, and a 24px bold number.
+**Stat card** — white card, radius 12px, a 3px colored top accent bar (`#1588C1` primary metrics, `#0D9488` secondary/computed metrics, `#DD2C3B` for danger metrics like past-due count), a 32–38px icon chip in the matching tint color, a 12px muted label, and a 24px bold number.
 
-**Table** — header row `#FAFBFC` background with `#E4E7EC` bottom border, 12px/600-weight muted header labels; body rows separated by `#F1F2F4`, hover `#FAFBFF` when the row is clickable (drills into a detail view).
+**Table** — header row `#EFF3F5` background with `#E1E6EA` bottom border, 12px/600-weight muted header labels; body rows separated by `#EEF1F4`, hover `#F4FAFD` when the row is clickable (drills into a detail view).
 
 **Badge** — pill, 11px/600 weight, `padding: 3px 9px`, `border-radius: 6px`, colored text on a matching pale tint background per status (see palette table). Never a solid-fill badge.
 
-**Buttons** — primary: `#2F6FED` fill, white text, radius 8px, weight 600, hover `#2A63D4`. Secondary/outline: white fill, `1px solid #D9DDE3` border, same radius/weight. Icon-only segmented control (e.g. sign-off method toggle): pill container `#EDEFF2`, active segment white with subtle shadow.
+**Buttons** — primary: `#1588C1` fill, white text, radius 8px, weight 600, hover `#11719E`. Secondary/outline: white fill, `1px solid #D5DBE1` border, same radius/weight. Icon-only segmented control (e.g. sign-off method toggle): pill container `#E7EBEF`, active segment white with subtle shadow.
 
-**Inputs** — `1px solid #D9DDE3`, radius 8px, `10px 12px` padding, 14px text. Read-only/auto-filled fields (e.g. BIN-found assembly details) get a flat `#F1F2F4` background with `#6B7280` text instead of a disabled look.
+**Inputs** — `1px solid #D5DBE1`, radius 8px, `10px 12px` padding, 14px text. Read-only/auto-filled fields (e.g. BIN-found assembly details) get a flat `#E7EBEF` background with `#687A8D` text instead of a disabled look.
 
 **Modal** — centered, white, radius 12px, `24px` padding, backdrop `rgba(16,24,40,0.45)`. Click-outside-to-close via a backdrop click handler that stops propagation from the modal body.
 
-**Wizard progress** — a row of thin (5px) rounded segments, one per step, filled `#2F6FED` up to the current step, `0.5` opacity for the remainder. Step label underneath in 12px muted text ("Step 3 of 6 · Test readings").
+**Wizard progress** — a row of thin (5px) rounded segments, one per step, filled `#1588C1` up to the current step, `0.5` opacity for the remainder. Step label underneath in 12px muted text ("Step 3 of 6 · Test readings").
 
 **Icons** — [Lucide](https://lucide.dev)-style stroke icons only (no filled icons), stroke-width 1.6–2.2, sized 14–26px depending on context. Never mix in a different icon family.
 

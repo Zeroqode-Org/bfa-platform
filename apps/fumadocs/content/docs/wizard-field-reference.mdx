@@ -85,8 +85,8 @@ The differentiator between types is entirely in this middle block — everything
 - Does this assembly isolate the entire property? Yes/No/Undetermined
 - No relief valve, no bypass/detector line, no ADP field — the simplest of the 8 flows.
 
-## What this confirms vs. what's still open
+## What this confirms
 
-Confirms from [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log): every type shares the same assembly-details/closing-block shell; only the middle test block differs; "Does this assembly isolate the entire property?" and Initial Test Pass/Fail are asked **before** the wizard reaches the closing block, which is consistent with the confirmed behavior that a pass/fail answer doesn't end the questionnaire early.
+From [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log): every type shares the same assembly-details/closing-block shell; only the middle test block differs; "Does this assembly isolate the entire property?" and Initial Test Pass/Fail are asked **before** the wizard reaches the closing block, consistent with the confirmed behavior that a pass/fail answer doesn't end the questionnaire early.
 
-Still open, unchanged from [PRD § 10](/docs/prd#10-open-questions-for-the-client): whether a failed check/relief valve reading should visually flag anything extra to the WP beyond the Pass/Fail value itself, and whether the results document needs to visually match the legacy PDF layout per type.
+The two items this page originally flagged as open are now resolved in the [Build Plan](/docs/build-plan): the sign-off in the closing block is a **signature by default** (the property owner/manager, not the certifier), with a checkbox-plus-mandatory-disclaimer fallback only when the owner isn't present; and the results document gets **one layout per BFA type**, built as a shared frame (WP block, certifier block, customer block, sign-off block) plus a swappable per-type test-block section — not a single generic layout, and not eight independent ones either. See [Build Plan § Certifier test wizard](/docs/build-plan#certifier-test-wizard) for the exact build steps and the disclaimer's mandatory wording.

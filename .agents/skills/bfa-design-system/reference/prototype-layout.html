@@ -1,0 +1,641 @@
+ <!--
+  Layout reference extracted from the client-approved click-through prototype
+  ("Backflow Assembly Prototype.html").
+
+  This is NOT the original self-executing bundle — that file wraps this markup
+  in a compressed, base64-encoded runtime (React/ReactDOM UMD + a custom
+  bundler loader) that has no reference value and is too fragile to retype by
+  hand without risking silent corruption. What's kept here is the two parts
+  that actually matter for layout: the template markup below (pseudo-HTML with
+  `sc-if` / `sc-for` conditional/loop directives and inline styles, one block
+  per screen — role picker, Super Admin, Certifier dashboard/wizard, WP
+  dashboard) and the component logic (state shape + render-prop mapping) that
+  follows it.
+
+  DO NOT use the inline hex colors or the font-family declared in this markup
+  as the current design system — they're the ORIGINAL prototype palette
+  (#2F6FED blue, -apple-system stack). The current palette (steel-blue
+  #3E6FA0 family) and typography (Inter + Sora) were revised against a later
+  reference screenshot and live in:
+    - apps/fumadocs/content/docs/design-system.mdx
+    - .agents/skills/bfa-design-system/SKILL.md
+  Use this file only for layout, structure, and component composition —
+  which screen has which sections, how the wizard steps are sequenced, how
+  the sidebar/table/modal/badge patterns are put together — then reskin with
+  the current tokens.
+-->
+
+<!-- ============================== TEMPLATE ============================== -->
+<!--
+  Pseudo-HTML template layer. `sc-if` / `sc-for` are the prototype tool's
+  conditional-render / loop directives; `{{ }}` are bound expressions;
+  `sc-camel-*` attributes are event handlers. Read structurally, not as
+  literal HTML.
+-->
+
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body{margin:0;-webkit-font-smoothing:antialiased}
+  input,textarea,select{font-family:inherit}
+  ::placeholder{color:#9AA1AC}
+</style>
+</helmet>
+<div style="min-height:100vh;background:#F4F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1D2129">
+
+<!-- ROLE SELECTOR — landing screen before any role is chosen -->
+<sc-if value="{{showRoleSelect}}" hint-placeholder-val="{{true}}">
+  <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px">
+    <div style="max-width:900px;width:100%;text-align:center;margin-bottom:48px">
+      <div style="font-size:14px;font-weight:600;color:#2F6FED;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:12px">Backflow Assembly</div>
+      <div style="font-size:32px;font-weight:600;color:#1D2129;margin-bottom:8px">Select a role to continue</div>
+      <div style="font-size:16px;color:#6B7280">This is a prototype — choose a role to explore its experience.</div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;max-width:960px">
+      <!-- three role cards: Super Admin / Water Purveyor / Certifier, each an icon + title + one-line description -->
+      <div sc-camel-on-click="{{ selectSuperAdmin }}" style="cursor:pointer;background:#FFFFFF;border:1px solid #E4E7EC;border-radius:12px;padding:32px 28px;width:280px">
+        <div style="width:44px;height:44px;border-radius:10px;background:#EAF1FE;display:flex;align-items:center;justify-content:center;margin-bottom:18px">[icon]</div>
+        <div style="font-size:17px;font-weight:600;margin-bottom:6px">Super Admin</div>
+        <div style="font-size:14px;color:#6B7280;line-height:1.5">Manage all water providers on the platform</div>
+      </div>
+      <div sc-camel-on-click="{{ selectWaterPurveyor }}" style="cursor:pointer;background:#FFFFFF;border:1px solid #E4E7EC;border-radius:12px;padding:32px 28px;width:280px">
+        <div style="width:44px;height:44px;border-radius:10px;background:#EAF1FE;display:flex;align-items:center;justify-content:center;margin-bottom:18px">[icon]</div>
+        <div style="font-size:17px;font-weight:600;margin-bottom:6px">Water Purveyor</div>
+        <div style="font-size:14px;color:#6B7280;line-height:1.5">Track compliance, certifiers, and customers</div>
+      </div>
+      <div sc-camel-on-click="{{ selectCertifier }}" style="cursor:pointer;background:#FFFFFF;border:1px solid #E4E7EC;border-radius:12px;padding:32px 28px;width:280px">
+        <div style="width:44px;height:44px;border-radius:10px;background:#EAF1FE;display:flex;align-items:center;justify-content:center;margin-bottom:18px">[icon]</div>
+        <div style="font-size:17px;font-weight:600;margin-bottom:6px">Certifier</div>
+        <div style="font-size:14px;color:#6B7280;line-height:1.5">Submit and manage backflow tests in the field</div>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<!-- SUPER ADMIN — WP list + invite modal -->
+<sc-if value="{{showSuperAdmin}}" hint-placeholder-val="{{false}}">
+  <div style="min-height:100vh;background:#F4F5F7">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 28px;background:#FFFFFF;border-bottom:1px solid #E4E7EC">
+      <div style="font-size:14px;font-weight:600">Backflow Assembly · Super Admin</div>
+      <a sc-camel-on-click="{{ switchRole }}">Switch role</a>
+    </div>
+    <div style="padding:28px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div style="font-size:18px;font-weight:600">Water purveyors</div>
+        <button sc-camel-on-click="{{ openInviteModal }}">+ Invite WP</button>
+      </div>
+      <!-- table: WP name / Contact / Certifiers / Assets / Status badge / Impersonate action -->
+      <table>
+        <thead><tr><th>WP name</th><th>Contact</th><th>Certifiers</th><th>Assets</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <sc-for list="{{waterPurveyorsWithActions}}" as="wp" hint-placeholder-count="4">
+            <tr>
+              <td>{{ wp.name }}</td><td>{{ wp.contact }}</td><td>{{ wp.certifiersCount }}</td>
+              <td>{{ wp.assetsCount }}</td><td><span style="{{ wp.badgeStyle }}">{{ wp.status }}</span></td>
+              <td><button sc-camel-on-click="{{ wp.impersonate }}">Impersonate</button></td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Invite WP modal — company name + contact email, send / preview-invite-flow -->
+  <sc-if value="{{showInviteModal}}" hint-placeholder-val="{{false}}">
+    <div style="position:fixed;inset:0;background:rgba(16,24,40,0.45);display:flex;align-items:center;justify-content:center" sc-camel-on-click="{{ closeInviteModal }}">
+      <div sc-camel-on-click="{{ stopProp }}" style="background:#fff;border-radius:12px;padding:24px;width:420px">
+        <div style="font-size:16px;font-weight:600;margin-bottom:16px">Invite water purveyor</div>
+        <input value="{{ inviteForm.companyName }}" sc-camel-on-change="{{ onIvfCompanyName }}" placeholder="Company name">
+        <input value="{{ inviteForm.contactEmail }}" sc-camel-on-change="{{ onIvfContactEmail }}" placeholder="Contact email">
+        <button sc-camel-on-click="{{ sendInvite }}">Send invite</button>
+        <a sc-camel-on-click="{{ goInvitePreview }}">Preview invite flow</a>
+      </div>
+    </div>
+  </sc-if>
+</sc-if>
+
+<!-- INVITE FIRST-LOGIN — password + profile completion after an invite link -->
+<sc-if value="{{showInviteFirstLogin}}" hint-placeholder-val="{{false}}">
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">
+    <div style="width:100%;max-width:440px">
+      <div style="text-align:center;margin-bottom:24px">Backflow Assembly</div>
+      <div style="background:#fff;border:1px solid #E4E7EC;border-radius:12px;padding:28px">
+        <div style="font-size:18px;font-weight:600">Welcome — let's get you set up</div>
+        <div style="font-size:13.5px;color:#6B7280;margin-bottom:24px">Set your password and complete your profile to get started.</div>
+
+        <div>Set your password</div>
+        <input type="password" placeholder="Password">
+        <input type="password" placeholder="Confirm password">
+
+        <div>Complete your profile</div>
+        <input placeholder="Full name">
+        <input placeholder="Phone">
+        <input placeholder="Company">
+
+        <button sc-camel-on-click="{{ goRoleSelect }}" style="width:100%">Get started</button>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<!-- CERTIFIER APP — mobile bottom-tab shell under 780px, 216px sidebar at desktop -->
+<sc-if value="{{showCertifierApp}}" hint-placeholder-val="{{false}}">
+  <div style="display:flex;min-height:100vh;background:#F4F5F7">
+    <sc-if value="{{isDesktop}}" hint-placeholder-val="{{true}}">
+      <!-- desktop sidebar: logo, Menu label, Dashboard / Profile nav items, spacer, divider, Log out -->
+      <div style="width:216px;flex-shrink:0;background:#FFFFFF;border-right:1px solid #E4E7EC;padding:20px 14px">
+        <div>[logo] Backflow Assembly</div>
+        <div>Menu</div>
+        <div sc-camel-on-click="{{ goDash }}" style="{{ certNavDashStyle }}">Dashboard</div>
+        <div sc-camel-on-click="{{ goProfile }}" style="{{ certNavProfileStyle }}">Profile</div>
+        <div style="flex:1"></div>
+        <div sc-camel-on-click="{{ switchRole }}">Log out</div>
+      </div>
+    </sc-if>
+
+    <div style="{{ certContainerStyle }}">
+
+      <!-- CERTIFIER DASHBOARD -->
+      <sc-if value="{{showCertDash}}" hint-placeholder-val="{{false}}">
+        <div style="display:flex;flex-direction:column;flex:1">
+          <div style="padding:22px 24px 18px;border-bottom:1px solid #EDEFF2">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="font-size:20px;font-weight:700">Dashboard</div>
+              <sc-if value="{{isMobile}}" hint-placeholder-val="{{true}}"><a sc-camel-on-click="{{ switchRole }}">Log out</a></sc-if>
+              <sc-if value="{{isDesktop}}" hint-placeholder-val="{{true}}">
+                <a sc-camel-on-click="{{ switchRole }}">Switch role</a>
+                <button sc-camel-on-click="{{ openNewTest }}">+ New test</button>
+              </sc-if>
+            </div>
+            <!-- WP selector dropdown: "Working for: <WP name>", opens a list of authorized WPs -->
+            <sc-if value="{{showWpSelector}}" hint-placeholder-val="{{false}}">
+              <div sc-camel-on-click="{{ toggleWpSelector }}">Working for: <b>{{ selectedWP }}</b></div>
+              <sc-if value="{{wpSelectorOpen}}" hint-placeholder-val="{{false}}">
+                <sc-for list="{{wpList}}" as="wp" hint-placeholder-count="3">
+                  <div sc-camel-on-click="{{ wp.select }}">{{ wp.name }}</div>
+                </sc-for>
+              </sc-if>
+            </sc-if>
+          </div>
+
+          <div style="padding:24px;flex:1;overflow-y:auto;background:#FAFBFC">
+            <!-- two stat cards: Drafts count, Submissions count -->
+            <div style="display:flex;gap:14px;margin-bottom:22px">
+              <div>[icon] Drafts {{ draftsCount }}</div>
+              <div>[icon] Submissions {{ submissionsCount }}</div>
+            </div>
+            <sc-if value="{{isMobile}}" hint-placeholder-val="{{true}}"><button sc-camel-on-click="{{ openNewTest }}">+ New test</button></sc-if>
+
+            <!-- two-column grid (stacks on mobile): Drafts list / Submitted tests list -->
+            <div style="{{ certListsGridStyle }}">
+              <div>
+                <div>Drafts</div>
+                <sc-for list="{{drafts}}" as="d" hint-placeholder-count="3">
+                  <div sc-camel-on-click="{{ d.open }}">
+                    BIN {{ d.bin }} · {{ d.savedAt }}<br>{{ d.type }} · {{ d.stepLabel }}
+                  </div>
+                </sc-for>
+              </div>
+              <div>
+                <div>Submitted tests</div>
+                <sc-for list="{{submissions}}" as="s" hint-placeholder-count="5">
+                  <div sc-camel-on-click="{{ s.view }}">
+                    BIN {{ s.bin }} · {{ s.type }} · {{ s.date }} <span style="{{ s.badgeStyle }}">{{ s.result }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <!-- mobile bottom tab bar: Dashboard / Profile -->
+          <sc-if value="{{isMobile}}" hint-placeholder-val="{{true}}">
+            <div style="display:flex;border-top:1px solid #EDEFF2">
+              <div sc-camel-on-click="{{ goDash }}">Dashboard</div>
+              <div sc-camel-on-click="{{ goProfile }}">Profile</div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- SUBMITTED-TEST DETAIL (certifier's own, read-only) -->
+      <sc-if value="{{showDetail}}" hint-placeholder-val="{{false}}">
+        <div>
+          <div><span sc-camel-on-click="{{ goDash }}">[back]</span> Test detail</div>
+          <div>
+            <div>BIN {{ detailItem.bin }} · {{ detailItem.type }} · {{ detailItem.date }} <span style="{{ detailItem.badgeStyle }}">{{ detailItem.result }}</span></div>
+            <!-- read-only fields: Customer, Service address, Meter start/end, Line pressure, Relief valve, Photos (up to 2 slots) -->
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- CERTIFIER PROFILE — avatar/initials card, contact-info form, change-password form -->
+      <sc-if value="{{showProfile}}" hint-placeholder-val="{{false}}">
+        <div>
+          <div>Profile <sc-if value="{{isMobile}}" hint-placeholder-val="{{true}}"><a sc-camel-on-click="{{ switchRole }}">Log out</a></sc-if></div>
+          <div>
+            <div>{{ certProfileInitials }} {{ certProfile.name }} — Certified Backflow Tester · {{ certProfile.licenseId }}</div>
+            <div>Contact info
+              <input value="{{ certProfile.name }}" sc-camel-on-change="{{ onProfileNameChange }}">
+              <input value="{{ certProfile.email }}" sc-camel-on-change="{{ onProfileEmailChange }}">
+              <input value="{{ certProfile.phone }}" sc-camel-on-change="{{ onProfilePhoneChange }}">
+              <input value="{{ certProfile.licenseId }}" sc-camel-on-change="{{ onProfileLicenseChange }}">
+              <button>Save changes</button>
+            </div>
+            <div>Change password
+              <input type="password" placeholder="Current password">
+              <input type="password" placeholder="New password">
+              <input type="password" placeholder="Confirm new password">
+              <button>Update password</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- CERTIFIER TEST WIZARD — the largest screen. Progress dots + label, Cancel/Save&exit,
+           six numbered steps, footer nav (Back/Next, or Back/Save draft/Submit on the last step) -->
+      <sc-if value="{{showWizard}}" hint-placeholder-val="{{false}}">
+        <div>
+          <div>
+            New test <a sc-camel-on-click="{{ cancelWizard }}">Cancel</a> <a sc-camel-on-click="{{ saveAndExit }}">Save & exit</a>
+            <!-- step-dot progress bar, one segment per step -->
+            <sc-for list="{{stepDots}}" as="sd" hint-placeholder-count="6"><div style="{{ sd.style }}"></div></sc-for>
+            <div>{{ stepLabel }}</div>
+          </div>
+
+          <div>
+            <!-- Step 1: BIN lookup. Enter BIN + Search; found → "BIN found" badge + auto-filled
+                 assembly fields (read-only styling); not found → "New installation" badge +
+                 certifier-typed fields. Same layout either way, only auto-fill vs. manual differs. -->
+            <sc-if value="{{wStep1}}" hint-placeholder-val="{{false}}">
+              <input value="{{ wizard.bin }}" sc-camel-on-change="{{ onBinChange }}" placeholder="Enter BIN">
+              <button sc-camel-on-click="{{ searchBin }}">Search</button>
+              <sc-if value="{{wizard.binSearched}}" hint-placeholder-val="{{false}}">
+                <sc-if value="{{wizard.binFound}}" hint-placeholder-val="{{false}}"><div>BIN found</div></sc-if>
+                <sc-if value="{{wizard.binFoundFalse}}" hint-placeholder-val="{{false}}"><div>New installation</div></sc-if>
+                <input value="{{ wizard.serviceAddress }}" sc-camel-on-change="{{ onServiceAddressChange }}" sc-camel-read-only="{{ wizard.binFound }}" style="{{ readOnlyFieldStyle }}">
+                <input value="{{ wizard.manufacturer }}" sc-camel-on-change="{{ onManufacturerChange }}" sc-camel-read-only="{{ wizard.binFound }}" style="{{ readOnlyFieldStyle }}">
+                <input value="{{ wizard.model }}" sc-camel-on-change="{{ onModelChange }}" sc-camel-read-only="{{ wizard.binFound }}" style="{{ readOnlyFieldStyle }}">
+                <input value="{{ wizard.serial }}" sc-camel-on-change="{{ onSerialChange }}" sc-camel-read-only="{{ wizard.binFound }}" style="{{ readOnlyFieldStyle }}">
+              </sc-if>
+            </sc-if>
+
+            <!-- Step 2: Assembly type grid (8 types) + Size field once a type is chosen -->
+            <sc-if value="{{wStep2}}" hint-placeholder-val="{{false}}">
+              <div>Assembly type</div>
+              <sc-for list="{{assemblyTypes}}" as="at" hint-placeholder-count="8">
+                <div sc-camel-on-click="{{ at.select }}" style="{{ at.style }}">{{ at.label }}</div>
+              </sc-for>
+              <sc-if value="{{wizard.assemblyType}}" hint-placeholder-val="{{false}}">
+                <input value="{{ wizard.size }}" sc-camel-on-change="{{ onSizeChange }}" placeholder="e.g. 3/4 in">
+              </sc-if>
+            </sc-if>
+
+            <!-- Step 3: Meter start/end, Line pressure, Relief valve check (Yes/No segmented,
+                 Yes → opening-pressure value, No → warning callout that follow-up is required) -->
+            <sc-if value="{{wStep3}}" hint-placeholder-val="{{false}}">
+              <input value="{{ wizard.meterStart }}" sc-camel-on-change="{{ onMeterStartChange }}">
+              <input value="{{ wizard.meterEnd }}" sc-camel-on-change="{{ onMeterEndChange }}">
+              <input value="{{ wizard.linePressure }}" sc-camel-on-change="{{ onLinePressureChange }}">
+              <div>Relief valve check
+                <div sc-camel-on-click="{{ setReliefYes }}" style="{{ reliefYesStyle }}">Yes</div>
+                <div sc-camel-on-click="{{ setReliefNo }}" style="{{ reliefNoStyle }}">No</div>
+              </div>
+              <sc-if value="{{wizard.reliefValveYes}}" hint-placeholder-val="{{false}}">
+                <input value="{{ wizard.reliefValveValue }}" sc-camel-on-change="{{ onReliefValueChange }}" placeholder="Opening pressure (psi)">
+              </sc-if>
+              <sc-if value="{{wizard.reliefValveNo}}" hint-placeholder-val="{{false}}">
+                <div>Relief valve failed to open. Additional readings and follow-up will be required before this test can pass.</div>
+              </sc-if>
+            </sc-if>
+
+            <!-- Step 4: Customer name/email, Sign-off method segmented toggle (Signature / Certify),
+                 Signature → mobile-signature pad, Certify → checkbox with attestation text -->
+            <sc-if value="{{wStep4}}" hint-placeholder-val="{{false}}">
+              <input value="{{ wizard.customerName }}" sc-camel-on-change="{{ onCustomerNameChange }}">
+              <input value="{{ wizard.customerEmail }}" sc-camel-on-change="{{ onCustomerEmailChange }}">
+              <div>Sign-off method
+                <div sc-camel-on-click="{{ setSignoffSignature }}" style="{{ signoffSigStyle }}">Signature</div>
+                <div sc-camel-on-click="{{ setSignoffCertify }}" style="{{ signoffCertStyle }}">Certify</div>
+              </div>
+              <sc-if value="{{wizard.signoffSignature}}" hint-placeholder-val="{{false}}"><div>Sign here</div></sc-if>
+              <sc-if value="{{wizard.signoffCertify}}" hint-placeholder-val="{{false}}">
+                <label><input type="checkbox" checked="{{ wizard.certifyChecked }}" sc-camel-on-change="{{ onCertifyToggle }}"> I certify the above report is true.</label>
+              </sc-if>
+            </sc-if>
+
+            <!-- Step 5: up to 2 photo slots, tap to toggle filled/empty -->
+            <sc-if value="{{wStep5}}" hint-placeholder-val="{{false}}">
+              <div>Add up to 2 photos</div>
+              <div sc-camel-on-click="{{ togglePhoto1 }}" style="{{ photo1Style }}">[photo/placeholder]</div>
+              <div sc-camel-on-click="{{ togglePhoto2 }}" style="{{ photo2Style }}">[photo/placeholder]</div>
+            </sc-if>
+
+            <!-- Step 6: Review & submit. For non-RP types the prototype shows a "not built yet"
+                 notice plus a summary of Asset / Assembly (this is where the real app's per-type
+                 test blocks plug in — RP shows the full summary as the worked example: Asset,
+                 Assembly, Test readings, Customer & sign-off, Photos). -->
+            <sc-if value="{{wStep6}}" hint-placeholder-val="{{false}}">
+              <sc-if value="{{wizard.nonRPNotice}}" hint-placeholder-val="{{false}}">
+                <div>Full step-by-step workflow for {{ wizard.assemblyType }} isn't built in this prototype yet — showing summary of steps completed so far.</div>
+              </sc-if>
+              <div>Asset — BIN: {{ wizard.bin }}, Address: {{ wizard.serviceAddress }}, Manufacturer: {{ wizard.manufacturer }} · {{ wizard.model }}</div>
+              <div>Assembly — Type: {{ wizard.assemblyType }} · Size: {{ wizard.size }}</div>
+              <sc-if value="{{wStep6FullRP}}" hint-placeholder-val="{{false}}">
+                <div>Test readings — Meter: {{ wizard.meterStart }} – {{ wizard.meterEnd }}, Line pressure: {{ wizard.linePressure }} psi, Relief valve: {{ wizard.reliefValveLabel }}</div>
+                <div>Customer & sign-off — {{ wizard.customerName }} · {{ wizard.customerEmail }}, Sign-off: {{ wizard.signoffLabel }}</div>
+                <div>Photos — {{ wizard.photoSummary }}</div>
+              </sc-if>
+            </sc-if>
+          </div>
+
+          <!-- footer: steps 1–5 show Back/Next; step 6 shows Back / Save draft / Submit -->
+          <sc-if value="{{wStep6}}" hint-placeholder-val="{{false}}">
+            <button sc-camel-on-click="{{ wizardBack }}" style="{{ wizardBackStyle }}">Back</button>
+            <button sc-camel-on-click="{{ saveDraft }}">Save draft</button>
+            <button sc-camel-on-click="{{ submitTest }}">Submit</button>
+          </sc-if>
+          <sc-if value="{{showWizardFooterNav}}" hint-placeholder-val="{{false}}">
+            <button sc-camel-on-click="{{ wizardBack }}" disabled="{{ wizardBackDisabled }}" style="{{ wizardBackStyle }}">Back</button>
+            <button sc-camel-on-click="{{ wizardNext }}">Next</button>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- SUBMIT CONFIRMATION — success icon, "Test submitted / WP has been notified", back to dashboard -->
+      <sc-if value="{{showConfirm}}" hint-placeholder-val="{{false}}">
+        <div>[check icon] Test submitted — WP has been notified
+          <button sc-camel-on-click="{{ goDash }}">Back to dashboard</button>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+</sc-if>
+
+<!-- WP / SUPER-ADMIN-IMPERSONATING APP — 216px sidebar, 7 nav items -->
+<sc-if value="{{showWpApp}}" hint-placeholder-val="{{false}}">
+  <div style="display:flex;flex-direction:column;min-height:100vh">
+    <!-- impersonation banner: full-width, "Viewing as <WP>", Exit impersonation link -->
+    <sc-if value="{{isImpersonating}}" hint-placeholder-val="{{false}}">
+      <div>Viewing as {{ impersonatingWP }} <a sc-camel-on-click="{{ exitImpersonation }}">Exit impersonation</a></div>
+    </sc-if>
+    <div style="display:flex;flex:1;background:#F4F5F7">
+      <div style="width:216px;flex-shrink:0;background:#FFFFFF;border-right:1px solid #E4E7EC;padding:20px 14px">
+        <div>[logo] Backflow Assembly</div>
+        <div>Menu</div>
+        <div sc-camel-on-click="{{ goHome }}" style="{{ navHomeStyle }}">Home</div>
+        <div sc-camel-on-click="{{ goAssets }}" style="{{ navAssetsStyle }}">BFA Assets</div>
+        <div sc-camel-on-click="{{ goCertifiers }}" style="{{ navCertifiersStyle }}">Certifiers</div>
+        <div sc-camel-on-click="{{ goCustomers }}" style="{{ navCustomersStyle }}">Customers</div>
+        <div sc-camel-on-click="{{ goRepair }}" style="{{ navRepairStyle }}">Repair Companies</div>
+        <div sc-camel-on-click="{{ goTests }}" style="{{ navTestsStyle }}">Submitted Tests</div>
+        <div sc-camel-on-click="{{ goNotices }}" style="{{ navNoticesStyle }}">Notices & Email</div>
+      </div>
+
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+        <div>{{ wpDashCompanyName }} <a sc-camel-on-click="{{ switchRole }}">Switch role</a></div>
+
+        <div style="flex:1;padding:28px;overflow-y:auto">
+
+          <!-- HOME — 6 stat cards, incoming/delinquent lists, compliance trend + pass/fail charts -->
+          <sc-if value="{{wpHome}}" hint-placeholder-val="{{false}}">
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:14px">
+              <div>[icon] Certifiers {{ certifiersCount }}</div>
+              <div>[icon] BFA Assets {{ assetsCount }}</div>
+              <div>[icon] Submissions {{ submissionsCount2 }}</div>
+              <div>[icon] No-BIN Submissions {{ noBinCount }}</div>
+              <div>[icon] Customers {{ customersCount }}</div>
+              <div>[icon] Past-Due Tests {{ pastDueCount }}</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+              <div>Incoming reports
+                <sc-for list="{{incomingReports}}" as="r" hint-placeholder-count="5">
+                  <div>{{ r.certifierInitials }} {{ r.certifier }} — BIN {{ r.bin }} — {{ r.date }}</div>
+                </sc-for>
+              </div>
+              <div>Delinquent (past due)
+                <sc-for list="{{delinquentAssets}}" as="a" hint-placeholder-count="3">
+                  <div>BIN {{ a.bin }} · {{ a.customer }} — {{ a.daysOverdue }} days</div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+              <div>Compliance trend
+                <sc-for list="{{complianceBars}}" as="b" hint-placeholder-count="6">
+                  <div style="height:{{ b.height }}"></div><span>{{ b.label }}</span>
+                </sc-for>
+              </div>
+              <div>Pass / fail breakdown — Pass {{ passCount }} / Fail {{ failCount }}, two progress bars</div>
+            </div>
+          </sc-if>
+
+          <!-- BFA ASSETS — table + Add asset modal + asset detail (edit toggle, Reassign BIN
+               disabled with tooltip "Confirm with client before enabling") -->
+          <sc-if value="{{showAssetsTable}}" hint-placeholder-val="{{false}}">
+            <div>BFA Assets <button sc-camel-on-click="{{ openAddAssetModal }}">+ Add asset</button></div>
+            <table>
+              <thead><tr><th>BIN</th><th>Type</th><th>Service address</th><th>Current customer</th><th>Annual test date</th><th>Status</th></tr></thead>
+              <tbody>
+                <sc-for list="{{assetsWithBadge}}" as="a" hint-placeholder-count="10">
+                  <tr sc-camel-on-click="{{ a.view }}">
+                    <td>{{ a.bin }}</td><td>{{ a.type }}</td><td>{{ a.serviceAddress }}</td>
+                    <td>{{ a.customer }}</td><td>{{ a.annualTestDate }}</td><td><span style="{{ a.badgeStyle }}">{{ a.status }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </sc-if>
+          <sc-if value="{{showAssetDetail}}" hint-placeholder-val="{{false}}">
+            <a sc-camel-on-click="{{ backToAssets }}">← Back to assets</a>
+            <div>BIN {{ selectedAssetView.bin }} <span style="{{ selectedAssetView.badgeStyle }}">{{ selectedAssetView.status }}</span>
+              <sc-if value="{{assetEditing}}" hint-placeholder-val="{{false}}"><button sc-camel-on-click="{{ saveAssetEdit }}">Save</button></sc-if>
+              <sc-if value="{{assetNotEditing}}" hint-placeholder-val="{{true}}"><button sc-camel-on-click="{{ toggleAssetEdit }}">Edit</button></sc-if>
+              <button title="Confirm with client before enabling." disabled>Reassign BIN</button>
+            </div>
+            <!-- edit mode: Service address / Current customer / Make / Model / Serial / Annual test date, all inputs -->
+            <!-- view mode: same fields, read-only tinted boxes -->
+          </sc-if>
+
+          <!-- CERTIFIERS — table with Block/Unblock action -->
+          <sc-if value="{{wpCertifiers}}" hint-placeholder-val="{{false}}">
+            <div>Certifiers</div>
+            <table>
+              <thead><tr><th>Name</th><th>ID</th><th>Status</th><th>Expiration date</th><th></th></tr></thead>
+              <tbody>
+                <sc-for list="{{certifiersWithActions}}" as="c" hint-placeholder-count="6">
+                  <tr><td>{{ c.name }}</td><td>{{ c.id }}</td><td><span style="{{ c.badgeStyle }}">{{ c.status }}</span></td>
+                    <td>{{ c.expiration }}</td><td><button sc-camel-on-click="{{ c.toggle }}">{{ c.toggleLabel }}</button></td></tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </sc-if>
+
+          <!-- CUSTOMERS — table (AG badge for agricultural rate) + Add customer modal + detail
+               with edit toggle and an "Assigned BFA asset" section -->
+          <sc-if value="{{showCustomersTable}}" hint-placeholder-val="{{false}}">
+            <div>Customers <button sc-camel-on-click="{{ openAddCustomerModal }}">+ Add customer</button></div>
+            <table>
+              <thead><tr><th>Name</th><th>Account #</th><th>Address</th><th>Rate category</th><th>AG renewal date</th><th>Status</th></tr></thead>
+              <tbody>
+                <sc-for list="{{customersWithBadge}}" as="c" hint-placeholder-count="8">
+                  <tr sc-camel-on-click="{{ c.view }}">
+                    <td>{{ c.name }}</td><td>{{ c.accountNumber }}</td><td>{{ c.address }}</td>
+                    <td><sc-if value="{{c.isAg}}" hint-placeholder-val="{{false}}"><span>AG</span></sc-if><sc-if value="{{c.isNotAg}}" hint-placeholder-val="{{true}}"><span>Standard</span></sc-if></td>
+                    <td>{{ c.agRenewalDate }}</td><td><span style="{{ c.statusBadgeStyle }}">{{ c.status }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </sc-if>
+          <sc-if value="{{showCustomerDetail}}" hint-placeholder-val="{{false}}">
+            <a sc-camel-on-click="{{ backToCustomers }}">← Back to customers</a>
+            <div>{{ selectedCustomerView.name }} <span style="{{ selectedCustomerView.statusBadgeStyle }}">{{ selectedCustomerView.status }}</span></div>
+            <div>Assigned BFA asset
+              <sc-if value="{{hasAssignedAssets}}" hint-placeholder-val="{{false}}">
+                <sc-for list="{{selectedCustomerView.assignedAssets}}" as="a" hint-placeholder-count="1">
+                  <div>BIN {{ a.bin }} · {{ a.type }} <span style="{{ a.badgeStyle }}">{{ a.status }}</span></div>
+                </sc-for>
+              </sc-if>
+              <sc-if value="{{noAssignedAssets}}" hint-placeholder-val="{{true}}"><div>No BFA asset assigned</div></sc-if>
+            </div>
+          </sc-if>
+
+          <!-- REPAIR COMPANIES — table + Add repair company modal -->
+          <sc-if value="{{wpRepair}}" hint-placeholder-val="{{false}}">
+            <div>Repair companies <button sc-camel-on-click="{{ openAddRepairModal }}">+ Add repair company</button></div>
+            <table>
+              <thead><tr><th>Company name</th><th>Phone</th><th>Status</th></tr></thead>
+              <tbody>
+                <sc-for list="{{repairWithBadge}}" as="r" hint-placeholder-count="5">
+                  <tr><td>{{ r.name }}</td><td>{{ r.phone }}</td><td><span style="{{ r.badgeStyle }}">{{ r.status }}</span></td></tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </sc-if>
+
+          <!-- SUBMITTED TESTS — cross-certifier table + document-style detail with inline edit -->
+          <sc-if value="{{showTestsTable}}" hint-placeholder-val="{{false}}">
+            <div>Submitted tests</div>
+            <table>
+              <thead><tr><th>BIN</th><th>Certifier</th><th>Date</th><th>Result</th></tr></thead>
+              <tbody>
+                <sc-for list="{{wpTestsWithBadge}}" as="t" hint-placeholder-count="10">
+                  <tr sc-camel-on-click="{{ t.view }}"><td>{{ t.bin }}</td><td>{{ t.certifier }}</td><td>{{ t.date }}</td><td><span style="{{ t.badgeStyle }}">{{ t.result }}</span></td></tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </sc-if>
+          <sc-if value="{{showTestDetail}}" hint-placeholder-val="{{false}}">
+            <a sc-camel-on-click="{{ backToTests }}">← Back to submitted tests</a>
+            <div>BIN {{ selectedTestView.bin }} — {{ selectedTestView.certifier }} · {{ selectedTestView.date }} <span style="{{ selectedTestView.badgeStyle }}">{{ selectedTestView.result }}</span>
+              <sc-if value="{{testEditing}}" hint-placeholder-val="{{false}}"><button sc-camel-on-click="{{ saveTestEdit }}">Save</button></sc-if>
+              <sc-if value="{{testNotEditing}}" hint-placeholder-val="{{true}}"><button sc-camel-on-click="{{ toggleTestEdit }}">Edit</button></sc-if>
+            </div>
+            <!-- edit mode: BIN, Assembly type select, Customer, Service address, Meter start/end,
+                 Line pressure, Relief valve, Result select — every field of the wizard result, editable -->
+            <!-- view mode: same fields read-only, plus photo slots -->
+          </sc-if>
+
+          <!-- NOTICES & EMAIL — two tabs: templates editor, general-info broadcast composer -->
+          <sc-if value="{{wpNotices}}" hint-placeholder-val="{{false}}">
+            <div sc-camel-on-click="{{ goTabTemplates }}" style="{{ tabTemplatesStyle }}">Reminder & late notice templates</div>
+            <div sc-camel-on-click="{{ goTabBroadcast }}" style="{{ tabBroadcastStyle }}">General info broadcast</div>
+
+            <sc-if value="{{noticesTabTemplates}}" hint-placeholder-val="{{true}}">
+              <!-- left: list of 4 template types (Reminder / Late 1 / Late 2 / Final). right: selected
+                   template — view mode shows rendered content or "No template set"; edit mode shows
+                   a variable-insert token row, bold/italic/underline toolbar, contenteditable body -->
+              <sc-for list="{{templateList}}" as="t" hint-placeholder-count="4"><div sc-camel-on-click="{{ t.select }}" style="{{ t.style }}">{{ t.label }}</div></sc-for>
+              <div>{{ selectedTemplateLabel }}
+                <sc-if value="{{templateNotEditing}}" hint-placeholder-val="{{true}}"><button sc-camel-on-click="{{ startTemplateEdit }}">Edit</button></sc-if>
+                <sc-if value="{{templateEditing}}" hint-placeholder-val="{{false}}">
+                  <button sc-camel-on-click="{{ cancelTemplateEdit }}">Cancel</button>
+                  <button sc-camel-on-click="{{ saveTemplateEdit }}">Save</button>
+                </sc-if>
+                <sc-for list="{{noticeTokens}}" as="tok" hint-placeholder-count="5"><span sc-camel-on-click="{{ tok.insert }}">{{ tok.label }}</span></sc-for>
+                <div id="template-editor-current" sc-camel-content-editable="true" sc-camel-on-input="{{ onTemplateDraftInput }}"></div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{noticesTabBroadcast}}" hint-placeholder-val="{{false}}">
+              <div>Compose broadcast
+                <input value="{{ broadcast.subject }}" sc-camel-on-change="{{ onBroadcastSubject }}" placeholder="Subject">
+                <textarea value="{{ broadcast.body }}" sc-camel-on-change="{{ onBroadcastBody }}" placeholder="Message body"></textarea>
+                <select value="{{ broadcast.recipients }}" sc-camel-on-change="{{ onBroadcastRecipients }}">
+                  <option value="All customers">All customers</option>
+                  <option value="Agricultural-rate customers">Agricultural-rate customers</option>
+                </select>
+                <button sc-camel-on-click="{{ sendBroadcast }}">Send</button>
+              </div>
+              <!-- sent-broadcasts list + a detail view for one sent broadcast -->
+            </sc-if>
+          </sc-if>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- shared modal shell for Add asset / Add customer / Add repair company -->
+  <sc-if value="{{activeModal}}" hint-placeholder-val="{{false}}">
+    <div style="position:fixed;inset:0;background:rgba(16,24,40,0.45)" sc-camel-on-click="{{ closeModal }}">
+      <div sc-camel-on-click="{{ stopProp }}">
+        <sc-if value="{{isAddAssetModal}}" hint-placeholder-val="{{false}}">
+          <!-- BIN, Type select, Service address, Make/Model/Serial, Annual test date, Customer select -->
+        </sc-if>
+        <sc-if value="{{isAddCustomerModal}}" hint-placeholder-val="{{false}}">
+          <!-- Name, Address, Email, Rate category select, AG renewal date (only when Agricultural) -->
+        </sc-if>
+        <sc-if value="{{isAddRepairModal}}" hint-placeholder-val="{{false}}">
+          <!-- Company name, Phone -->
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+</sc-if>
+
+</div>
+</x-dc>
+
+<!-- ============================ COMPONENT LOGIC ============================ -->
+<!--
+  State shape and render-prop mapping (condensed — the original is a full
+  React-ish class with a `state` object and a `renderVals()` method returning
+  every bound value/handler used by the template above). Kept for reference
+  on what data each screen needs, not as code to run.
+
+  Route state machine (`state.route`):
+    role-select → super-admin | wp-dash | certifier-dash (+ certifier-wizard,
+    certifier-detail, certifier-profile, certifier-confirm) | invite-first-login
+
+  Key state slices:
+    - drafts: [{ id, bin, type, step, savedAt }]
+    - submissions: [{ id, bin, type, date, result, customerName, serviceAddress,
+        meterStart, meterEnd, linePressure, reliefValve, photoCount }]
+    - wizard: { draftId, step, bin, binSearched, binFound, serviceAddress,
+        manufacturer, model, serial, assemblyType, size, meterStart, meterEnd,
+        linePressure, reliefValve, reliefValveValue, customerName, customerEmail,
+        signoffMethod, certifyChecked, photo1, photo2, nonRPNotice }
+    - waterPurveyors: [{ name, contact, certifiersCount, assetsCount, status }]
+    - assets: [{ bin, type, serviceAddress, customer, annualTestDate, status,
+        manufacturer, model, serial }]
+    - certifiers: [{ id, name, status, expiration }]
+    - customers: [{ name, accountNumber, address, email, rateCategory, status,
+        agRenewalDate }]
+    - repairCompanies: [{ name, phone, status }]
+    - wpTests: [{ id, bin, type, certifier, date, result, customerName,
+        serviceAddress, meterStart, meterEnd, linePressure, reliefValve,
+        signoff, photoCount }]
+    - notices: { reminder, late1, late2, final } — template strings with
+        {customer_name} / {bin} / {due_date} / {wp_name} / {service_address}
+        placeholders
+    - sentBroadcasts: [{ id, subject, recipients, date, body }]
+
+  Wizard step map (used by wStep1..wStep6 / stepDots):
+    1 Find asset (BIN lookup) → 2 Assembly type & details → 3 Test readings
+    → 4 Customer & sign-off → 5 Photo upload → 6 Review & submit
+    Non-RP types short-circuit from step 2 straight to step 6 with a
+    "not built yet" notice in this prototype — the real wizard's per-type
+    test blocks (see Wizard Field Reference doc) replace that shortcut.
+-->

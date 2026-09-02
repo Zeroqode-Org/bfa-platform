@@ -117,18 +117,19 @@ Create the project under the company account. Region: US West (North California)
 
 **On creation:** leave **Enable Data API** checked (required for the Supabase client libraries). **Uncheck "Automatically expose new tables"** (works against the manual, explicit RLS approach below). **Check "Enable automatic RLS"** — auto-enables RLS on every new table as a safety net, reinforcing the "RLS from the first migration" rule even if a migration file forgets the line.
 
-```bash
-supabase login
-supabase init
-supabase link --project-ref <your-project-ref>   # Project Settings → General → Project ID
-supabase migration new init_schema
-```
-
-Write `CREATE TABLE` statements for every table in the [PRD's data model](/docs/prd#5-data-model-supabase--postgres): `bfa_assets`, `customers`, `certifiers`, `water_purveyors`, `wp_certifier_authorizations`, `repair_companies`, `test_submissions`, `users`/`profiles`, `invitations`. **Include `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;` for every single table in this same file** — RLS from the start, even before the actual policies exist (policies land in later migrations as each feature is built).
+**Migrations are run with `drizzle-kit`, not the Supabase CLI.** The Supabase CLI is still installed for `supabase login` / `supabase gen types` and dashboard-adjacent tasks, but schema changes go through Drizzle. Copy the Postgres connection strings from **Project Settings → Database** into `apps/web/.env`:
 
 ```bash
-supabase db push
+DATABASE_URL=postgresql://...   # pooled connection (port 6543) — app runtime + drizzle-kit (read by packages/db/drizzle.config.ts)
+DIRECT_URL=postgresql://...     # direct connection (port 5432) — non-pooled, for tools that need a plain session
 ```
+
+Then define the initial schema and generate the migration:
+
+1. Declare every table in `packages/db/src/schema/*.ts` (one file per table, enums in `enums.ts`) — see the [PRD's data model](/docs/prd#5-data-model-supabase--postgres): `bfa_assets`, `customers`, `certifiers`, `water_purveyors`, `wp_certifier_authorizations`, `repair_companies`, `test_submissions`, `profiles`, `invitations`, and the rest of the thirteen.
+2. `npm run db:generate` — `drizzle-kit generate` writes SQL to `packages/db/src/migrations/`.
+3. **Hand-edit the generated migration file:** append `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;` for every single table — RLS from the start, before any policy exists. Drizzle's schema DSL does not emit these, so they are added to the SQL by hand (RLS policies likewise land in later hand-written migration files as each feature is built).
+4. `npm run db:migrate` — `drizzle-kit migrate` applies pending migrations against `DATABASE_URL`. (`npm run db:push` syncs the schema without a migration file — dev-only, never on shared branches.)
 
 Turn on email/password auth: Authentication → Sign In/Providers → confirm Email is enabled. Leave Site URL as-is until Section 5 is done.
 
