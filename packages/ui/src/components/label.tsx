@@ -1,19 +1,19 @@
-"use client";
-
 import { cn } from "@bfa-platform/ui/lib/utils";
-import * as React from "react";
+import type * as React from "react";
 
 function Label({ className, ...props }: React.ComponentProps<"label">) {
-  return (
-    <label
-      data-slot="label"
-      className={cn(
-        "flex items-center gap-2 text-xs leading-none select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-        className,
-      )}
-      {...props}
-    />
-  );
+	return (
+		// biome-ignore lint/a11y/noLabelWithoutControl: generic primitive; callers pass htmlFor or wrap the control
+		<label
+			data-slot="label"
+			className={cn(
+				"select-none font-medium text-muted-foreground text-xs",
+				"peer-disabled:opacity-60",
+				className,
+			)}
+			{...props}
+		/>
+	);
 }
 
 export { Label };
