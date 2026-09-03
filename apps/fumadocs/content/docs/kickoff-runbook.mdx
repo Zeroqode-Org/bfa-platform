@@ -109,6 +109,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
+`packages/env` validates these now (`web.ts` for the two `NEXT_PUBLIC_*` client vars, `server.ts` for `SUPABASE_SERVICE_ROLE_KEY`). Because `server.ts` is also loaded by drizzle tooling, `SUPABASE_SERVICE_ROLE_KEY` must additionally be present in `apps/web/.env` (not only `.env.local`) — or export `SKIP_ENV_VALIDATION=1` for schema-only runs. Values come from **Project Settings → API** (Section 4).
+
 The one push straight to `main` for the initial scaffold commit is fine — everything after goes through a branch + PR.
 
 ## 4. Supabase project
@@ -133,9 +135,29 @@ Then define the initial schema and generate the migration:
 
 Turn on email/password auth: Authentication → Sign In/Providers → confirm Email is enabled. Leave Site URL as-is until Section 5 is done.
 
+Then provision the private Storage buckets and (optionally) a throwaway Super-Admin for local checks — idempotent, safe to re-run:
+
+```bash
+cd apps/web
+npm run supabase:setup                    # buckets: test-photos, result-documents (private)
+npm run supabase:setup -- --with-test-user # + a confirmed super_admin auth user + profiles row
+```
+
+## Auth & Supabase clients
+
+Three server-side entry points, all reading URL + anon key from `@bfa-platform/env/web`:
+
+- `apps/web/src/lib/supabase/client.ts` — browser client (`createBrowserClient`), anon key, RLS-enforced.
+- `apps/web/src/lib/supabase/server.ts` — Server Components / Route Handlers / Server Actions, session via the `next/headers` cookie store.
+- `apps/web/src/lib/supabase/admin.ts` — `createAdminClient()`, service-role, **bypasses RLS**, `server-only`. Setup script now; invite-redemption later.
+
+The tRPC layer builds its own cookie-backed client in `packages/api/src/context.ts` from the raw request. `createContext` calls `supabase.auth.getUser()` (re-validates the JWT every request). `protectedProcedure` (in `packages/api/src/index.ts`) runs `resolveCaller` — a Drizzle lookup of the caller's `profiles` row keyed on `auth.uid()` — attaches `ctx.caller = { profileId, globalRole, waterPurveyorId }`, emits a `caller_resolved` structured JSON log, and throws typed `TRPCError` (`UNAUTHORIZED` with no session, `FORBIDDEN` with no profile / a blocked account). The `whoami` query returns `ctx.caller` and is the client's role bootstrap. Never accept `water_purveyor_id` from the client as an authorization input — it comes from `ctx.caller`.
+
 ## 5. Vercel project
 
 Import the repo, root directory pointed at `apps/web`, add the three env vars with real values, deploy. Once live, set the Supabase Site URL to the real `https://your-project.vercel.app` address.
+
+The build and any container image must supply `DATABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` — all four are validated at startup. A build with none of them still passes only if `SKIP_ENV_VALIDATION=1` is set.
 
 **Portability guardrails** — avoid these Vercel-specific features (per the client's FedRAMP-readiness discussion; full list also lives in the `bfa-requirements` skill):
 
