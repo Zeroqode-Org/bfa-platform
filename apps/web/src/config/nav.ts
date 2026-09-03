@@ -20,6 +20,9 @@ export type NavItem = {
 	icon: LucideIcon;
 };
 
+/** The three role shells, each with its own nav set. */
+export type NavVariant = "certifier" | "wp" | "admin";
+
 /**
  * Certifier dashboard navigation. Build-plan §"Certifier dashboard" lists four
  * entries — Wizard, Drafts, Submitted PDFs, Log Out. "Log Out" is an action in
@@ -48,3 +51,10 @@ export const wpNav: NavItem[] = [
 export const adminNav: NavItem[] = [
 	{ href: "/admin", label: "Water Purveyors", icon: Building2 },
 ];
+
+/** Nav set per role shell — read by both `SidebarNav` and `BottomTabBar`. */
+export const navByVariant: Record<NavVariant, NavItem[]> = {
+	certifier: certifierNav,
+	wp: wpNav,
+	admin: adminNav,
+};

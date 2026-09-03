@@ -60,7 +60,7 @@ export function CertifierShell({ children }: { children: React.ReactNode }) {
 			</div>
 
 			{/* Mobile bottom tab bar */}
-			<BottomTabBar className="min-[780px]:hidden" />
+			<BottomTabBar variant="certifier" className="min-[780px]:hidden" />
 		</div>
 	);
 }

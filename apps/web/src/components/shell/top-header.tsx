@@ -8,7 +8,7 @@ export function TopHeader({
 	action?: React.ReactNode;
 }) {
 	return (
-		<header className="sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between border-border border-b bg-card px-7">
+		<header className="sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between border-border border-b bg-card px-4 min-[780px]:px-7">
 			<div className="flex min-w-0 flex-col">
 				{kicker ? (
 					<span className="font-semibold text-[10px] text-muted-foreground uppercase tracking-[0.08em]">
