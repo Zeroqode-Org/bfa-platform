@@ -1,18 +1,54 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
+
 /**
- * Stub for the Super-Admin impersonation state. The real implementation (Week 4)
- * reads a signed, httpOnly cookie set by the `startImpersonation` procedure and
- * resolves the effective identity through the shared tRPC context helper.
+ * Super-Admin impersonation state.
  *
- * For now this always reports "not impersonating"; flip the return value to test
- * the banner. Keeping it as a hook means shells can consume it today without
- * changing when the real source lands.
+ * Week 1 is UI only: this is a module-level demo store, so clicking
+ * "Impersonate" in the water-purveyor list shows the banner and "Exit
+ * impersonation" clears it, with no auth or navigation behind it.
+ *
+ * Week 4 replaces the source — a signed, httpOnly cookie set by the
+ * `startImpersonation` procedure, resolved through the shared tRPC context
+ * helper. `ImpersonationState` and `useImpersonation()` keep their shape, so
+ * no consumer changes.
  */
 export type ImpersonationState =
 	| { isImpersonating: false }
 	| { isImpersonating: true; companyName: string };
 
+const NOT_IMPERSONATING: ImpersonationState = { isImpersonating: false };
+
+let state: ImpersonationState = NOT_IMPERSONATING;
+const listeners = new Set<() => void>();
+
+function emit() {
+	for (const listener of listeners) listener();
+}
+
+/** Demo-only: enter the impersonated state for `companyName`. */
+export function impersonate(companyName: string) {
+	state = { isImpersonating: true, companyName };
+	emit();
+}
+
+/** Demo-only: leave the impersonated state. The banner's only exit. */
+export function exitImpersonation() {
+	if (!state.isImpersonating) return;
+	state = NOT_IMPERSONATING;
+	emit();
+}
+
+function subscribe(onChange: () => void) {
+	listeners.add(onChange);
+	return () => listeners.delete(onChange);
+}
+
 export function useImpersonation(): ImpersonationState {
-	return { isImpersonating: false };
+	return useSyncExternalStore(
+		subscribe,
+		() => state,
+		() => NOT_IMPERSONATING,
+	);
 }

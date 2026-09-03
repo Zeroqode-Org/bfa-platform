@@ -4,13 +4,7 @@ import { cn } from "@bfa-platform/ui/lib/utils";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { adminNav, certifierNav, type NavItem, wpNav } from "@/config/nav";
-
-const NAV_BY_VARIANT: Record<"certifier" | "wp" | "admin", NavItem[]> = {
-	certifier: certifierNav,
-	wp: wpNav,
-	admin: adminNav,
-};
+import { type NavVariant, navByVariant } from "@/config/nav";
 
 function isActive(pathname: string, href: string) {
 	if (href === "/wp" || href === "/admin") return pathname === href;
@@ -22,12 +16,12 @@ export function SidebarNav({
 	footer,
 	className,
 }: {
-	variant: "certifier" | "wp" | "admin";
+	variant: NavVariant;
 	footer?: React.ReactNode;
 	className?: string;
 }) {
 	const pathname = usePathname();
-	const items = NAV_BY_VARIANT[variant];
+	const items = navByVariant[variant];
 
 	return (
 		<nav
