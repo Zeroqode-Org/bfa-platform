@@ -1,26 +1,28 @@
 {
-  "name": "@bfa-platform/api",
-  "type": "module",
-  "exports": {
-    ".": {
-      "default": "./src/index.ts"
-    },
-    "./*": {
-      "default": "./src/*.ts"
-    }
-  },
-  "scripts": {},
-  "dependencies": {
-    "@bfa-platform/db": "*",
-    "@bfa-platform/env": "*",
-    "@trpc/client": "^11.18.0",
-    "@trpc/server": "^11.18.0",
-    "dotenv": "^17.4.2",
-    "next": "^16.3.0",
-    "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@bfa-platform/config": "*",
-    "typescript": "^6.0.3"
-  }
+	"name": "@bfa-platform/api",
+	"type": "module",
+	"exports": {
+		".": {
+			"default": "./src/index.ts"
+		},
+		"./*": {
+			"default": "./src/*.ts"
+		}
+	},
+	"scripts": {},
+	"dependencies": {
+		"@bfa-platform/db": "*",
+		"@bfa-platform/env": "*",
+		"@supabase/ssr": "^0.12.5",
+		"@supabase/supabase-js": "^2.114.0",
+		"@trpc/client": "^11.18.0",
+		"@trpc/server": "^11.18.0",
+		"dotenv": "^17.4.2",
+		"next": "^16.3.0",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@bfa-platform/config": "*",
+		"typescript": "^6.0.3"
+	}
 }

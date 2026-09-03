@@ -396,19 +396,21 @@ Half the definitions of done in this plan say "seed two water purveyors" or "bui
 
 ### Auth, storage, and environment
 
-**Owner:** Daniil.
+**Owner:** Lina.
 **Week 1** · same budget as the schema — the two are one work item.
 **Prerequisite:** schema migration applied.
 **Blocks:** invitations and everything after.
 
-1. Supabase dashboard: Authentication → Providers → enable Email. Leave Site URL as the placeholder until the Vercel URL exists.
-2. Create two Storage buckets: `test-photos`, `result-documents`. Both private.
-3. `npm install @supabase/supabase-js @supabase/ssr` in `apps/web`.
-4. Extend `packages/env/src/web.ts` with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; extend `server.ts` with `SUPABASE_SERVICE_ROLE_KEY`. These currently validate nothing.
-5. Create `apps/web/src/lib/supabase/client.ts` (browser client) and `server.ts` (server client via `@supabase/ssr` cookie handling).
-6. Create the caller-resolution helper used by every protected procedure: reads `auth.uid()`, loads the `profiles` row, returns `{ profileId, globalRole, waterPurveyorId }`. Put it in `packages/api/src/context.ts` and make it the basis of the protected-procedure middleware.
+1. Supabase dashboard: Authentication → Providers → enable Email. Leave Site URL as the placeholder until the Vercel URL exists. — **manual, done**
+2. Create two Storage buckets: `test-photos`, `result-documents`. Both private. — **done**, provisioned by the idempotent `apps/web/scripts/supabase-setup.mjs` (run `npm run supabase:setup` from `apps/web`), not hand-created in the dashboard.
+3. `npm install @supabase/supabase-js @supabase/ssr` in `apps/web`. — **done** (also added to `packages/api`, which builds the tRPC-context client; `server-only` added to `apps/web` as a client-bundle guard).
+4. Extend `packages/env/src/web.ts` with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; extend `server.ts` with `SUPABASE_SERVICE_ROLE_KEY`. These currently validate nothing. — **done**. Note: `SUPABASE_SERVICE_ROLE_KEY` is now a required server var, so it must be present in `apps/web/.env` (the file drizzle tooling loads), not only `.env.local`; `SKIP_ENV_VALIDATION=1` bypasses for schema-only runs.
+5. Create `apps/web/src/lib/supabase/client.ts` (browser client) and `server.ts` (server client via `@supabase/ssr` cookie handling). — **done**, plus `admin.ts` (service-role client, used by the setup script now and invite-redemption later).
+6. Create the caller-resolution helper used by every protected procedure: reads `auth.uid()`, loads the `profiles` row, returns `{ profileId, globalRole, waterPurveyorId }`. Put it in `packages/api/src/context.ts` and make it the basis of the protected-procedure middleware. — **done**. `resolveCaller` reads `profiles` via the Drizzle service connection (not the anon Supabase client — `profiles` has no RLS policies until the onboarding item), throws typed `TRPCError` (`UNAUTHORIZED` / `FORBIDDEN`), and `protectedProcedure` (in `packages/api/src/index.ts`) attaches `ctx.caller` and emits a `caller_resolved` structured JSON log line. Exercised by the `whoami` procedure.
 
 **Done when:** a server component and a client component can each create a Supabase client without a runtime env error, and a protected tRPC procedure returns the caller's resolved role.
+
+**Deferred:** cross-navigation session-refresh `middleware.ts` is not in this item — `getUser()` already re-validates every request, so an expired token surfaces as `UNAUTHORIZED`. Add it alongside the login flow in *Invitations and onboarding*, and get portability sign-off first (Next middleware defaults to the Edge runtime, which this project forbids without sign-off; it must be pinned to the Node runtime).
 
 ### Super-admin
 
