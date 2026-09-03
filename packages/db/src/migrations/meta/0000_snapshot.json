@@ -1,1735 +1,1564 @@
 {
-  "id": "9d7edc72-a507-42e0-99ff-6d9c5112ff1a",
-  "prevId": "00000000-0000-0000-0000-000000000000",
-  "version": "7",
-  "dialect": "postgresql",
-  "tables": {
-    "public.bfa_assets": {
-      "name": "bfa_assets",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bin": {
-          "name": "bin",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "current_customer_id": {
-          "name": "current_customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "bfa_type": {
-          "name": "bfa_type",
-          "type": "bfa_type",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "make": {
-          "name": "make",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "model": {
-          "name": "model",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "serial_number": {
-          "name": "serial_number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "size": {
-          "name": "size",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "service_address": {
-          "name": "service_address",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "assembly_location": {
-          "name": "assembly_location",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "annual_test_date": {
-          "name": "annual_test_date",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "asset_status": {
-          "name": "asset_status",
-          "type": "asset_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "bfa_assets_water_purveyor_id_idx": {
-          "name": "bfa_assets_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "bfa_assets_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "bfa_assets_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "bfa_assets",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "bfa_assets_current_customer_id_customers_id_fk": {
-          "name": "bfa_assets_current_customer_id_customers_id_fk",
-          "tableFrom": "bfa_assets",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "current_customer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "bfa_assets_water_purveyor_id_bin_key": {
-          "name": "bfa_assets_water_purveyor_id_bin_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "water_purveyor_id",
-            "bin"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.certifiers": {
-      "name": "certifiers",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "profile_id": {
-          "name": "profile_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "company": {
-          "name": "company",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "id_number": {
-          "name": "id_number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "license_expiration_date": {
-          "name": "license_expiration_date",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "active_blocked",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "certifiers_profile_id_profiles_id_fk": {
-          "name": "certifiers_profile_id_profiles_id_fk",
-          "tableFrom": "certifiers",
-          "tableTo": "profiles",
-          "columnsFrom": [
-            "profile_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "certifiers_profile_id_unique": {
-          "name": "certifiers_profile_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "profile_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.customer_assignments": {
-      "name": "customer_assignments",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "bfa_asset_id": {
-          "name": "bfa_asset_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "start_date": {
-          "name": "start_date",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "end_date": {
-          "name": "end_date",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "customer_assignments_asset_end_date_idx": {
-          "name": "customer_assignments_asset_end_date_idx",
-          "columns": [
-            {
-              "expression": "bfa_asset_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "end_date",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "customer_assignments_bfa_asset_id_bfa_assets_id_fk": {
-          "name": "customer_assignments_bfa_asset_id_bfa_assets_id_fk",
-          "tableFrom": "customer_assignments",
-          "tableTo": "bfa_assets",
-          "columnsFrom": [
-            "bfa_asset_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_assignments_customer_id_customers_id_fk": {
-          "name": "customer_assignments_customer_id_customers_id_fk",
-          "tableFrom": "customer_assignments",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "customer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.customers": {
-      "name": "customers",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "account_number": {
-          "name": "account_number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "address": {
-          "name": "address",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "email": {
-          "name": "email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rate_category": {
-          "name": "rate_category",
-          "type": "rate_category",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'standard'"
-        },
-        "ag_renewal_date": {
-          "name": "ag_renewal_date",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "customer_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "customers_water_purveyor_id_idx": {
-          "name": "customers_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "customers_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "customers_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "customers",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.water_purveyors": {
-      "name": "water_purveyors",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "company_name": {
-          "name": "company_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "address": {
-          "name": "address",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pwsid": {
-          "name": "pwsid",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "subdomain": {
-          "name": "subdomain",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "active_blocked",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "water_purveyors_subdomain_unique": {
-          "name": "water_purveyors_subdomain_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "subdomain"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.profiles": {
-      "name": "profiles",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "full_name": {
-          "name": "full_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "global_role": {
-          "name": "global_role",
-          "type": "global_role",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "active_blocked",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "profiles_water_purveyor_id_idx": {
-          "name": "profiles_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "profiles_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "profiles_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "profiles",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.wp_certifier_authorizations": {
-      "name": "wp_certifier_authorizations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "certifier_id": {
-          "name": "certifier_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "authorization_status": {
-          "name": "authorization_status",
-          "type": "authorization_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "wp_certifier_authorizations_water_purveyor_id_idx": {
-          "name": "wp_certifier_authorizations_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "wp_certifier_authorizations_certifier_id_certifiers_id_fk": {
-          "name": "wp_certifier_authorizations_certifier_id_certifiers_id_fk",
-          "tableFrom": "wp_certifier_authorizations",
-          "tableTo": "certifiers",
-          "columnsFrom": [
-            "certifier_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wp_certifier_authorizations_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "wp_certifier_authorizations_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "wp_certifier_authorizations",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "wp_certifier_authorizations_certifier_id_water_purveyor_id_key": {
-          "name": "wp_certifier_authorizations_certifier_id_water_purveyor_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "certifier_id",
-            "water_purveyor_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.repair_companies": {
-      "name": "repair_companies",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "company_name": {
-          "name": "company_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "phone": {
-          "name": "phone",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "email": {
-          "name": "email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "repair_company_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "repair_companies_water_purveyor_id_idx": {
-          "name": "repair_companies_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "repair_companies_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "repair_companies_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "repair_companies",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.notice_templates": {
-      "name": "notice_templates",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "notice_type": {
-          "name": "notice_type",
-          "type": "notice_type",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "subject": {
-          "name": "subject",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "body": {
-          "name": "body",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_enabled": {
-          "name": "is_enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "notice_templates_water_purveyor_id_idx": {
-          "name": "notice_templates_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "notice_templates_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "notice_templates_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "notice_templates",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "notice_templates_water_purveyor_id_notice_type_key": {
-          "name": "notice_templates_water_purveyor_id_notice_type_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "water_purveyor_id",
-            "notice_type"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.wp_feature_flags": {
-      "name": "wp_feature_flags",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "feature": {
-          "name": "feature",
-          "type": "feature_flag",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "is_enabled": {
-          "name": "is_enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "updated_by_profile_id": {
-          "name": "updated_by_profile_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "wp_feature_flags_water_purveyor_id_idx": {
-          "name": "wp_feature_flags_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "wp_feature_flags_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "wp_feature_flags_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "wp_feature_flags",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wp_feature_flags_updated_by_profile_id_profiles_id_fk": {
-          "name": "wp_feature_flags_updated_by_profile_id_profiles_id_fk",
-          "tableFrom": "wp_feature_flags",
-          "tableTo": "profiles",
-          "columnsFrom": [
-            "updated_by_profile_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "wp_feature_flags_water_purveyor_id_feature_key": {
-          "name": "wp_feature_flags_water_purveyor_id_feature_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "water_purveyor_id",
-            "feature"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.test_submissions": {
-      "name": "test_submissions",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "bfa_asset_id": {
-          "name": "bfa_asset_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "certifier_id": {
-          "name": "certifier_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "submission_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'draft'"
-        },
-        "bfa_type": {
-          "name": "bfa_type",
-          "type": "bfa_type",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "wizard_data": {
-          "name": "wizard_data",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "submitted_bin_text": {
-          "name": "submitted_bin_text",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "test_date": {
-          "name": "test_date",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "test_result": {
-          "name": "test_result",
-          "type": "test_result",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "current_step": {
-          "name": "current_step",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "overridden_fields": {
-          "name": "overridden_fields",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "signature_method": {
-          "name": "signature_method",
-          "type": "signature_method",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "signature_data": {
-          "name": "signature_data",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "superseded_by_submission_id": {
-          "name": "superseded_by_submission_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "edited_by_wp_profile_id": {
-          "name": "edited_by_wp_profile_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "test_submissions_water_purveyor_id_idx": {
-          "name": "test_submissions_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "test_submissions_certifier_id_status_idx": {
-          "name": "test_submissions_certifier_id_status_idx",
-          "columns": [
-            {
-              "expression": "certifier_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "test_submissions_bfa_asset_id_bfa_assets_id_fk": {
-          "name": "test_submissions_bfa_asset_id_bfa_assets_id_fk",
-          "tableFrom": "test_submissions",
-          "tableTo": "bfa_assets",
-          "columnsFrom": [
-            "bfa_asset_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "test_submissions_certifier_id_certifiers_id_fk": {
-          "name": "test_submissions_certifier_id_certifiers_id_fk",
-          "tableFrom": "test_submissions",
-          "tableTo": "certifiers",
-          "columnsFrom": [
-            "certifier_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "test_submissions_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "test_submissions_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "test_submissions",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "test_submissions_superseded_by_submission_id_test_submissions_id_fk": {
-          "name": "test_submissions_superseded_by_submission_id_test_submissions_id_fk",
-          "tableFrom": "test_submissions",
-          "tableTo": "test_submissions",
-          "columnsFrom": [
-            "superseded_by_submission_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "test_submissions_edited_by_wp_profile_id_profiles_id_fk": {
-          "name": "test_submissions_edited_by_wp_profile_id_profiles_id_fk",
-          "tableFrom": "test_submissions",
-          "tableTo": "profiles",
-          "columnsFrom": [
-            "edited_by_wp_profile_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.invitations": {
-      "name": "invitations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "email": {
-          "name": "email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "role": {
-          "name": "role",
-          "type": "invitation_role",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "token": {
-          "name": "token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "invitation_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "associated_wp_id": {
-          "name": "associated_wp_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "invited_by_profile_id": {
-          "name": "invited_by_profile_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_redeemed": {
-          "name": "is_redeemed",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "invitations_associated_wp_id_water_purveyors_id_fk": {
-          "name": "invitations_associated_wp_id_water_purveyors_id_fk",
-          "tableFrom": "invitations",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "associated_wp_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "invitations_invited_by_profile_id_profiles_id_fk": {
-          "name": "invitations_invited_by_profile_id_profiles_id_fk",
-          "tableFrom": "invitations",
-          "tableTo": "profiles",
-          "columnsFrom": [
-            "invited_by_profile_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "invitations_token_unique": {
-          "name": "invitations_token_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "token"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.scheduled_jobs": {
-      "name": "scheduled_jobs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "job_type": {
-          "name": "job_type",
-          "type": "job_type",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bfa_asset_id": {
-          "name": "bfa_asset_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "water_purveyor_id": {
-          "name": "water_purveyor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "run_at": {
-          "name": "run_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "job_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "last_error": {
-          "name": "last_error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "scheduled_jobs_water_purveyor_id_idx": {
-          "name": "scheduled_jobs_water_purveyor_id_idx",
-          "columns": [
-            {
-              "expression": "water_purveyor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "scheduled_jobs_status_run_at_idx": {
-          "name": "scheduled_jobs_status_run_at_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "run_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "scheduled_jobs_bfa_asset_id_bfa_assets_id_fk": {
-          "name": "scheduled_jobs_bfa_asset_id_bfa_assets_id_fk",
-          "tableFrom": "scheduled_jobs",
-          "tableTo": "bfa_assets",
-          "columnsFrom": [
-            "bfa_asset_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "scheduled_jobs_customer_id_customers_id_fk": {
-          "name": "scheduled_jobs_customer_id_customers_id_fk",
-          "tableFrom": "scheduled_jobs",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "customer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "scheduled_jobs_water_purveyor_id_water_purveyors_id_fk": {
-          "name": "scheduled_jobs_water_purveyor_id_water_purveyors_id_fk",
-          "tableFrom": "scheduled_jobs",
-          "tableTo": "water_purveyors",
-          "columnsFrom": [
-            "water_purveyor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    }
-  },
-  "enums": {
-    "public.active_blocked": {
-      "name": "active_blocked",
-      "schema": "public",
-      "values": [
-        "active",
-        "blocked"
-      ]
-    },
-    "public.asset_status": {
-      "name": "asset_status",
-      "schema": "public",
-      "values": [
-        "active",
-        "due_soon",
-        "past_due"
-      ]
-    },
-    "public.authorization_status": {
-      "name": "authorization_status",
-      "schema": "public",
-      "values": [
-        "pending",
-        "active",
-        "revoked"
-      ]
-    },
-    "public.bfa_type": {
-      "name": "bfa_type",
-      "schema": "public",
-      "values": [
-        "RP",
-        "RPDA",
-        "RPDA-2",
-        "DC",
-        "DCDA",
-        "DCDA-2",
-        "PVB",
-        "SVB"
-      ]
-    },
-    "public.customer_status": {
-      "name": "customer_status",
-      "schema": "public",
-      "values": [
-        "active",
-        "suspended"
-      ]
-    },
-    "public.feature_flag": {
-      "name": "feature_flag",
-      "schema": "public",
-      "values": [
-        "automated_notices",
-        "ag_renewal_notice"
-      ]
-    },
-    "public.global_role": {
-      "name": "global_role",
-      "schema": "public",
-      "values": [
-        "super_admin",
-        "wp_admin",
-        "wp_sub_admin",
-        "wp_employee",
-        "certifier"
-      ]
-    },
-    "public.invitation_role": {
-      "name": "invitation_role",
-      "schema": "public",
-      "values": [
-        "wp_admin",
-        "wp_sub_admin",
-        "wp_employee",
-        "certifier"
-      ]
-    },
-    "public.invitation_status": {
-      "name": "invitation_status",
-      "schema": "public",
-      "values": [
-        "pending",
-        "redeemed",
-        "expired"
-      ]
-    },
-    "public.job_status": {
-      "name": "job_status",
-      "schema": "public",
-      "values": [
-        "pending",
-        "running",
-        "completed",
-        "failed",
-        "cancelled"
-      ]
-    },
-    "public.job_type": {
-      "name": "job_type",
-      "schema": "public",
-      "values": [
-        "reminder",
-        "late_notice_1",
-        "late_notice_2",
-        "final_notice",
-        "ag_renewal",
-        "fail_list_check"
-      ]
-    },
-    "public.notice_type": {
-      "name": "notice_type",
-      "schema": "public",
-      "values": [
-        "reminder",
-        "late_notice_1",
-        "late_notice_2",
-        "final_notice"
-      ]
-    },
-    "public.rate_category": {
-      "name": "rate_category",
-      "schema": "public",
-      "values": [
-        "standard",
-        "agricultural"
-      ]
-    },
-    "public.repair_company_status": {
-      "name": "repair_company_status",
-      "schema": "public",
-      "values": [
-        "active",
-        "inactive"
-      ]
-    },
-    "public.signature_method": {
-      "name": "signature_method",
-      "schema": "public",
-      "values": [
-        "signed",
-        "owner_absent"
-      ]
-    },
-    "public.submission_status": {
-      "name": "submission_status",
-      "schema": "public",
-      "values": [
-        "draft",
-        "submitted"
-      ]
-    },
-    "public.test_result": {
-      "name": "test_result",
-      "schema": "public",
-      "values": [
-        "pass",
-        "fail"
-      ]
-    }
-  },
-  "schemas": {},
-  "sequences": {},
-  "roles": {},
-  "policies": {},
-  "views": {},
-  "_meta": {
-    "columns": {},
-    "schemas": {},
-    "tables": {}
-  }
+	"id": "9d7edc72-a507-42e0-99ff-6d9c5112ff1a",
+	"prevId": "00000000-0000-0000-0000-000000000000",
+	"version": "7",
+	"dialect": "postgresql",
+	"tables": {
+		"public.bfa_assets": {
+			"name": "bfa_assets",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"bin": {
+					"name": "bin",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"current_customer_id": {
+					"name": "current_customer_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"bfa_type": {
+					"name": "bfa_type",
+					"type": "bfa_type",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"make": {
+					"name": "make",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"model": {
+					"name": "model",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"serial_number": {
+					"name": "serial_number",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"size": {
+					"name": "size",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"service_address": {
+					"name": "service_address",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"assembly_location": {
+					"name": "assembly_location",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"annual_test_date": {
+					"name": "annual_test_date",
+					"type": "date",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"asset_status": {
+					"name": "asset_status",
+					"type": "asset_status",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'active'"
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"bfa_assets_water_purveyor_id_idx": {
+					"name": "bfa_assets_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"bfa_assets_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "bfa_assets_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "bfa_assets",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"bfa_assets_current_customer_id_customers_id_fk": {
+					"name": "bfa_assets_current_customer_id_customers_id_fk",
+					"tableFrom": "bfa_assets",
+					"tableTo": "customers",
+					"columnsFrom": ["current_customer_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"bfa_assets_water_purveyor_id_bin_key": {
+					"name": "bfa_assets_water_purveyor_id_bin_key",
+					"nullsNotDistinct": false,
+					"columns": ["water_purveyor_id", "bin"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.certifiers": {
+			"name": "certifiers",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"profile_id": {
+					"name": "profile_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"company": {
+					"name": "company",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"id_number": {
+					"name": "id_number",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"license_expiration_date": {
+					"name": "license_expiration_date",
+					"type": "date",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"status": {
+					"name": "status",
+					"type": "active_blocked",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'active'"
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {
+				"certifiers_profile_id_profiles_id_fk": {
+					"name": "certifiers_profile_id_profiles_id_fk",
+					"tableFrom": "certifiers",
+					"tableTo": "profiles",
+					"columnsFrom": ["profile_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"certifiers_profile_id_unique": {
+					"name": "certifiers_profile_id_unique",
+					"nullsNotDistinct": false,
+					"columns": ["profile_id"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.customer_assignments": {
+			"name": "customer_assignments",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"bfa_asset_id": {
+					"name": "bfa_asset_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"customer_id": {
+					"name": "customer_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"start_date": {
+					"name": "start_date",
+					"type": "date",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"end_date": {
+					"name": "end_date",
+					"type": "date",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"customer_assignments_asset_end_date_idx": {
+					"name": "customer_assignments_asset_end_date_idx",
+					"columns": [
+						{
+							"expression": "bfa_asset_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						},
+						{
+							"expression": "end_date",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"customer_assignments_bfa_asset_id_bfa_assets_id_fk": {
+					"name": "customer_assignments_bfa_asset_id_bfa_assets_id_fk",
+					"tableFrom": "customer_assignments",
+					"tableTo": "bfa_assets",
+					"columnsFrom": ["bfa_asset_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"customer_assignments_customer_id_customers_id_fk": {
+					"name": "customer_assignments_customer_id_customers_id_fk",
+					"tableFrom": "customer_assignments",
+					"tableTo": "customers",
+					"columnsFrom": ["customer_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.customers": {
+			"name": "customers",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"account_number": {
+					"name": "account_number",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"name": {
+					"name": "name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"address": {
+					"name": "address",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"email": {
+					"name": "email",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"rate_category": {
+					"name": "rate_category",
+					"type": "rate_category",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'standard'"
+				},
+				"ag_renewal_date": {
+					"name": "ag_renewal_date",
+					"type": "date",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"status": {
+					"name": "status",
+					"type": "customer_status",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'active'"
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"customers_water_purveyor_id_idx": {
+					"name": "customers_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"customers_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "customers_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "customers",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.water_purveyors": {
+			"name": "water_purveyors",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"company_name": {
+					"name": "company_name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"address": {
+					"name": "address",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"pwsid": {
+					"name": "pwsid",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"subdomain": {
+					"name": "subdomain",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"status": {
+					"name": "status",
+					"type": "active_blocked",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'active'"
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"water_purveyors_subdomain_unique": {
+					"name": "water_purveyors_subdomain_unique",
+					"nullsNotDistinct": false,
+					"columns": ["subdomain"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.profiles": {
+			"name": "profiles",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"full_name": {
+					"name": "full_name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"global_role": {
+					"name": "global_role",
+					"type": "global_role",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"status": {
+					"name": "status",
+					"type": "active_blocked",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'active'"
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"profiles_water_purveyor_id_idx": {
+					"name": "profiles_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"profiles_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "profiles_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "profiles",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.wp_certifier_authorizations": {
+			"name": "wp_certifier_authorizations",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"certifier_id": {
+					"name": "certifier_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"authorization_status": {
+					"name": "authorization_status",
+					"type": "authorization_status",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'pending'"
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"wp_certifier_authorizations_water_purveyor_id_idx": {
+					"name": "wp_certifier_authorizations_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"wp_certifier_authorizations_certifier_id_certifiers_id_fk": {
+					"name": "wp_certifier_authorizations_certifier_id_certifiers_id_fk",
+					"tableFrom": "wp_certifier_authorizations",
+					"tableTo": "certifiers",
+					"columnsFrom": ["certifier_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"wp_certifier_authorizations_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "wp_certifier_authorizations_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "wp_certifier_authorizations",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"wp_certifier_authorizations_certifier_id_water_purveyor_id_key": {
+					"name": "wp_certifier_authorizations_certifier_id_water_purveyor_id_key",
+					"nullsNotDistinct": false,
+					"columns": ["certifier_id", "water_purveyor_id"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.repair_companies": {
+			"name": "repair_companies",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"company_name": {
+					"name": "company_name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"phone": {
+					"name": "phone",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"email": {
+					"name": "email",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"status": {
+					"name": "status",
+					"type": "repair_company_status",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'active'"
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"repair_companies_water_purveyor_id_idx": {
+					"name": "repair_companies_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"repair_companies_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "repair_companies_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "repair_companies",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.notice_templates": {
+			"name": "notice_templates",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"notice_type": {
+					"name": "notice_type",
+					"type": "notice_type",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"subject": {
+					"name": "subject",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"body": {
+					"name": "body",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"is_enabled": {
+					"name": "is_enabled",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": true
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"notice_templates_water_purveyor_id_idx": {
+					"name": "notice_templates_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"notice_templates_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "notice_templates_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "notice_templates",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"notice_templates_water_purveyor_id_notice_type_key": {
+					"name": "notice_templates_water_purveyor_id_notice_type_key",
+					"nullsNotDistinct": false,
+					"columns": ["water_purveyor_id", "notice_type"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.wp_feature_flags": {
+			"name": "wp_feature_flags",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"feature": {
+					"name": "feature",
+					"type": "feature_flag",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"is_enabled": {
+					"name": "is_enabled",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": false
+				},
+				"updated_by_profile_id": {
+					"name": "updated_by_profile_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"wp_feature_flags_water_purveyor_id_idx": {
+					"name": "wp_feature_flags_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"wp_feature_flags_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "wp_feature_flags_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "wp_feature_flags",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"wp_feature_flags_updated_by_profile_id_profiles_id_fk": {
+					"name": "wp_feature_flags_updated_by_profile_id_profiles_id_fk",
+					"tableFrom": "wp_feature_flags",
+					"tableTo": "profiles",
+					"columnsFrom": ["updated_by_profile_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"wp_feature_flags_water_purveyor_id_feature_key": {
+					"name": "wp_feature_flags_water_purveyor_id_feature_key",
+					"nullsNotDistinct": false,
+					"columns": ["water_purveyor_id", "feature"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.test_submissions": {
+			"name": "test_submissions",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"bfa_asset_id": {
+					"name": "bfa_asset_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"certifier_id": {
+					"name": "certifier_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"status": {
+					"name": "status",
+					"type": "submission_status",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'draft'"
+				},
+				"bfa_type": {
+					"name": "bfa_type",
+					"type": "bfa_type",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"wizard_data": {
+					"name": "wizard_data",
+					"type": "jsonb",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"submitted_bin_text": {
+					"name": "submitted_bin_text",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"test_date": {
+					"name": "test_date",
+					"type": "date",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"test_result": {
+					"name": "test_result",
+					"type": "test_result",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"current_step": {
+					"name": "current_step",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"overridden_fields": {
+					"name": "overridden_fields",
+					"type": "jsonb",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"signature_method": {
+					"name": "signature_method",
+					"type": "signature_method",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"signature_data": {
+					"name": "signature_data",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"superseded_by_submission_id": {
+					"name": "superseded_by_submission_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"edited_by_wp_profile_id": {
+					"name": "edited_by_wp_profile_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"test_submissions_water_purveyor_id_idx": {
+					"name": "test_submissions_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"test_submissions_certifier_id_status_idx": {
+					"name": "test_submissions_certifier_id_status_idx",
+					"columns": [
+						{
+							"expression": "certifier_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						},
+						{
+							"expression": "status",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"test_submissions_bfa_asset_id_bfa_assets_id_fk": {
+					"name": "test_submissions_bfa_asset_id_bfa_assets_id_fk",
+					"tableFrom": "test_submissions",
+					"tableTo": "bfa_assets",
+					"columnsFrom": ["bfa_asset_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"test_submissions_certifier_id_certifiers_id_fk": {
+					"name": "test_submissions_certifier_id_certifiers_id_fk",
+					"tableFrom": "test_submissions",
+					"tableTo": "certifiers",
+					"columnsFrom": ["certifier_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"test_submissions_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "test_submissions_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "test_submissions",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"test_submissions_superseded_by_submission_id_test_submissions_id_fk": {
+					"name": "test_submissions_superseded_by_submission_id_test_submissions_id_fk",
+					"tableFrom": "test_submissions",
+					"tableTo": "test_submissions",
+					"columnsFrom": ["superseded_by_submission_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"test_submissions_edited_by_wp_profile_id_profiles_id_fk": {
+					"name": "test_submissions_edited_by_wp_profile_id_profiles_id_fk",
+					"tableFrom": "test_submissions",
+					"tableTo": "profiles",
+					"columnsFrom": ["edited_by_wp_profile_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.invitations": {
+			"name": "invitations",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"email": {
+					"name": "email",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"role": {
+					"name": "role",
+					"type": "invitation_role",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"token": {
+					"name": "token",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"status": {
+					"name": "status",
+					"type": "invitation_status",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'pending'"
+				},
+				"expires_at": {
+					"name": "expires_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"associated_wp_id": {
+					"name": "associated_wp_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"invited_by_profile_id": {
+					"name": "invited_by_profile_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"is_redeemed": {
+					"name": "is_redeemed",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {
+				"invitations_associated_wp_id_water_purveyors_id_fk": {
+					"name": "invitations_associated_wp_id_water_purveyors_id_fk",
+					"tableFrom": "invitations",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["associated_wp_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"invitations_invited_by_profile_id_profiles_id_fk": {
+					"name": "invitations_invited_by_profile_id_profiles_id_fk",
+					"tableFrom": "invitations",
+					"tableTo": "profiles",
+					"columnsFrom": ["invited_by_profile_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"invitations_token_unique": {
+					"name": "invitations_token_unique",
+					"nullsNotDistinct": false,
+					"columns": ["token"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		},
+		"public.scheduled_jobs": {
+			"name": "scheduled_jobs",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"job_type": {
+					"name": "job_type",
+					"type": "job_type",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"bfa_asset_id": {
+					"name": "bfa_asset_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"customer_id": {
+					"name": "customer_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"water_purveyor_id": {
+					"name": "water_purveyor_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"run_at": {
+					"name": "run_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"status": {
+					"name": "status",
+					"type": "job_status",
+					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'pending'"
+				},
+				"attempts": {
+					"name": "attempts",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"default": 0
+				},
+				"last_error": {
+					"name": "last_error",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"completed_at": {
+					"name": "completed_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"scheduled_jobs_water_purveyor_id_idx": {
+					"name": "scheduled_jobs_water_purveyor_id_idx",
+					"columns": [
+						{
+							"expression": "water_purveyor_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"scheduled_jobs_status_run_at_idx": {
+					"name": "scheduled_jobs_status_run_at_idx",
+					"columns": [
+						{
+							"expression": "status",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						},
+						{
+							"expression": "run_at",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"scheduled_jobs_bfa_asset_id_bfa_assets_id_fk": {
+					"name": "scheduled_jobs_bfa_asset_id_bfa_assets_id_fk",
+					"tableFrom": "scheduled_jobs",
+					"tableTo": "bfa_assets",
+					"columnsFrom": ["bfa_asset_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"scheduled_jobs_customer_id_customers_id_fk": {
+					"name": "scheduled_jobs_customer_id_customers_id_fk",
+					"tableFrom": "scheduled_jobs",
+					"tableTo": "customers",
+					"columnsFrom": ["customer_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"scheduled_jobs_water_purveyor_id_water_purveyors_id_fk": {
+					"name": "scheduled_jobs_water_purveyor_id_water_purveyors_id_fk",
+					"tableFrom": "scheduled_jobs",
+					"tableTo": "water_purveyors",
+					"columnsFrom": ["water_purveyor_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": true
+		}
+	},
+	"enums": {
+		"public.active_blocked": {
+			"name": "active_blocked",
+			"schema": "public",
+			"values": ["active", "blocked"]
+		},
+		"public.asset_status": {
+			"name": "asset_status",
+			"schema": "public",
+			"values": ["active", "due_soon", "past_due"]
+		},
+		"public.authorization_status": {
+			"name": "authorization_status",
+			"schema": "public",
+			"values": ["pending", "active", "revoked"]
+		},
+		"public.bfa_type": {
+			"name": "bfa_type",
+			"schema": "public",
+			"values": ["RP", "RPDA", "RPDA-2", "DC", "DCDA", "DCDA-2", "PVB", "SVB"]
+		},
+		"public.customer_status": {
+			"name": "customer_status",
+			"schema": "public",
+			"values": ["active", "suspended"]
+		},
+		"public.feature_flag": {
+			"name": "feature_flag",
+			"schema": "public",
+			"values": ["automated_notices", "ag_renewal_notice"]
+		},
+		"public.global_role": {
+			"name": "global_role",
+			"schema": "public",
+			"values": [
+				"super_admin",
+				"wp_admin",
+				"wp_sub_admin",
+				"wp_employee",
+				"certifier"
+			]
+		},
+		"public.invitation_role": {
+			"name": "invitation_role",
+			"schema": "public",
+			"values": ["wp_admin", "wp_sub_admin", "wp_employee", "certifier"]
+		},
+		"public.invitation_status": {
+			"name": "invitation_status",
+			"schema": "public",
+			"values": ["pending", "redeemed", "expired"]
+		},
+		"public.job_status": {
+			"name": "job_status",
+			"schema": "public",
+			"values": ["pending", "running", "completed", "failed", "cancelled"]
+		},
+		"public.job_type": {
+			"name": "job_type",
+			"schema": "public",
+			"values": [
+				"reminder",
+				"late_notice_1",
+				"late_notice_2",
+				"final_notice",
+				"ag_renewal",
+				"fail_list_check"
+			]
+		},
+		"public.notice_type": {
+			"name": "notice_type",
+			"schema": "public",
+			"values": ["reminder", "late_notice_1", "late_notice_2", "final_notice"]
+		},
+		"public.rate_category": {
+			"name": "rate_category",
+			"schema": "public",
+			"values": ["standard", "agricultural"]
+		},
+		"public.repair_company_status": {
+			"name": "repair_company_status",
+			"schema": "public",
+			"values": ["active", "inactive"]
+		},
+		"public.signature_method": {
+			"name": "signature_method",
+			"schema": "public",
+			"values": ["signed", "owner_absent"]
+		},
+		"public.submission_status": {
+			"name": "submission_status",
+			"schema": "public",
+			"values": ["draft", "submitted"]
+		},
+		"public.test_result": {
+			"name": "test_result",
+			"schema": "public",
+			"values": ["pass", "fail"]
+		}
+	},
+	"schemas": {},
+	"sequences": {},
+	"roles": {},
+	"policies": {},
+	"views": {},
+	"_meta": {
+		"columns": {},
+		"schemas": {},
+		"tables": {}
+	}
 }

@@ -1,0 +1,25 @@
+{
+	"permissions": {
+		"allow": [
+			"Bash(git checkout *)",
+			"Bash(sed -E 's/=\\(.{6}\\).*/=\\\\1…/' apps/web/.env.local)",
+			"Bash(sed -E 's/\\(:[^:@]{4}\\)[^:@]*@/\\\\1…@/; s/\\(KEY=.{6}\\).*/\\\\1…/' apps/web/.env)",
+			"Bash(node -e \"const p=require\\('./packages/db/package.json'\\); console.log\\(JSON.stringify\\(p.exports,null,2\\)\\)\")",
+			"Bash(npm install *)",
+			"Bash(npx biome *)",
+			"Bash(git stash *)",
+			"Bash(node -e \"const s=require\\('@supabase/ssr'\\); console.log\\('ssr exports:', ['createServerClient','createBrowserClient','parseCookieHeader','serializeCookieHeader'].map\\(k=>k+':'+ \\(typeof s[k]\\)\\)\\); const j=require\\('@supabase/supabase-js'\\); console.log\\('supabase-js createClient:', typeof j.createClient\\); console.log\\('ssr version:', require\\('@supabase/ssr/package.json'\\).version, '| supabase-js:', require\\('@supabase/supabase-js/package.json'\\).version\\)\")",
+			"Bash(DATABASE_URL=x SKIP_ENV_VALIDATION= node --input-type=module -e \"import\\('./src/server.ts'\\).then\\(m=>console.log\\('loaded ok:',Object.keys\\(m.env\\)\\)\\).catch\\(e=>console.log\\('THREW:', String\\(e\\).split\\('\\\\n'\\)[0]\\)\\)\")",
+			"Bash(DATABASE_URL=x SUPABASE_SERVICE_ROLE_KEY=y node --input-type=module -e \"import\\('./src/server.ts'\\).then\\(m=>console.log\\('loaded ok, keys:',Object.keys\\(m.env\\).join\\(','\\)\\)\\).catch\\(e=>console.log\\('THREW:', String\\(e\\).split\\('\\\\n'\\)[0]\\)\\)\")",
+			"Bash(node --input-type=module -e \"import\\('./src/web.ts'\\).then\\(m=>console.log\\('loaded:',Object.keys\\(m.env\\)\\)\\).catch\\(e=>console.log\\('THREW:',String\\(e\\).split\\('\\\\n'\\)[0]\\)\\)\")",
+			"Bash(NEXT_PUBLIC_SUPABASE_URL=https://x.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=k node --input-type=module -e \"import\\('./src/web.ts'\\).then\\(m=>console.log\\('loaded ok:',JSON.stringify\\(m.env\\)\\)\\).catch\\(e=>console.log\\('THREW:',String\\(e\\).split\\('\\\\n'\\)[0]\\)\\)\")",
+			"Bash(SKIP_ENV_VALIDATION=1 NEXT_PUBLIC_SUPABASE_URL=https://rzmskdfnmvantjkdxxie.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder SUPABASE_SERVICE_ROLE_KEY=placeholder npx next build)",
+			"Bash(node --env-file=.env.local -e \"const {createClient}=require\\('@supabase/supabase-js'\\); const s=createClient\\(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY\\); s.storage.listBuckets\\(\\).then\\(\\({data,error}\\)=>{ if\\(error\\){console.error\\(error\\);process.exit\\(1\\)} console.table\\(data.map\\(b=>\\({name:b.name, public:b.public}\\)\\)\\); }\\)\")",
+			"Bash(node -e \"console.log\\(require.resolve\\('pg'\\)\\)\")",
+			"Bash(node --env-file=.env.local /private/tmp/claude-501/-Users-elinaagovkina-Desktop-ZQ-Projects-bfa-platform/a0481a9f-0265-4678-b859-6f361f4a30df/scratchpad/whoami-check.mjs)",
+			"Bash(echo \"exit: $?\")",
+			"Bash(PATH=/usr/bin:/bin sh -c 'husky || true; echo \"exit: $?\"')",
+			"Bash(git config *)"
+		]
+	}
+}
