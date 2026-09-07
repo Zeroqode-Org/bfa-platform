@@ -1,6 +1,8 @@
 import { protectedProcedure, publicProcedure, router } from "../index";
+import { superAdminRouter } from "./super-admin";
 
 export const appRouter = router({
+	superAdmin: superAdminRouter,
 	healthCheck: publicProcedure.query(() => {
 		return "OK";
 	}),
