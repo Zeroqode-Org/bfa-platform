@@ -71,8 +71,17 @@ export function WaterPurveyorsTable() {
 						? `${row.companyName} blocked`
 						: `${row.companyName} unblocked`,
 				);
-				queryClient.invalidateQueries(
-					trpc.superAdmin.listWaterPurveyors.queryFilter(),
+				// The mutation already returns the updated row, so patch the cached
+				// list rather than refetching it: one round trip instead of two, and
+				// the value still comes from the server, so the table never shows a
+				// status the database does not have. Only `status` changes here —
+				// the counts are unaffected by blocking.
+				queryClient.setQueryData(
+					trpc.superAdmin.listWaterPurveyors.queryKey(),
+					(rows) =>
+						rows?.map((wp) =>
+							wp.id === row.id ? { ...wp, status: row.status } : wp,
+						),
 				);
 			},
 			// The query cache toasts its own errors; mutations do not.
