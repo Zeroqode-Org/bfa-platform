@@ -1,13 +1,15 @@
 import { db } from "@bfa-platform/db";
 import {
 	bfaAssets,
+	profiles,
 	testSubmissions,
 	waterPurveyors,
 	wpCertifierAuthorizations,
 } from "@bfa-platform/db/schema";
-import { asc, count, eq } from "drizzle-orm";
+import { and, asc, count, eq } from "drizzle-orm";
+import { z } from "zod";
 
-import { router, superAdminProcedure } from "../index";
+import { router, superAdminProcedure, TRPCError } from "../index";
 
 /** Rows of `{ wpId, value }` into a lookup, so the merge below stays O(n). */
 function toCountMap(rows: { wpId: string; value: number }[]) {
@@ -16,22 +18,22 @@ function toCountMap(rows: { wpId: string; value: number }[]) {
 
 export const superAdminRouter = router({
 	/**
-	 * Every water purveyor on the platform with its asset, active-certifier and
-	 * submitted-test counts.
+	 * Every water purveyor on the platform with its contact, asset,
+	 * active-certifier and submitted-test counts.
 	 *
-	 * Four queries — the purveyors plus one grouped aggregate per counted table —
-	 * run in parallel and merged by id. That count is fixed regardless of how
-	 * many purveyors come back, so there is no N+1. One query with three joins
-	 * would multiply the three one-to-many tables against each other and inflate
-	 * every count; correlated subqueries avoid that but collapse into a single
-	 * `count` column on the driver's row object, which silently reads back as
-	 * zero.
+	 * Five queries — the purveyors, one grouped aggregate per counted table, and
+	 * the WP admins — run in parallel and merged by id. That count is fixed
+	 * regardless of how many purveyors come back, so there is no N+1. One query
+	 * with three joins would multiply the three one-to-many tables against each
+	 * other and inflate every count; correlated subqueries avoid that but
+	 * collapse into a single `count` column on the driver's row object, which
+	 * silently reads back as zero.
 	 *
 	 * Reads through the privileged Drizzle connection, so `superAdminProcedure`
 	 * is the authorization boundary, not a row policy.
 	 */
 	listWaterPurveyors: superAdminProcedure.query(async () => {
-		const [purveyors, assetRows, certifierRows, submissionRows] =
+		const [purveyors, assetRows, certifierRows, submissionRows, adminRows] =
 			await Promise.all([
 				db
 					.select({
@@ -63,11 +65,38 @@ export const superAdminRouter = router({
 					.from(testSubmissions)
 					.where(eq(testSubmissions.status, "submitted"))
 					.groupBy(testSubmissions.waterPurveyorId),
+
+				// The contact shown per purveyor. `water_purveyors` carries no
+				// contact column and `profiles` holds no email — that lives in
+				// auth.users — so the WP's own admin is the only name available
+				// without a schema change. Blocked admins are skipped: the column
+				// answers "who do I reach out to".
+				db
+					.select({
+						wpId: profiles.waterPurveyorId,
+						fullName: profiles.fullName,
+					})
+					.from(profiles)
+					.where(
+						and(
+							eq(profiles.globalRole, "wp_admin"),
+							eq(profiles.status, "active"),
+						),
+					)
+					.orderBy(asc(profiles.createdAt), asc(profiles.id)),
 			]);
 
 		const assets = toCountMap(assetRows);
 		const certifiers = toCountMap(certifierRows);
 		const submissions = toCountMap(submissionRows);
+
+		// First admin per purveyor, by the deterministic order above. A WP may
+		// have several; the list shows one.
+		const contacts = new Map<string, string>();
+		for (const row of adminRows) {
+			if (!row.wpId || !row.fullName) continue;
+			if (!contacts.has(row.wpId)) contacts.set(row.wpId, row.fullName);
+		}
 
 		return purveyors.map((purveyor) => ({
 			...purveyor,
@@ -75,6 +104,56 @@ export const superAdminRouter = router({
 			assets: assets.get(purveyor.id) ?? 0,
 			certifiers: certifiers.get(purveyor.id) ?? 0,
 			submissions: submissions.get(purveyor.id) ?? 0,
+			// null when the WP has no active admin, or the admin has no name set.
+			contact: contacts.get(purveyor.id) ?? null,
 		}));
 	}),
+
+	/**
+	 * Blocks or unblocks one water purveyor. Blocking is a soft state on the row,
+	 * never a delete — the purveyor's data stays intact and the switch is
+	 * reversible from the same button.
+	 *
+	 * Super-Admin only, enforced by the procedure: the Drizzle connection is
+	 * privileged, so no row policy stands between this and the table.
+	 */
+	setWaterPurveyorStatus: superAdminProcedure
+		.input(
+			z.object({
+				waterPurveyorId: z.uuid(),
+				status: z.enum(["active", "blocked"]),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const [row] = await db
+				.update(waterPurveyors)
+				.set({ status: input.status, updatedAt: new Date() })
+				.where(eq(waterPurveyors.id, input.waterPurveyorId))
+				.returning({
+					id: waterPurveyors.id,
+					companyName: waterPurveyors.companyName,
+					status: waterPurveyors.status,
+				});
+
+			if (!row) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Water purveyor not found",
+				});
+			}
+
+			// Structured log, same shape as `caller_resolved`. Cheap now, and a
+			// tenant being switched off is not something to reconstruct later.
+			console.log(
+				JSON.stringify({
+					event: "water_purveyor_status_changed",
+					actor_id: ctx.caller.profileId,
+					wp_id: row.id,
+					status: row.status,
+					timestamp: new Date().toISOString(),
+				}),
+			);
+
+			return row;
+		}),
 });

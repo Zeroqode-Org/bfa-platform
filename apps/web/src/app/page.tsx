@@ -9,6 +9,8 @@ import {
 import type { Route } from "next";
 import Link from "next/link";
 
+import { requireUser } from "@/lib/auth";
+
 const roles: {
 	href: Route;
 	label: string;
@@ -35,7 +37,10 @@ const roles: {
 	},
 ];
 
-export default function RolePicker() {
+export default async function RolePicker() {
+	// Dev shortcut screen — still behind the sign-in gate.
+	await requireUser();
+
 	return (
 		<main className="min-h-svh bg-background px-6 pt-24 pb-16 sm:px-10 lg:px-16 lg:pt-32">
 			<div className="mx-auto w-full max-w-4xl">

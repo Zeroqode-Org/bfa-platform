@@ -182,4 +182,14 @@
 	h1 {
 		@apply font-display;
 	}
+	/*
+	 * Tailwind v4's Preflight sets buttons to `cursor: default`, unlike v3.
+	 * Restore the pointer so every clickable affordance reads the same — this
+	 * covers the Base UI triggers (dropdown, dialog close, switcher) too, not
+	 * just the `Button` component.
+	 */
+	button:not(:disabled),
+	[role="button"]:not(:disabled) {
+		cursor: pointer;
+	}
 }

@@ -30,7 +30,15 @@ export default function RootLayout({
 }>) {
 	return (
 		<html lang="en">
+			{/*
+			 * suppressHydrationWarning: browser extensions (Grammarly, password
+			 * managers) inject attributes into <body> before React hydrates, which
+			 * React otherwise reports as a mismatch. It applies one level deep — to
+			 * this element's own attributes only — so real mismatches inside the app
+			 * are still reported.
+			 */}
 			<body
+				suppressHydrationWarning
 				className={`${inter.variable} ${sora.variable} font-sans antialiased`}
 			>
 				<Providers>{children}</Providers>

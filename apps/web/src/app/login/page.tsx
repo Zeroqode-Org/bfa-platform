@@ -15,8 +15,8 @@ import { createClient } from "@/lib/supabase/client";
  * `supabase.auth.getUser()` — so signing in here is enough for the Super-Admin
  * procedures to resolve a caller.
  *
- * Deliberately minimal: no sign-up, no password reset, no role-aware landing
- * (always `/admin`), and no `middleware.ts` for server-side session refresh.
+ * Deliberately minimal: no sign-up, no password reset, and no role-aware
+ * landing — everyone arrives at the workspace picker on `/`.
  */
 export default function LoginPage() {
 	const emailId = useId();
@@ -47,7 +47,7 @@ export default function LoginPage() {
 		}
 
 		// refresh() so the server re-reads the freshly written session cookies.
-		router.replace("/admin");
+		router.replace("/");
 		router.refresh();
 	}
 

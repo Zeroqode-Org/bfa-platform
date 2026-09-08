@@ -1,10 +1,10 @@
 import { LogOut } from "lucide-react";
-import Link from "next/link";
 
 import type { NavVariant } from "@/config/nav";
 
 import { BottomTabBar } from "./bottom-tab-bar";
 import { ImpersonationBanner } from "./impersonation-banner";
+import { LogoutButton } from "./logout-button";
 import { PageTransition } from "./page-transition";
 import { SidebarNav } from "./sidebar-nav";
 import { TopHeader } from "./top-header";
@@ -41,13 +41,10 @@ export function DashboardShell({
 					variant={variant}
 					className="hidden min-[780px]:flex"
 					footer={
-						<Link
-							href="/"
-							className="flex items-center gap-2.5 rounded-[5px] border-l-[3px] border-l-transparent py-2.5 pr-2 pl-3 font-medium text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-						>
+						<LogoutButton className="flex w-full items-center gap-2.5 rounded-[5px] border-l-[3px] border-l-transparent py-2.5 pr-2 pl-3 font-medium text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
 							<LogOut className="size-[18px] shrink-0" strokeWidth={1.75} />
 							Log out
-						</Link>
+						</LogoutButton>
 					}
 				/>
 				<div className="flex min-w-0 flex-1 flex-col">
@@ -57,12 +54,9 @@ export function DashboardShell({
 						action={
 							<>
 								{headerAction}
-								<Link
-									href="/"
-									className="shrink-0 font-medium text-[13px] text-muted-foreground transition-colors hover:text-foreground min-[780px]:hidden"
-								>
+								<LogoutButton className="shrink-0 font-medium text-[13px] text-muted-foreground transition-colors hover:text-foreground min-[780px]:hidden">
 									Log out
-								</Link>
+								</LogoutButton>
 							</>
 						}
 					/>

@@ -1,7 +1,7 @@
 import { LogOut } from "lucide-react";
-import Link from "next/link";
 
 import { BottomTabBar } from "./bottom-tab-bar";
+import { LogoutButton } from "./logout-button";
 import { PageTransition } from "./page-transition";
 import { SidebarNav } from "./sidebar-nav";
 import { WpSwitcher } from "./wp-switcher";
@@ -18,12 +18,9 @@ import { WpSwitcher } from "./wp-switcher";
  */
 export function CertifierShell({ children }: { children: React.ReactNode }) {
 	const logOut = (
-		<Link
-			href="/"
-			className="shrink-0 font-medium text-[13px] text-muted-foreground transition-colors hover:text-foreground"
-		>
+		<LogoutButton className="shrink-0 font-medium text-[13px] text-muted-foreground transition-colors hover:text-foreground">
 			Log out
-		</Link>
+		</LogoutButton>
 	);
 
 	return (
@@ -39,13 +36,10 @@ export function CertifierShell({ children }: { children: React.ReactNode }) {
 				variant="certifier"
 				className="hidden min-[780px]:flex"
 				footer={
-					<Link
-						href="/"
-						className="flex items-center gap-2.5 rounded-[5px] border-l-[3px] border-l-transparent py-2.5 pr-2 pl-3 font-medium text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-					>
+					<LogoutButton className="flex w-full items-center gap-2.5 rounded-[5px] border-l-[3px] border-l-transparent py-2.5 pr-2 pl-3 font-medium text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
 						<LogOut className="size-[18px] shrink-0" strokeWidth={1.75} />
 						Log out
-					</Link>
+					</LogoutButton>
 				}
 			/>
 
