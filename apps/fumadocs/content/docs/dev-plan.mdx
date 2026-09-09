@@ -35,7 +35,7 @@ Status as of **2026-09-09**. Update this table as work progresses — this is th
 | Data Model, Auth & Backend Setup | 6.1 | Lina | 08/31 | 09/04 | in-progress |
 | Certifier Dashboard | 6.3 | Lina | 08/31 | 09/04 | planned |
 | WP Dashboard — Core & Analytics | 6.6.1 | Daniil | 09/07 | 09/11 | planned |
-| WP Dashboard — BFA Assets | 6.6.2 | Daniil | 09/07 | 09/11 | planned |
+| WP Dashboard — BFA Assets | 6.6.2 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Certifiers | 6.6.3 | Daniil | 09/07 | 09/11 | planned |
 | WP Dashboard — Customers | 6.6.4 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Repair Companies | 6.6.5 | Daniil | 09/07 | 09/11 | planned |
@@ -63,6 +63,17 @@ automated email for the customer's currently assigned assets. The scheduler that
 will honour that hold is Workflow 1 and is still planned. Full writeup:
 [WP Customers](/docs/wp-customers).
 
+**WP Dashboard — BFA Assets (6.6.2)**: shipped. `/wp/assets` registers, lists
+and corrects assets through five WP-scoped procedures, and `bfa_assets` and
+`customer_assignments` have row policies for the first time. A BIN can be
+corrected and every change is logged with both values; attaching a customer
+closes the outgoing occupancy row and opens a new one in one transaction, so the
+asset detail view can show the whole history rather than only the current
+occupant. The annual test date entered here is what Workflow 1 will schedule
+against — that scheduler is still planned, and nothing yet recomputes
+`asset_status`, which the screen therefore shows read-only. Full writeup:
+[WP BFA Assets](/docs/wp-bfa-assets).
+
 **Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
 
 **Transactional Email Integration (6.14)** stays *in-progress* on purpose. Its first step — the send helper and `consoleDriver` — shipped with onboarding, and every mail path in the app already runs through it. What remains is the provider account, the sender domain and DKIM record, and `providerDriver` itself, which needs credentials that do not exist yet. See [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer).
@@ -77,10 +88,9 @@ Carried from [PRD § 10](/docs/prd#10-open-questions-for-the-client) — resolve
 
 - **Phase 2:** WPAdmin/WPsubAdmin/WPEmployee permission differences — all three currently share identical invitation policies; second-WP-invite notification behavior.
 - **Phase 3:** signature vs. certify-checkbox; legacy PDF/results-document layout match (reference wizard: [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard)).
-- **Phase 4:** whether a WP can reassign the BIN itself on an existing asset (vs. one-time assignment only).
 - **Phase 5:** dynamic variables for notice text; AG Renewal Date auto-update behavior; monthly CSV export field list.
 
-Resolved since the last pass (no longer blocking): mid-wizard pass/fail handling, scope of "edit submitted test data" for a WP, asset↔customer cardinality, email routing for suspended customers — see [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log).
+Resolved since the last pass (no longer blocking): mid-wizard pass/fail handling, scope of "edit submitted test data" for a WP, asset↔customer cardinality, email routing for suspended customers, and BIN reassignment on an existing asset — allowed, and logged with both values, which is what 6.6.2 shipped. See [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log).
 
 ## Related pages
 

@@ -1,4 +1,5 @@
 import { protectedProcedure, publicProcedure, router } from "../index";
+import { assetsRouter } from "./assets";
 import { customersRouter } from "./customers";
 import { invitationsRouter } from "./invitations";
 import { superAdminRouter } from "./super-admin";
@@ -7,6 +8,7 @@ export const appRouter = router({
 	superAdmin: superAdminRouter,
 	invitations: invitationsRouter,
 	customers: customersRouter,
+	assets: assetsRouter,
 	healthCheck: publicProcedure.query(() => {
 		return "OK";
 	}),
