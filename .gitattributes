@@ -1,0 +1,21 @@
+# Line endings: LF in the repository and in every working tree.
+#
+# Without this, each machine's core.autocrlf decides. On a Windows checkout
+# that means CRLF on disk, which Biome rewrites to LF on every format run —
+# leaving a hundred files git reports as modified even though their content is
+# byte-identical after normalisation. `eol=lf` keeps the working tree matching
+# what the formatter emits, so the pre-commit hook stops churning the tree.
+* text=auto eol=lf
+
+# Binaries: never normalise or diff these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary

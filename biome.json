@@ -35,13 +35,15 @@
 			"!**/src-tauri",
 			"!**/.nuxt",
 			"!bts.jsonc",
+			"!**/package-lock.json",
 			"!**/.expo",
 			"!**/.wrangler",
 			"!**/.alchemy",
 			"!**/.svelte-kit",
 			"!**/wrangler.jsonc",
 			"!**/.source",
-			"!**/convex/_generated"
+			"!**/convex/_generated",
+			"!prototype"
 		]
 	},
 	"formatter": {

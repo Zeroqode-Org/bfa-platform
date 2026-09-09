@@ -41,7 +41,12 @@ Then, run the development server:
 npm run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001) in your browser to see the fullstack application.
+This starts both development applications:
+
+- [http://localhost:3001](http://localhost:3001) — fullstack web application
+- [http://localhost:4000](http://localhost:4000) — Fumadocs documentation
+
+Use `npm run dev:web` to start only the web application.
 
 ## UI Customization
 
@@ -97,3 +102,5 @@ bfa-platform/
 - `npm run db:migrate`: Run database migrations
 - `npm run db:studio`: Open database studio UI
 - `npm run check`: Run Biome formatting and linting
+- `npm test`: Run the unit tests. No network, no database — safe on a fresh clone with no credentials.
+- `npm run test:db`: Run everything, including the database-backed suites (RLS isolation, invite redemption, `createInvitation`). These **write to whatever `DATABASE_URL` points at**, so they are opt-in: the script sets `RUN_DB_TESTS=1`, and only then does `vitest.setup.ts` read `DATABASE_URL` from `apps/web/.env.local`. Point it at a scratch database, not a shared one. Arguments pass through — `npm run test:db -- rls` runs just the RLS suite.

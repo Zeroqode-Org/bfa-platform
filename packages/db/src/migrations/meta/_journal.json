@@ -8,6 +8,20 @@
 			"when": 1788280353514,
 			"tag": "0000_damp_fabian_cortez",
 			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "7",
+			"when": 1788945657879,
+			"tag": "0001_invitation_onboarding_policies",
+			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1788953200970,
+			"tag": "0002_invitation_proposed_wp_name",
+			"breakpoints": true
 		}
 	]
 }

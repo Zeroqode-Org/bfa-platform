@@ -7,7 +7,7 @@
 	],
 	"type": "module",
 	"scripts": {
-		"dev": "npm run dev --workspaces --if-present",
+		"dev": "concurrently --kill-others-on-fail --names web,docs \"npm run dev --workspace web --\" \"npm run dev --workspace fumadocs --\"",
 		"build": "npm run build --workspaces --if-present",
 		"check-types": "npm run check-types --workspaces --if-present",
 		"dev:web": "npm run dev --workspace web --",
@@ -15,8 +15,12 @@
 		"db:studio": "npm run db:studio --workspace @bfa-platform/db --",
 		"db:generate": "npm run db:generate --workspace @bfa-platform/db --",
 		"db:migrate": "npm run db:migrate --workspace @bfa-platform/db --",
+		"db:seed": "tsx packages/db/src/seed.ts",
 		"check": "biome check --write .",
-		"prepare": "husky || true"
+		"prepare": "husky || true",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:db": "node scripts/run-db-tests.mjs"
 	},
 	"dependencies": {
 		"@bfa-platform/env": "*",
@@ -26,10 +30,15 @@
 	"devDependencies": {
 		"@bfa-platform/config": "*",
 		"@biomejs/biome": "^2.5.6",
+		"@testing-library/dom": "^10.4.1",
+		"@testing-library/react": "^16.3.3",
 		"@types/node": "^26.2.0",
+		"concurrently": "^9.2.4",
 		"husky": "^9.1.7",
+		"jsdom": "^30.0.1",
 		"lint-staged": "^17.2.0",
-		"typescript": "^6.0.3"
+		"typescript": "^6.0.3",
+		"vitest": "^3.2.7"
 	},
 	"lint-staged": {
 		"*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc}": [

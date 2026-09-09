@@ -1,0 +1,394 @@
+---
+title: Invitations and Onboarding
+description: How accounts are created on the platform — invite tokens, RLS policies, redemption, and the console email driver
+---
+
+There is no sign-up form. Every account on this platform exists because somebody
+was invited and redeemed a link, which is what makes the tenant model hold: the
+role and the water purveyor are decided by the inviter, server-side, before the
+invitee ever types anything.
+
+This page describes the flow as built. It covers *Invitations and onboarding* in
+the [build plan](/docs/build-plan) and step 1 of *Transactional email
+integration*.
+
+## The flow end to end
+
+1. A Super-Admin or any WP role calls the `invitations.createInvitation`
+   procedure — from the invite-new-WP dialog on `/admin`, or directly. The
+   procedure decides which purveyor the invitation belongs to from the caller's
+   own profile — never from the request body.
+2. A 256-bit secret is generated. Its SHA-256 digest is stored in
+   `invitations.token`; the secret itself only ever appears in the email.
+3. The email goes out through the shared send helper. With no provider
+   configured, the console driver prints the whole message — invite link
+   included — as one JSON log line.
+4. The invitee opens `/invite/<secret>`. The page resolves the token
+   server-side and renders the right form for the invitation.
+5. Submitting the form runs the `redeemInvitation` server action: it creates the
+   `auth.users` record, then writes every `public` row in one transaction, and
+   marks the invitation redeemed.
+6. The invitee is signed in and lands on their dashboard.
+
+## Where people land
+
+`/` renders nothing. It resolves the caller's `profiles` row and forwards them:
+
+| Role | Lands on |
+|---|---|
+| `super_admin` | `/admin` |
+| `wp_admin`, `wp_sub_admin`, `wp_employee` | `/wp` |
+| `certifier` | `/certifier/drafts` |
+| not signed in | `/login` |
+
+The table lives in `apps/web/src/lib/landing-route.ts` and has three readers —
+this redirect, the invite-redemption action, and the role gate that bounces
+somebody out of a section they cannot see. One table, because three copies of
+the same switch is three chances to send a role somewhere it will be turned
+away from.
+
+This replaced the workspace picker, a development shortcut that asked people
+which role they were and let anyone walk into any of the three shells. Roles are
+resolved server-side now, so asking was both pointless and misleading — the
+sections enforce the answer regardless of which card was clicked.
+
+`/` itself stays as the redirect hub rather than being deleted: it is where the
+sign-in screen sends people, what the sidebar logo links to, and the only place
+that knows a role without being told one.
+
+## Sending an invitation
+
+`packages/api/src/routers/invitations.ts`
+
+```ts
+// Into an existing purveyor — the caller's own, decided server-side.
+await trpc.invitations.createInvitation.mutate({
+  email: "certifier@example.com",
+  role: "certifier",
+  expiresInDays: 7,
+});
+
+// Provisioning a new purveyor. Super-Admin only; this is what the
+// invite-new-WP dialog sends.
+await trpc.invitations.createInvitation.mutate({
+  email: "admin@riversidewater.gov",
+  role: "wp_admin",
+  waterPurveyorId: null,
+  proposedWaterPurveyorName: "Riverside Water District",
+});
+```
+
+**Who may invite whom** — decided by `resolveInvitationTarget` in
+`packages/api/src/lib/invitations.ts`, and enforced a second time by the row
+policies:
+
+| Caller | May invite | Into which purveyor |
+|---|---|---|
+| Super-Admin | any role | any purveyor, or none — a null `associated_wp_id` provisions a new one |
+| WP Admin | any role | their own, only |
+| WP SubAdmin | any role | their own, only |
+| WP Employee | any role | their own, only |
+| Certifier | nothing | — |
+
+A WP role that passes a `waterPurveyorId` other than their own gets a
+`FORBIDDEN`, not a silently rewritten row: a cross-tenant attempt should be
+visible in the logs, not absorbed.
+
+Two combinations are rejected as `BAD_REQUEST`, because they describe an
+invitation nothing could redeem: a null purveyor with any role but `wp_admin`
+(only a first administrator brings a purveyor into existence), and a certifier
+invitation with no purveyor to authorize against.
+
+### Inviting a new water purveyor
+
+`apps/web/src/components/admin/invite-wp-dialog.tsx`
+
+The Super-Admin names the purveyor and gives the address of its first
+administrator. The invitation is stored with `associated_wp_id` null and the
+name in `proposed_water_purveyor_name`; redeeming it creates the
+`water_purveyors` row and that administrator's profile in one transaction.
+
+**The name is collected once, by the Super-Admin.** It travels on the
+invitation, so the person redeeming the link is shown the name rather than asked
+for it — nobody is invited to name an organisation that has already been named
+for them, and two people cannot disagree about what it is called.
+
+Three layers keep this to the Super-Admin, and they are independent:
+
+1. `/admin` is gated to `super_admin` in its layout, so the button is not
+   reachable by anyone else. A hidden button is not a permission, which is why
+   it is the weakest of the three.
+2. `resolveInvitationTarget` refuses a null purveyor, and refuses a
+   `proposedWaterPurveyorName` at all, for every role but Super-Admin —
+   `FORBIDDEN`, not a silently dropped field.
+3. A check constraint, `invitations_new_wp_name_shape`, refuses any row where
+   the two do not agree: a name is present exactly on a `wp_admin` invitation
+   with no purveyor, and absent on every other kind.
+
+Until the email provider lands, the confirmation says what actually happened —
+the invitation exists and its link is in the server log. It does not say an
+email was sent, because none was.
+
+### Tokens
+
+The stored token is **not** a UUID and **not** the value in the link.
+
+- The link carries 32 bytes from `randomBytes`, base64url-encoded.
+- `invitations.token` holds the SHA-256 digest of that secret, lowercase hex.
+- Redemption hashes the incoming secret and looks the digest up on the unique
+  index — one indexed equality match, no scan.
+
+A dump of the `invitations` table therefore yields nothing anyone can redeem.
+SHA-256 is FIPS-approved, which the project's crypto rule requires; a UUID would
+not be, and a UUID is an identifier rather than a credential in any case.
+
+Invitations expire seven days after creation unless the caller passes
+`expiresInDays` (1–30).
+
+## The email layer
+
+`packages/api/src/lib/email.ts` is the only place this application sends mail
+from. Feature code calls `sendEmail(message, context)` and never touches a
+provider SDK, and never writes its own send log.
+
+```ts
+type EmailMessage = { to: string; subject: string; html: string; tags: EmailTag[] };
+type EmailDriver = { name: EmailDriverName; send(message: EmailMessage): Promise<EmailSendResult> };
+```
+
+**`consoleDriver`** — the only driver registered today. It logs the complete
+payload, including the rendered HTML, and reports success. The HTML is logged in
+full deliberately: with no provider wired up, that log line is the only copy of
+the invite link a developer or tester has.
+
+```json
+{"event":"email_console_delivery","driver":"console","email_id":"console_…","to":"certifier@example.com","subject":"You have been invited to the Backflow Assembly platform","tags":[{"name":"type","value":"invitation"}],"html":"…<a href=\"http://localhost:3001/invite/HqA…\">Set up your account</a>…","timestamp":"2026-09-09T09:35:45.931Z"}
+```
+
+**Every send attempt** also emits one `email_send_attempted` line, whichever
+driver ran and whether it succeeded or threw, carrying the event type, the
+recipient, a timestamp, and whichever context identifiers the caller knew:
+
+```json
+{"event":"email_send_attempted","email_event":"invitation_created","driver":"console","status":"sent","email_id":"console_…","error":null,"recipient":"certifier@example.com","subject":"…","actor_id":"…","recipient_id":null,"wp_id":"…","asset_id":null,"invitation_id":"…","timestamp":"…"}
+```
+
+**`providerDriver`** is not built yet — the domain, DNS records and API key do
+not exist. The architecture for it does: adding the provider is one entry in the
+`drivers` registry in `email.ts` plus its module. The selector, the logging and
+every call site stay exactly as they are, which is what the build plan means by
+"no code edit outside `email.ts`".
+
+### Configuration
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `EMAIL_DRIVER` | no | `console` | Which driver `sendEmail` uses |
+| `APP_URL` / `NEXT_PUBLIC_APP_URL` | no | `http://localhost:3001` | Base URL for links in outbound mail |
+
+Neither is in `packages/env`'s validated schema yet, and that is deliberate:
+both are optional with safe defaults, and requiring every environment — CI
+included — to declare a switch with one position buys nothing. `EMAIL_DRIVER`
+moves into `packages/env/src/server.ts` alongside the provider's API key when
+the provider lands.
+
+## Row-level security
+
+Migration `0001_invitation_onboarding_policies`. The
+`proposed_water_purveyor_name` column and its check constraint arrive separately
+in `0002_invitation_proposed_wp_name` — one migration per change, so neither has
+to be edited after the fact.
+
+Every policy resolves the caller through their own `profiles` row. Reading
+`profiles` from inside a policy *on* `profiles` recurses, so the lookup lives in
+two `SECURITY DEFINER` helpers in a `private` schema, which PostgREST does not
+expose:
+
+- `private.current_global_role()`
+- `private.current_wp_id()`
+
+They read nothing but the caller's own row — there is no argument to point them
+at somebody else — and a **blocked** profile resolves to `NULL`, so a blocked
+user keeps only the `id = auth.uid()` paths and loses every role- or tenant-wide
+grant.
+
+### `invitations`
+
+| Role | Select | Insert | Update / delete |
+|---|---|---|---|
+| Super-Admin | all | all, including a null `associated_wp_id` | yes |
+| WP Admin / SubAdmin / Employee | own purveyor | own purveyor, `associated_wp_id` not null | no |
+| Certifier | — | — | — |
+
+The `associated_wp_id IS NOT NULL` clause in the WP insert policy is what keeps
+new-purveyor provisioning exclusive to the Super-Admin.
+
+Redemption never reads through these policies: it runs in a server action with
+the privileged connection, so tokens are not enumerable from a client.
+
+### `profiles`
+
+| Role | Select | Update | Insert |
+|---|---|---|---|
+| Any authenticated user | own row | own row | — |
+| WP Admin / SubAdmin | own purveyor | — | — |
+| Super-Admin | all | — | — |
+
+Two details worth knowing:
+
+- **The update is column-limited, not just row-limited.** A row policy cannot
+  stop a user from writing their own `global_role`, `water_purveyor_id` or
+  `status`; a column grant can, so `authenticated` holds `UPDATE (full_name)`
+  and nothing more. Attempting anything else is a `permission denied`, not a
+  silent no-op.
+- **There is no INSERT policy and no INSERT grant.** Profiles are created by the
+  redemption path with the service-role key, which bypasses RLS. Anything else
+  creating a profile is a bug, and the missing policy is what makes it fail
+  loudly.
+
+Super-Admin writes to either table run through the privileged server connection
+behind `superAdminProcedure`, the same way `listWaterPurveyors` already does.
+
+## Redemption
+
+`packages/api/src/lib/invitation-redemption.ts`, called by the server action in
+`apps/web/src/app/invite/[token]/actions.ts`.
+
+`inspectInvitation` resolves a token to one of six states. Reads only — an
+invitation is not consumed by being looked at, so a refreshed page or a link
+opened twice before submitting still works.
+
+| State | What the invitee sees |
+|---|---|
+| `not_found` | "This invitation link is not valid. Check that you copied the whole link." |
+| `expired` | "This invitation has expired. Ask whoever invited you to send a new one." |
+| `redeemed` | "This invitation has already been used. Sign in with the account it created." |
+| `revoked` | "This invitation is no longer valid…" |
+| `email_in_use` | "An account already exists for this email address. Sign in instead." |
+| `valid` | the first-login form, in one of three shapes |
+
+`is_redeemed` and `status` are checked separately even though redemption writes
+both: they are two columns that can drift, and a token that is redeemed by one
+measure and pending by the other must not be usable.
+
+### The three redemption modes
+
+| Mode | When | What the form asks for |
+|---|---|---|
+| `new_profile` | the ordinary case | full name, password; plus company, ID number and license expiration date for a certifier |
+| `new_water_purveyor` | `associated_wp_id` is null | the same as above — the purveyor's name came with the invitation and is shown, not asked for |
+| `existing_certifier` | the address already belongs to a certifier | nothing — one confirm button |
+
+The mode is decided on the server from the invitation itself and passed into the
+form, so a tampered form cannot ask for a different set of fields than the
+invitation calls for. The action revalidates all of it regardless.
+
+### Atomicity
+
+Two stores are written and they cannot share a transaction — `auth.users` lives
+behind Supabase's Auth API. The order is chosen so that a failure never leaves a
+usable half-account:
+
+1. The `auth.users` record is created first, outside the transaction, so the
+   transaction holds no row lock across a network call.
+2. One transaction then does everything else. Its **first** write is a
+   conditional claim on the invitation (`is_redeemed = false AND status =
+   'pending' AND expires_at > now()`), so two redemptions racing on the same
+   link cannot both proceed — the loser matches no row and rolls back.
+3. If the transaction rolls back, the auth user is deleted. Otherwise the
+   address could never redeem a replacement invitation.
+
+The reverse order would strand a profile with no way to sign in, which no
+compensating write could clean up as safely.
+
+### Second-WP path for an existing certifier
+
+A certifier already on the platform who is invited by a second purveyor keeps
+everything they have. Their `profiles` row and their `certifiers` row are not
+read-modify-written at all; only a `wp_certifier_authorizations` row is inserted,
+with `on conflict do nothing` so a duplicate invitation for a purveyor they
+already serve is a no-op rather than a constraint failure.
+
+They are never shown a profile form. If they have a live session they go
+straight to their dashboard; otherwise they are sent to `/login?redirect=…`,
+which the sign-in screen honours for same-origin paths only.
+
+An address that already belongs to a **non**-certifier gets `email_in_use`
+instead — extending that account would mean rewriting a profile somebody is
+already using.
+
+## Structured logging
+
+Every event below is one `console.log(JSON.stringify(…))` line.
+
+| Event | Emitted by | Carries |
+|---|---|---|
+| `invitation_created` | `createInvitation` | actor, invitation id, recipient, role, wp id, expiry |
+| `email_send_attempted` | `sendEmail` | event type, driver, status, recipient, actor / wp / asset / invitation ids |
+| `email_console_delivery` | `consoleDriver` | the full payload, including the invite link |
+| `invitation_redeemed` | `redeemInvitation` | actor, invitation id, mode, role, wp id |
+| `invitation_redemption_failed` | `redeemInvitation` | invitation id, mode, reason |
+| `invitation_redemption_cleanup_failed` | `redeemInvitation` | the orphaned auth user id, if its deletion failed too |
+
+## Trying it locally
+
+```bash
+npm run db:migrate
+npm run db:seed
+npm run dev:web
+```
+
+Sign in as a seeded WP Admin, call `invitations.createInvitation`, and take the
+`html` field out of the `email_console_delivery` line in the server console. The
+`/invite/<secret>` URL in it is a working link. Nothing about this changes when
+the provider lands — the same call, the same log line, a real message as well.
+
+## Tests
+
+```bash
+npm test
+```
+
+runs the unit suites only — no network, no database, and no read of anybody's
+credentials file. That is the run to expect on a fresh clone and in CI.
+
+```bash
+npm run test:db
+```
+
+adds the three database-backed suites. They are opt-in because they **write real
+rows to whatever `DATABASE_URL` points at**: the script sets `RUN_DB_TESTS=1`,
+and only under that flag does `vitest.setup.ts` read `DATABASE_URL` from
+`apps/web/.env.local`. Point it at a scratch database rather than one somebody
+else is using. Setting the flag without a `DATABASE_URL` fails loudly rather
+than skipping — asking for these tests and silently running none of them is the
+wrong answer to a missing variable.
+
+Arguments pass through, so `npm run test:db -- rls` runs just the RLS suite.
+Each suite cleans up its own fixtures; the RLS suite additionally rolls back
+every statement it makes, so nothing it does survives itself.
+
+| File | Opt-in | Covers |
+|---|---|---|
+| `packages/db/src/rls.test.ts` | yes | the policies as the `authenticated` role, with `request.jwt.claims` set — cross-tenant reads and writes on both tables, certifier exclusion, blocked profiles, the column-grant limit on `profiles` |
+| `packages/api/src/routers/invitations.test.ts` | yes | `createInvitation` end to end — Zod validation, role permissions, the stored digest, the printed link |
+| `packages/api/src/lib/invitation-redemption.test.ts` | yes | invalid / expired / redeemed tokens, successful redemption for each mode, the existing-certifier second-WP path, rollback, and two concurrent redemptions |
+| `packages/api/src/lib/email.test.ts` | no | the console driver's payload and the send-attempt log line |
+| `packages/api/src/lib/invitations.test.ts` | no | the tenant-authorization matrix and the invitation state machine |
+| `packages/api/src/lib/invitation-token.test.ts` | no | digest, entropy, uniqueness, link shape |
+| `apps/web/src/components/admin/invite-wp-dialog.test.tsx` | no | the invite-new-WP form — what it sends, its pending state, the honest success message, and a refused call leaving the dialog open |
+
+The RLS suite runs as the `authenticated` role because the application itself
+reads through a privileged connection that bypasses RLS — nothing in the app
+would notice the policies break, so they need a test of their own.
+
+## Not built here
+
+- **`providerDriver`.** Week 5, with the provider account and DNS.
+- **A general invite UI.** The Super-Admin's invite-new-WP dialog is wired.
+  There is still no screen for inviting a certifier or a colleague into an
+  existing purveyor — `createInvitation` is the API for that, and its screen
+  lands with the WP dashboard's certifiers section.
+- **Session-refresh middleware.** Still deferred on portability grounds — Next
+  middleware defaults to the Edge runtime, which this project forbids without
+  sign-off.

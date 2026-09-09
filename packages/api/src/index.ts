@@ -28,4 +28,17 @@ const enforceCaller = t.middleware(async ({ ctx, next }) => {
 /** Every procedure that touches tenant data. Resolves the caller server-side. */
 export const protectedProcedure = t.procedure.use(enforceCaller);
 
+/**
+ * Cross-tenant Super-Admin procedures. The role is checked here rather than
+ * left to a row policy: the Drizzle connection is privileged, so the procedure
+ * layer is the authorization boundary. Declared with an inline middleware so it
+ * inherits `ctx.caller` from `protectedProcedure`.
+ */
+export const superAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
+	if (ctx.caller.globalRole !== "super_admin") {
+		throw new TRPCError({ code: "FORBIDDEN", message: "Super-Admin only" });
+	}
+	return next({ ctx });
+});
+
 export { TRPCError };

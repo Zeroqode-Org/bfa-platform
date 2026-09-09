@@ -133,6 +133,10 @@ Then define the initial schema and generate the migration:
 3. **Hand-edit the generated migration file:** append `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;` for every single table — RLS from the start, before any policy exists. Drizzle's schema DSL does not emit these, so they are added to the SQL by hand (RLS policies likewise land in later hand-written migration files as each feature is built).
 4. `npm run db:migrate` — `drizzle-kit migrate` applies pending migrations against `DATABASE_URL`. (`npm run db:push` syncs the schema without a migration file — dev-only, never on shared branches.)
 
+### Seed fixtures
+
+After the schema migration is applied, run `npm run db:seed` from the repository root. The command loads the local Supabase configuration and requires `SEED_USER_PASSWORD`; it creates or reconciles the standard two-WP fixture dataset and prints the six fixture login emails. The password is never committed or printed by the script.
+
 Turn on email/password auth: Authentication → Sign In/Providers → confirm Email is enabled. Leave Site URL as-is until Section 5 is done.
 
 Then provision the private Storage buckets and (optionally) a throwaway Super-Admin for local checks — idempotent, safe to re-run:
