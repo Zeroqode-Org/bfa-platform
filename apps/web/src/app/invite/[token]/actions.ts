@@ -8,6 +8,7 @@ import type { Route } from "next";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
+import { landingRouteFor } from "@/lib/landing-route";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -126,7 +127,7 @@ export async function redeemInvitationAction(
 		};
 	}
 
-	const destination = landingRoute(result.globalRole);
+	const destination = landingRouteFor(result.globalRole);
 
 	// The account already existed, so this flow never held its password. Send
 	// them to sign in; the new authorization is already on their account, and
@@ -158,10 +159,4 @@ export async function redeemInvitationAction(
 			? (`/login?redirect=${encodeURIComponent(destination)}` as Route)
 			: destination,
 	);
-}
-
-function landingRoute(
-	role: "wp_admin" | "wp_sub_admin" | "wp_employee" | "certifier",
-): Route {
-	return role === "certifier" ? "/certifier/drafts" : "/wp";
 }

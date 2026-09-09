@@ -4,6 +4,7 @@ import { type Caller, resolveCaller } from "@bfa-platform/api/context";
 import type { User } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 
+import { landingRouteFor } from "@/lib/landing-route";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -33,12 +34,34 @@ export async function requireUser(): Promise<User> {
 }
 
 /**
- * Server-side gate for a route that only certain roles may see at all.
+ * The caller's resolved `profiles` row, or a redirect to sign-in.
  *
- * Resolves the caller's `profiles` row through the same helper every protected
- * procedure uses, so a route and its procedures cannot disagree about who
- * somebody is. A signed-in user in the wrong role goes to the workspace picker
- * rather than to `/login` — they are authenticated, just not here.
+ * Goes through the same helper every protected procedure uses, so a route and
+ * its procedures cannot disagree about who somebody is.
+ */
+export async function requireCaller(): Promise<Caller> {
+	const supabase = await createClient();
+	const {
+		data: { user },
+	} = await supabase.auth.getUser();
+
+	if (!user) redirect("/login");
+
+	try {
+		return await resolveCaller(supabase, user);
+	} catch {
+		// Signed in with no usable profile — blocked, or an account whose
+		// redemption never completed. There is nothing in the app for them.
+		redirect("/login");
+	}
+}
+
+/**
+ * Server-side gate for a section only certain roles may see at all.
+ *
+ * Someone in the wrong role is sent to their own dashboard rather than to
+ * `/login` — they are authenticated, just not here. That lands them somewhere
+ * useful instead of on a sign-in form for a session they already have.
  *
  * Still not the authorization boundary: it decides what to render. Every
  * procedure behind the screen checks the role again for itself, because a
@@ -47,23 +70,11 @@ export async function requireUser(): Promise<User> {
 export async function requireGlobalRole(
 	allowed: readonly Caller["globalRole"][],
 ): Promise<Caller> {
-	const supabase = await createClient();
-	const {
-		data: { user },
-	} = await supabase.auth.getUser();
+	const caller = await requireCaller();
 
-	if (!user) redirect("/login");
-
-	let caller: Caller;
-	try {
-		caller = await resolveCaller(supabase, user);
-	} catch {
-		// Signed in with no usable profile — blocked, or an account whose
-		// redemption never completed. There is nothing here for them.
-		redirect("/login");
+	if (!allowed.includes(caller.globalRole)) {
+		redirect(landingRouteFor(caller.globalRole));
 	}
-
-	if (!allowed.includes(caller.globalRole)) redirect("/");
 
 	return caller;
 }

@@ -17,8 +17,9 @@ import { createClient } from "@/lib/supabase/client";
  * procedures to resolve a caller.
  *
  * `redirectTo` is where the invite flow sends someone whose account already
- * existed. It is validated on the server before it reaches this component;
- * everyone else lands on the workspace picker.
+ * existed. It is validated on the server before it reaches this component.
+ * Everyone else goes to `/`, which resolves their role and forwards them to
+ * their own dashboard — the role is never asked for, only looked up.
  */
 export function LoginForm({ redirectTo }: { redirectTo: Route }) {
 	const emailId = useId();

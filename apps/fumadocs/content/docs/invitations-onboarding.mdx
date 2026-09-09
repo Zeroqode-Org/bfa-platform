@@ -30,6 +30,32 @@ integration*.
    marks the invitation redeemed.
 6. The invitee is signed in and lands on their dashboard.
 
+## Where people land
+
+`/` renders nothing. It resolves the caller's `profiles` row and forwards them:
+
+| Role | Lands on |
+|---|---|
+| `super_admin` | `/admin` |
+| `wp_admin`, `wp_sub_admin`, `wp_employee` | `/wp` |
+| `certifier` | `/certifier/drafts` |
+| not signed in | `/login` |
+
+The table lives in `apps/web/src/lib/landing-route.ts` and has three readers —
+this redirect, the invite-redemption action, and the role gate that bounces
+somebody out of a section they cannot see. One table, because three copies of
+the same switch is three chances to send a role somewhere it will be turned
+away from.
+
+This replaced the workspace picker, a development shortcut that asked people
+which role they were and let anyone walk into any of the three shells. Roles are
+resolved server-side now, so asking was both pointless and misleading — the
+sections enforce the answer regardless of which card was clicked.
+
+`/` itself stays as the redirect hub rather than being deleted: it is where the
+sign-in screen sends people, what the sidebar logo links to, and the only place
+that knows a role without being told one.
+
 ## Sending an invitation
 
 `packages/api/src/routers/invitations.ts`

@@ -9,7 +9,8 @@ import { LoginForm } from "@/components/auth/login-form";
  * `?redirect=` is honoured for the one flow that needs it: an existing
  * certifier redeeming a second purveyor's invitation without a live session.
  * It is validated here rather than in the client component, so a crafted link
- * cannot turn the sign-in screen into an open redirect.
+ * cannot turn the sign-in screen into an open redirect. Without it people land
+ * on `/`, which forwards them by role.
  */
 export default async function LoginPage({
 	searchParams,
