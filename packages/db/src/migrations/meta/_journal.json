@@ -22,6 +22,13 @@
 			"when": 1788953200970,
 			"tag": "0002_invitation_proposed_wp_name",
 			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1789640000000,
+			"tag": "0003_customer_policies",
+			"breakpoints": true
 		}
 	]
 }

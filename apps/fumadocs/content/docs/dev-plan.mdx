@@ -37,6 +37,7 @@ Status as of **2026-09-09**. Update this table as work progresses — this is th
 | WP Dashboard — Core & Analytics | 6.6.1 | Daniil | 09/07 | 09/11 | planned |
 | WP Dashboard — BFA Assets | 6.6.2 | Daniil | 09/07 | 09/11 | planned |
 | WP Dashboard — Certifiers | 6.6.3 | Daniil | 09/07 | 09/11 | planned |
+| WP Dashboard — Customers | 6.6.4 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Repair Companies | 6.6.5 | Daniil | 09/07 | 09/11 | planned |
 | Certifier WP Selector | 6.4 | Lina | 09/07 | 09/11 | planned |
 | WP Dashboard — Submitted Tests | 6.6.6 | Lina | 09/14 | 09/18 | planned |
@@ -54,6 +55,13 @@ Status as of **2026-09-09**. Update this table as work progresses — this is th
 shortcut from before roles were resolved server-side; `/` now forwards each
 signed-in user to their own dashboard by role, and anonymous visitors to
 `/login`. See [Where people land](/docs/invitations-onboarding#where-people-land).
+
+**WP Dashboard — Customers (6.6.4)**: shipped. `/wp/customers` creates, edits
+and suspends customers through three WP-scoped procedures, `customers` has row
+policies for the first time, and suspension states plainly that it pauses
+automated email for the customer's currently assigned assets. The scheduler that
+will honour that hold is Workflow 1 and is still planned. Full writeup:
+[WP Customers](/docs/wp-customers).
 
 **Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
 

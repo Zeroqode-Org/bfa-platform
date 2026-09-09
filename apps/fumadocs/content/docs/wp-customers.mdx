@@ -1,0 +1,219 @@
+---
+title: WP Customers
+description: How a water purveyor manages the people its automated email is addressed to — the customers screen, its procedures, and the row policies behind them
+---
+
+Customers are the occupants and billing contacts an asset's automated email goes
+to. They never sign in: there is no customer role, no customer login, and no
+self-service path to any of this. Every record is created and maintained by the
+water purveyor that owns it, from `/wp/customers`.
+
+This page describes the screen as built. It covers *WP dashboard — customers* in
+the [build plan](/docs/build-plan) and PRD § 6.6.4.
+
+## What a customer record is
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | Trimmed; a name of only spaces is empty, not valid |
+| `email` | yes | Lowercased and trimmed, so one address has one spelling |
+| `account_number` | no | Blank is stored as NULL, never as `''` |
+| `address` | no | Blank is stored as NULL |
+| `rate_category` | yes | `standard` or `agricultural`; agricultural gets the purple badge |
+| `ag_renewal_date` | agricultural only | Required on the agricultural rate, refused on the standard one |
+| `status` | yes | `active` or `suspended` — see below |
+| `water_purveyor_id` | — | Never sent by the client; derived from the caller |
+
+The record attaches to the *customer*, not to an asset. Which assets a customer
+currently holds lives in `customer_assignments`, with `bfa_assets.current_customer_id`
+as the live pointer — occupants change over time, and that history is not this
+screen's to rewrite. Nothing here creates, closes or moves an assignment.
+
+### Why the AG renewal date is conditional
+
+The AG renewal notice ([PRD § 6.9](/docs/prd)) fires against `ag_renewal_date`.
+An agricultural customer without one is a notice that can never be scheduled, so
+the date is required at the point the rate is chosen rather than left for the
+workflow to discover. The form only shows the field on the agricultural rate.
+
+Going the other way clears it. Moving a customer back to the standard rate
+writes NULL, in the form *and* in the procedure — a stale date left on the row
+is a notice that fires for a customer who is no longer on that rate. A request
+that sends a renewal date alongside the standard rate is refused outright rather
+than having the date quietly dropped, so a client cannot believe it stored one.
+
+### What suspension actually does
+
+Suspending a customer pauses all automated email for the assets currently
+assigned to them. Per the [confirmed decision](/docs/prd#9-confirmed-decisions-client-qa-log),
+this is not a per-email skip: the asset's whole notice pipeline holds until the
+WP attaches a different customer to the BIN.
+
+That consequence reaches past this table, so the screen says so in three places
+rather than leaving "suspended" to be interpreted:
+
+- the status field in the form warns as soon as *Suspended* is selected,
+- the **Suspend** button asks for confirmation and repeats the sentence,
+- a suspended row carries *Automated email paused* under its status badge.
+
+Reactivating goes straight through with no confirmation — restoring email is not
+the destructive direction. Nothing is deleted either way, and assignments are
+untouched, so the switch is reversible from the same button.
+
+This release does not change the notice scheduler. It sets the flag the
+scheduler will read; [Workflow 1](/docs/build-plan) is where the hold is
+enforced at send time.
+
+## Procedures
+
+`customers.*` in `packages/api/src/routers/customers.ts`. All three sit behind
+`wpProcedure`.
+
+| Procedure | Does |
+|---|---|
+| `listCustomers` | Every customer in the caller's purveyor, A–Z |
+| `createCustomer` | One new customer, filed under the caller's purveyor |
+| `updateCustomer` | Rewrites one record — every field is sent, so an omitted optional field is one being cleared |
+
+Status changes go through `updateCustomer` rather than a fourth procedure: the
+form and the suspend button are the same write, and one write means one place
+where the agricultural rule is checked.
+
+### A save that changes nothing writes nothing
+
+The whole record is sent on every save, so a request that edits a field and one
+that opens the dialog and presses save look identical on the wire.
+`updateCustomer` compares the incoming values against the row it already read
+and, when every writable column matches, returns that row without touching the
+table.
+
+Writing anyway would make two records lie. `updated_at` would come to mean "when
+somebody last pressed save" rather than when the row last changed, and the audit
+trail would carry a `customer_updated` line for a modification that never
+happened — the one thing an audit trail must not do.
+
+The comparison is driven off `customerColumns`' own keys, so a column added to
+the write set is compared here too. It is an identity check on strings, enums
+and nulls; clearing an optional field to `null` is a real change and is written.
+
+### `wpProcedure`
+
+A new procedure base next to `superAdminProcedure`, in `packages/api/src/index.ts`.
+It enforces two things:
+
+- the caller holds one of `wp_admin`, `wp_sub_admin`, `wp_employee` — a
+  Super-Admin or a certifier is refused rather than quietly handed an empty
+  list;
+- the caller's profile carries a `water_purveyor_id`. A WP role without one is a
+  broken row, and since every query scopes by that id, letting it through would
+  turn a data problem into an unscoped read.
+
+It puts the id back on the context narrowed to `string`, so downstream
+procedures cannot forget the null case — by then there isn't one.
+
+### Tenant scoping
+
+The tenant is never an input. There is no `waterPurveyorId` field on any
+customer procedure's schema, so a client has nowhere to ask for somebody else's
+— and Zod strips it if one is sent anyway.
+
+Reads and writes both carry the caller's purveyor in the query predicate.
+`updateCustomer` matches on **both** `customers.id` and `water_purveyor_id`, for
+the read that precedes the write as well as the write itself. A customer id from
+another tenant therefore matches no row and comes back as a not-found: it cannot
+be read, and it cannot be modified.
+
+That matters because these procedures run through the privileged Drizzle
+connection, which bypasses RLS. The procedure layer is the application's
+authorization boundary; the policies below are a second, independent one.
+
+## Row policies
+
+`0003_customer_policies` adds the `customers` policies. RLS was enabled on the
+table in the first migration; until now it had no policies at all, so nothing
+reaching the table through PostgREST could see a row.
+
+| Policy | Who | What |
+|---|---|---|
+| `customers_all_super_admin` | `super_admin` | Read, insert and update, in every tenant |
+| `customers_select_own_wp` | all three WP roles | Read rows where `water_purveyor_id` matches their own |
+| `customers_insert_own_wp` | all three WP roles | Insert rows into their own purveyor |
+| `customers_update_own_wp` | all three WP roles | Update rows in their own purveyor, and only into it |
+
+Caller resolution goes through the `private.current_global_role()` and
+`private.current_wp_id()` helpers from `0001`, so a blocked profile resolves to
+NULL and keeps no access at all — same as everywhere else.
+
+Three deliberate omissions:
+
+- **No DELETE for anybody, Super-Admin included.** A customer is referenced by
+  `bfa_assets.current_customer_id`, by `customer_assignments` occupancy history
+  and by `scheduled_jobs`; deleting one would take past occupancy with it.
+  Suspension is the reversible switch that exists instead.
+
+  The Super-Admin policy is written `FOR ALL` and still cannot delete: the
+  single `GRANT SELECT, INSERT, UPDATE` is what withholds the privilege, and no
+  policy can hand back one that was never granted. A Postgres policy takes one
+  command or all of them, so `FOR ALL` states the policy's own scope — the
+  effective access is that intersected with the grant. `customers-rls.test.ts`
+  asserts the refusal rather than trusting the reading.
+- **`WITH CHECK` on the update policy as well as `USING`.** They answer different
+  questions — which rows can be reached, and what they may be turned into.
+  Without the second, a WP could hand its own customer to another purveyor by
+  writing a different `water_purveyor_id`.
+- **No certifier read path yet.** The build plan describes one — customers
+  reachable through `bfa_assets.current_customer_id` for an authorized purveyor,
+  for wizard prefill. It belongs with the wizard; granting it now would open the
+  table to a role with no screen for it.
+
+## Audit logging
+
+Every write emits one structured JSON line, the same shape as `caller_resolved`
+and `water_purveyor_status_changed`:
+
+| Event | When |
+|---|---|
+| `customer_created` | A record is created |
+| `customer_updated` | A record actually changed — never for a save that changed nothing |
+| `customer_status_changed` | …and the status was part of what moved, carrying `from` and `to` |
+
+Each carries `actor_id`, `customer_id`, `wp_id` and `timestamp`. The status
+change gets its own line rather than hiding inside the generic update, because
+it is the field whose effect leaves this table.
+
+## The screen
+
+`/wp/customers`, in the standard WP shell. The table shows name, account number,
+email, rate category, status, and per-row **Edit** and **Suspend** /
+**Reactivate** actions. Create and edit are the same dialog form — the only
+differences are the starting values and the button label.
+
+Design notes, from the [design system](/docs/design-system): agricultural uses
+the purple tint pair, statuses use the success and warning tint pairs, and the
+page title is the only Sora on the screen. Colours come from the tokens in
+`packages/ui/src/styles/globals.css`, not from hex values in the components.
+
+The screen also introduced `Select` to `packages/ui` — the popup twin of
+`Input`, built on Base UI and styled from the same tokens, because a native
+`<select>` cannot carry the approved control and menu surfaces.
+
+## Tests
+
+| Suite | Runs | Covers |
+|---|---|---|
+| `packages/api/src/lib/customer-input.test.ts` | `npm test` | The validation rules on their own — no database |
+| `apps/web/src/components/wp/customer-form.test.tsx` | `npm test` | What the form sends; the conditional AG date; the suspension warning |
+| `apps/web/src/components/wp/customers-table.test.tsx` | `npm test` | The suspend confirmation and reactivate paths; empty and error states |
+| `packages/api/src/routers/customers.test.ts` | `npm run test:db` | Who may call the procedures, and a cross-WP update attempt |
+| `packages/db/src/customers-rls.test.ts` | `npm run test:db` | The row policies, as the `authenticated` role |
+
+The two database suites seed two purveyors with deliberately interchangeable
+customers — same name, same email — so a leak between them looks like a leak
+rather than like a plausible row.
+
+## Related pages
+
+- [Product Requirements Document](/docs/prd) — § 6.6.4, and the confirmed
+  decisions on suspension and asset ↔ customer cardinality.
+- [Build Plan](/docs/build-plan) — the task list this page closes.
+- [Design System](/docs/design-system) — the tokens the screen is built from.

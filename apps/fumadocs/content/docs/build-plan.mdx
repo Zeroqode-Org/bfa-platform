@@ -540,6 +540,8 @@ The certifier's own immutability rule does not extend to the WP — full field-l
 
 **Done when:** a WP can create a customer, mark them agricultural with a renewal date, and suspend them; suspension is visible from the asset view too, not only the customer list.
 
+**Status: done**, except the asset-view half of the acceptance criterion, which waits on the assets screen (6.6.2). Steps 1–5 all shipped, plus the `wpProcedure` base every other WP screen will sit on and a `Select` primitive in `packages/ui`. The certifier read path described under `customers` above is deliberately not in the migration — it belongs with the wizard. Full writeup: [WP Customers](/docs/wp-customers).
+
 ### WP dashboard — certifiers
 
 **Owner:** Daniil.
