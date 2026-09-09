@@ -569,6 +569,8 @@ The certifier's own immutability rule does not extend to the WP — full field-l
 
 **Done when:** deactivating a company removes it from the active list used by the failure notice, without deleting history.
 
+**Status: done.** All three steps shipped. `0005_repair_company_policies` gives the table its first row policies — WP-scoped read/insert/update, Super-Admin across tenants, nothing for a certifier, and no DELETE grant for anybody. The management table lists both statuses so an inactive company can still be corrected or reactivated; the failure workflow (6.8) does the `status = 'active'` filtering at send time and is still planned. Full writeup: [WP Repair Companies](/docs/wp-repair-companies).
+
 ### WP dashboard — notices and email settings
 
 **Owner:** Daniil.

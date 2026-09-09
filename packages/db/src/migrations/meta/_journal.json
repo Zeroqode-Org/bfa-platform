@@ -36,6 +36,13 @@
 			"when": 1789900000000,
 			"tag": "0004_bfa_asset_policies",
 			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "7",
+			"when": 1790160000000,
+			"tag": "0005_repair_company_policies",
+			"breakpoints": true
 		}
 	]
 }

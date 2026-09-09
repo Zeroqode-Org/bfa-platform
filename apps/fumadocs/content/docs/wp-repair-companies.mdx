@@ -1,0 +1,212 @@
+---
+title: WP Repair Companies
+description: How a water purveyor keeps its approved repair firms — the repair-companies screen, its procedures, and the row policies behind them
+---
+
+Repair companies are the firms a water purveyor approves for backflow-assembly
+repairs. They never sign in: there is no repair-company role and no self-service
+path to any of this. Every record is created and maintained by the water
+purveyor that owns it, from `/wp/repair-companies`.
+
+The list exists for one downstream reason. When a certifier submits a failed
+test, the failure notice tells the customer who to call — and it names this
+purveyor's companies with `status = 'active'`, resolved at send time.
+
+This page describes the screen as built. It covers *WP dashboard — repair
+companies* in the [build plan](/docs/build-plan) and PRD § 6.6.5.
+
+## What a repair-company record is
+
+| Field | Required | Notes |
+|---|---|---|
+| `company_name` | yes | Trimmed; a name of only spaces is empty, not valid |
+| `phone` | no | Blank is stored as NULL, never as `''`; no format is imposed |
+| `email` | no | Blank is NULL — but an address that *is* given has to be one, lowercased and trimmed |
+| `status` | yes | `active` or `inactive` — see below |
+| `water_purveyor_id` | — | Never sent by the client; derived from the caller |
+
+Both contact columns are nullable, so a company reachable by phone alone is a
+real record. Optional does not mean unvalidated: an address that is present goes
+into a failure notice, and a typo there is a repair company the customer cannot
+reach — so a blank email collapses to NULL and anything else must parse.
+
+There is no foreign key from `test_submissions` to this table. The failure
+workflow joins on `water_purveyor_id` when it composes the email; it does not
+pin a submission to a company.
+
+### What deactivation actually does
+
+Deactivating a company stops it appearing in future failure notices. That is the
+whole effect, and it reaches past this table, so the screen says so in three
+places rather than leaving "inactive" to be interpreted:
+
+- the status field in the form warns as soon as *Inactive* is selected,
+- the **Deactivate** button asks for confirmation and repeats the sentence,
+- an inactive row carries *Not in failure notices* under its status badge.
+
+Reactivating goes straight through with no confirmation — putting a company back
+on the list is not the destructive direction.
+
+### Why nothing here deletes
+
+There is no delete procedure, no delete control on the screen, and no DELETE
+grant in the migration. A notice sent last year named the companies that were
+approved last year; a row that can be removed is a record of that which can be
+made never to have happened.
+
+`status = 'inactive'` is the reversible switch that exists instead. It gives the
+purveyor exactly what deletion would have — the company stops being recommended
+— without editing history. The screen keeps listing inactive companies for the
+same reason: this is the management table, and a company that vanished when it
+was deactivated could never be corrected or brought back.
+
+This release does not change the failure workflow. It sets the flag that
+workflow will read; [Workflow 3](/docs/build-plan) is where the filter is applied
+at send time.
+
+## Procedures
+
+`repairCompanies.*` in `packages/api/src/routers/repair-companies.ts`. All three
+sit behind `wpProcedure` — the same base the customer and asset screens use, so
+a certifier and a Super-Admin are both refused rather than quietly handed a list.
+
+| Procedure | Does |
+|---|---|
+| `listRepairCompanies` | Every company in the caller's purveyor, A–Z, both statuses |
+| `createRepairCompany` | One new company, filed under the caller's purveyor, active by default |
+| `updateRepairCompany` | Rewrites one record — every field is sent, so an omitted optional field is one being cleared |
+
+Status changes go through `updateRepairCompany` rather than a fourth procedure:
+the form and the deactivate button are the same write, and one write means one
+place where the field rules are checked.
+
+The list is ordered by `company_name` then `id`. The tie-break is what keeps two
+companies with the same name from swapping places between refetches.
+
+### A save that changes nothing writes nothing
+
+The whole record is sent on every save, so a request that edits a field and one
+that opens the dialog and presses save look identical on the wire.
+`updateRepairCompany` compares the incoming values against the row it already
+read and, when every writable column matches, returns that row without touching
+the table.
+
+Writing anyway would make two records lie. `updated_at` would come to mean "when
+somebody last pressed save" rather than when the row last changed, and the audit
+trail would carry a `repair_company_updated` line for a modification that never
+happened — the one thing an audit trail must not do.
+
+The comparison is driven off `repairCompanyColumns`' own keys, so a column added
+to the write set is compared here too. Clearing a contact field to `null` is a
+real change and is written.
+
+### Tenant scoping
+
+The tenant is never an input. There is no `waterPurveyorId` field on any
+repair-company procedure's schema, so a client has nowhere to ask for somebody
+else's — and Zod strips it if one is sent anyway.
+
+Reads and writes both carry the caller's purveyor in the query predicate.
+`updateRepairCompany` matches on **both** `repair_companies.id` and
+`water_purveyor_id`, for the read that precedes the write as well as the write
+itself. A company id from another tenant therefore matches no row and comes back
+as a not-found: it cannot be read, and it cannot be modified.
+
+That matters because these procedures run through the privileged Drizzle
+connection, which bypasses RLS. The procedure layer is the application's
+authorization boundary; the policies below are a second, independent one.
+
+## Row policies
+
+`0005_repair_company_policies` adds the `repair_companies` policies. RLS was
+enabled on the table in the first migration; until now it had no policies at
+all, so nothing reaching the table through PostgREST could see a row.
+
+| Policy | Who | What |
+|---|---|---|
+| `repair_companies_all_super_admin` | `super_admin` | Read, insert and update, in every tenant |
+| `repair_companies_select_own_wp` | all three WP roles | Read rows where `water_purveyor_id` matches their own |
+| `repair_companies_insert_own_wp` | all three WP roles | Insert rows into their own purveyor |
+| `repair_companies_update_own_wp` | all three WP roles | Update rows in their own purveyor, and only into it |
+
+Caller resolution goes through the `private.current_global_role()` and
+`private.current_wp_id()` helpers from `0001`, so a blocked profile resolves to
+NULL and keeps no access at all — same as everywhere else.
+
+Four deliberate decisions:
+
+- **No certifier access, of any kind.** A certifier records that an assembly
+  failed; who the purveyor recommends for the repair is the purveyor's own list,
+  and it reaches the customer through the failure notice rather than through the
+  wizard.
+- **No DELETE for anybody, Super-Admin included.** The grants are what withhold
+  it, and no policy can hand back a privilege that was never granted. The
+  Super-Admin policy is written `FOR ALL` and still cannot delete: a Postgres
+  policy takes one command or all of them, so `FOR ALL` states the policy's own
+  scope — effective access is that intersected with the grant.
+  `repair-companies-rls.test.ts` asserts the refusal rather than trusting the
+  reading.
+- **Column grants rather than a bare table grant**, the same way `bfa_assets` is
+  written in `0004`. `water_purveyor_id` is missing from the UPDATE grant: a
+  repair company never changes tenant, so the privilege is simply not handed
+  over.
+- **`WITH CHECK` on the update policy as well as `USING`.** They answer different
+  questions — which rows can be reached, and what they may be turned into. The
+  column grant already refuses a tenant change; the policy says it a second time,
+  for the day a later migration widens that grant.
+
+## Audit logging
+
+Every write emits one structured JSON line, the same shape as `customer_created`
+and `caller_resolved`:
+
+| Event | When |
+|---|---|
+| `repair_company_created` | A record is created |
+| `repair_company_updated` | A record actually changed — never for a save that changed nothing |
+| `repair_company_status_changed` | …and the status was part of what moved, carrying `from` and `to` |
+
+Each carries `actor_id`, `repair_company_id`, `wp_id` and `timestamp`. The status
+change gets its own line rather than hiding inside the generic update, because it
+is the field whose effect leaves this table.
+
+## The screen
+
+`/wp/repair-companies`, in the standard WP shell. The table shows company name,
+phone, email, status, and per-row **Edit** and **Deactivate** / **Reactivate**
+actions. There is no delete control. Create and edit are the same dialog form —
+the only differences are the starting values and the button label.
+
+The page copy states the rule that makes the screen matter: only active companies
+are listed in a failure notice, and the list is resolved when the notice is sent.
+
+Design notes, from the [design system](/docs/design-system): statuses use the
+success and warning tint pairs, the deactivate action uses the danger button
+until the row is already inactive, and the page title is the only Sora on the
+screen. Colours come from the tokens in `packages/ui/src/styles/globals.css`, not
+from hex values in the components.
+
+## Tests
+
+| Suite | Runs | Covers |
+|---|---|---|
+| `packages/api/src/lib/repair-company-input.test.ts` | `npm test` | The validation rules on their own — no database |
+| `apps/web/src/components/wp/repair-company-form.test.tsx` | `npm test` | What the form sends; blank contact fields as `null`; the deactivation warning |
+| `apps/web/src/components/wp/repair-companies-table.test.tsx` | `npm test` | The deactivate confirmation and reactivate paths; the absence of any delete control; empty and error states |
+| `packages/api/src/routers/repair-companies.test.ts` | `npm run test:db` | Who may call the procedures, a cross-WP update attempt, the no-op save |
+| `packages/db/src/repair-companies-rls.test.ts` | `npm run test:db` | The row policies, as the `authenticated` role |
+
+The two database suites seed two purveyors with deliberately interchangeable
+companies — same name, same phone, same email — so a leak between them looks like
+a leak rather than like a plausible row.
+
+The RLS suite is a separate boundary on purpose. The API suite runs through the
+privileged connection, which bypasses RLS entirely, so nothing it asserts says
+anything about whether the policies work.
+
+## Related pages
+
+- [Product Requirements Document](/docs/prd) — § 6.6.5 and § 6.8.
+- [Build Plan](/docs/build-plan) — the task list this page closes.
+- [WP Customers](/docs/wp-customers) — the screen this one is modelled on.
+- [Design System](/docs/design-system) — the tokens the screen is built from.

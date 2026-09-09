@@ -23,7 +23,7 @@ Target delivery: **2026-10-02** (~6 weeks from kickoff on 2026-08-24). Team: **L
 
 ## Task tracker
 
-Status as of **2026-09-09**. Update this table as work progresses — this is the source of truth, not the phase table above.
+Status as of **2026-09-10**. Update this table as work progresses — this is the source of truth, not the phase table above.
 
 | Task | PRD § | Owner | Start | End | Status |
 |---|---|---|---|---|---|
@@ -38,7 +38,7 @@ Status as of **2026-09-09**. Update this table as work progresses — this is th
 | WP Dashboard — BFA Assets | 6.6.2 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Certifiers | 6.6.3 | Daniil | 09/07 | 09/11 | planned |
 | WP Dashboard — Customers | 6.6.4 | Daniil | 09/07 | 09/11 | done |
-| WP Dashboard — Repair Companies | 6.6.5 | Daniil | 09/07 | 09/11 | planned |
+| WP Dashboard — Repair Companies | 6.6.5 | Daniil | 09/07 | 09/11 | done |
 | Certifier WP Selector | 6.4 | Lina | 09/07 | 09/11 | planned |
 | WP Dashboard — Submitted Tests | 6.6.6 | Lina | 09/14 | 09/18 | planned |
 | WP Dashboard — Notices & Email Settings | 6.6.7 | Daniil | 09/14 | 09/18 | planned |
@@ -73,6 +73,15 @@ occupant. The annual test date entered here is what Workflow 1 will schedule
 against — that scheduler is still planned, and nothing yet recomputes
 `asset_status`, which the screen therefore shows read-only. Full writeup:
 [WP BFA Assets](/docs/wp-bfa-assets).
+
+**WP Dashboard — Repair Companies (6.6.5)**: shipped. `/wp/repair-companies`
+creates, edits and deactivates approved repair firms through three WP-scoped
+procedures, and `repair_companies` has row policies for the first time.
+Deactivation flips `status` to `inactive` and nothing else — there is no delete
+procedure, no delete control and no DELETE grant, so a company that stops being
+recommended keeps the record a past failure notice was built from. The workflow
+that reads `status = 'active'` at send time is Workflow 3 and is still planned.
+Full writeup: [WP Repair Companies](/docs/wp-repair-companies).
 
 **Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
 
