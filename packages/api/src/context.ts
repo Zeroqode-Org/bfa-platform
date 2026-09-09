@@ -1,5 +1,5 @@
 import { db } from "@bfa-platform/db";
-import { profiles } from "@bfa-platform/db/schema";
+import { certifiers, profiles } from "@bfa-platform/db/schema";
 import { env } from "@bfa-platform/env/web";
 import {
 	createServerClient,
@@ -64,6 +64,19 @@ export type Caller = {
  * Drizzle service connection, not the anon Supabase client — `profiles` has no
  * RLS policies yet, so a PostgREST read would return nothing. Throws typed
  * `TRPCError`; never returns null to signal a permission failure.
+ *
+ * Two switches can block an account, not one. `profiles.status` is the
+ * platform-wide one a Super-Admin sets. `certifiers.status` is the one a water
+ * purveyor sets from `/wp/certifiers`, and it is checked here for the same
+ * reason the first one is: this function is the only gate between a valid
+ * Supabase session and every protected procedure, so a flag that is not read
+ * here is a flag the application does not act on. The row policies enforce the
+ * same rule for anything arriving through PostgREST — `0006_certifier_policies`
+ * folds it into `private.current_global_role()`.
+ *
+ * The join is a left join, and the certifier column is consulted only for the
+ * certifier role. A WP clerk or a Super-Admin has no `certifiers` row, and a
+ * blocked one belonging to somebody else must never reach this decision.
  */
 export async function resolveCaller(
 	_supabase: SupabaseClient,
@@ -79,8 +92,10 @@ export async function resolveCaller(
 			globalRole: profiles.globalRole,
 			waterPurveyorId: profiles.waterPurveyorId,
 			status: profiles.status,
+			certifierStatus: certifiers.status,
 		})
 		.from(profiles)
+		.leftJoin(certifiers, eq(certifiers.profileId, profiles.id))
 		.where(eq(profiles.id, user.id))
 		.limit(1);
 
@@ -91,7 +106,12 @@ export async function resolveCaller(
 		});
 	}
 
-	if (row.status === "blocked") {
+	// One message for both switches. Which flag is set is the purveyor's or the
+	// Super-Admin's business, not something to be read off a sign-in screen.
+	if (
+		row.status === "blocked" ||
+		(row.globalRole === "certifier" && row.certifierStatus === "blocked")
+	) {
 		throw new TRPCError({ code: "FORBIDDEN", message: "Account blocked" });
 	}
 

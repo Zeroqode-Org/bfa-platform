@@ -1,0 +1,88 @@
+import type { AppRouter } from "@bfa-platform/api/routers/index";
+import type { inferRouterOutputs } from "@trpc/server";
+
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+
+/** One row of `certifiers.listWpCertifiers`, as the server returns it. */
+export type WpCertifier =
+	RouterOutputs["certifiers"]["listWpCertifiers"][number];
+
+export type CertifierStatus = WpCertifier["status"];
+
+/**
+ * Status wording and colour, from the design system's tint pairs. Kept here
+ * rather than in the table so the badge and the confirmation dialog cannot
+ * label the same row differently.
+ */
+export const CERTIFIER_STATUS_LABELS: Record<CertifierStatus, string> = {
+	active: "Active",
+	blocked: "Blocked",
+};
+
+export const CERTIFIER_STATUS_VARIANTS = {
+	active: "success",
+	blocked: "danger",
+} as const;
+
+/**
+ * What blocking actually does. Shown wherever a certifier can be blocked, from
+ * here, so the table and the confirmation cannot describe it differently.
+ *
+ * Blocking writes `certifiers.status`, which is a single global column — not a
+ * per-purveyor one. A certifier holds one account across every purveyor that
+ * authorized them, so blocking from this screen removes their access to the
+ * whole platform, including the work they do for purveyors this WP has nothing
+ * to do with. That is the specified behaviour, and it is severe enough that the
+ * dialog states it outright rather than leaving "blocked" to be interpreted.
+ *
+ * The wording is unconditional — it does not say whether *this* certifier works
+ * for anyone else. It could: `wp_certifier_authorizations` has the count. But
+ * that count is another tenant's business, and a screen that said "also works
+ * for 2 other purveyors" would be leaking the existence of those purveyors
+ * across the tenant boundary the rest of this feature is built to hold. Stating
+ * the rule is honest and leaks nothing.
+ */
+export const BLOCK_WARNING =
+	"Blocking removes this certifier's access to the whole platform, not just to your dashboard.";
+
+/**
+ * The half of the warning that says why the sentence above is wider than this
+ * purveyor. Split out so the table's confirmation can lead with the effect and
+ * follow with the reason.
+ */
+export const BLOCK_SCOPE_NOTE =
+	"A certifier has one account for every water purveyor they work for, so if this one also works for others, they lose access to those too.";
+
+const dateFormatter = new Intl.DateTimeFormat("en-US", {
+	year: "numeric",
+	month: "short",
+	day: "numeric",
+	// The column is a Postgres `date` — a calendar day with no time and no zone.
+	// Formatting it in the reader's local zone would move a licence expiring on
+	// the 1st to the 31st for anyone west of UTC, so it is read back as UTC.
+	timeZone: "UTC",
+});
+
+/** A `YYYY-MM-DD` column as a date a person reads. */
+export function formatLicenseDate(value: string | null) {
+	if (!value) return "—";
+
+	return dateFormatter.format(new Date(`${value}T00:00:00Z`));
+}
+
+/**
+ * Whether a licence expiry has already passed, as of `today`.
+ *
+ * Compared as calendar strings rather than as `Date`s: both sides are a plain
+ * day, and turning them into instants would reintroduce the timezone question
+ * the formatter above is careful to avoid. An absent date is not expired — it
+ * is unknown, and the column already shows a dash for it.
+ */
+export function isLicenseExpired(
+	value: string | null,
+	today: Date = new Date(),
+) {
+	if (!value) return false;
+
+	return value < today.toISOString().slice(0, 10);
+}
