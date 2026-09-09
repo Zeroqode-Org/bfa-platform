@@ -69,15 +69,18 @@ async function insertInvitation(overrides: {
 	role: "wp_admin" | "wp_sub_admin" | "wp_employee" | "certifier";
 	secret: string;
 	associatedWpId?: string | null;
+	proposedWaterPurveyorName?: string;
 	expiresAt?: Date;
 	status?: "pending" | "redeemed" | "expired";
 	isRedeemed?: boolean;
 }) {
 	const id = randomUUID();
+	const associatedWpId =
+		overrides.associatedWpId === undefined ? wpA : overrides.associatedWpId;
 
 	await pool.query(
-		`insert into invitations (id, email, role, token, status, expires_at, associated_wp_id, is_redeemed)
-		 values ($1, $2, $3::invitation_role, $4, $5::invitation_status, $6, $7, $8)`,
+		`insert into invitations (id, email, role, token, status, expires_at, associated_wp_id, proposed_water_purveyor_name, is_redeemed)
+		 values ($1, $2, $3::invitation_role, $4, $5::invitation_status, $6, $7, $8, $9)`,
 		[
 			id,
 			overrides.email,
@@ -85,7 +88,12 @@ async function insertInvitation(overrides: {
 			hashInvitationSecret(overrides.secret),
 			overrides.status ?? "pending",
 			overrides.expiresAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-			overrides.associatedWpId === undefined ? wpA : overrides.associatedWpId,
+			associatedWpId,
+			// The check constraint ties this to the shape of the row: a name
+			// exactly when the invitation provisions a purveyor, never otherwise.
+			associatedWpId === null
+				? (overrides.proposedWaterPurveyorName ?? "Brand New Water District")
+				: null,
 			overrides.isRedeemed ?? false,
 		],
 	);
@@ -293,22 +301,33 @@ describeDb("redeemInvitation", () => {
 			});
 		});
 
-		it("provisions a purveyor and its first admin together for a null-WP invitation", async () => {
+		it("creates the purveyor with the name from the invitation, never from the form", async () => {
 			const secret = `newwp-${randomUUID()}`;
-			await insertInvitation({
+			const invitationId = await insertInvitation({
 				email: "redeem.newwp@example.com",
 				role: "wp_admin",
 				secret,
 				associatedWpId: null,
+				proposedWaterPurveyorName: "Riverside Water District",
 			});
 			const { admin } = fakeAuthAdmin();
+
+			// The screen shows the name the Super-Admin already chose instead of
+			// asking for one, so the redemption input carries no company name.
+			const inspection = await redemption.inspectInvitation(secret, {
+				authAdmin: admin,
+			});
+			expect(inspection).toMatchObject({
+				state: "valid",
+				mode: "new_water_purveyor",
+				invitation: { waterPurveyorName: "Riverside Water District" },
+			});
 
 			const result = await redemption.redeemInvitation(
 				{
 					secret,
 					password: "correct horse battery",
 					fullName: "First Admin",
-					companyName: "Brand New Water District",
 				},
 				{ authAdmin: admin },
 			);
@@ -321,7 +340,11 @@ describeDb("redeemInvitation", () => {
 				[result.waterPurveyorId],
 			);
 			expect(rows[0]).toMatchObject({
-				company_name: "Brand New Water District",
+				company_name: "Riverside Water District",
+			});
+			expect(await invitationRow(invitationId)).toEqual({
+				status: "redeemed",
+				is_redeemed: true,
 			});
 		});
 

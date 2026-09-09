@@ -27,6 +27,13 @@ const createInvitationInput = z.object({
 	 * than ignored. Explicit null provisions a brand-new purveyor.
 	 */
 	waterPurveyorId: z.uuid().nullish(),
+	/**
+	 * The name of the water purveyor this invitation will create. Super-Admin
+	 * only, required when `waterPurveyorId` is null and rejected otherwise —
+	 * `resolveInvitationTarget` decides which, and a check constraint on the
+	 * table refuses any row that got past it.
+	 */
+	proposedWaterPurveyorName: z.string().trim().min(1).max(200).optional(),
 	expiresInDays: z.int().min(1).max(30).default(DEFAULT_INVITATION_TTL_DAYS),
 });
 
@@ -48,19 +55,23 @@ export const invitationsRouter = router({
 	createInvitation: protectedProcedure
 		.input(createInvitationInput)
 		.mutation(async ({ ctx, input }) => {
-			const { associatedWpId } = resolveInvitationTarget(ctx.caller, {
-				role: input.role,
-				// `nullish` collapses "absent" and "explicitly null" in Zod's output,
-				// so read the raw key to keep the distinction the resolver needs.
-				waterPurveyorId:
-					"waterPurveyorId" in input
-						? (input.waterPurveyorId ?? null)
-						: undefined,
-			});
+			const { associatedWpId, proposedWaterPurveyorName } =
+				resolveInvitationTarget(ctx.caller, {
+					role: input.role,
+					// `nullish` collapses "absent" and "explicitly null" in Zod's output,
+					// so read the raw key to keep the distinction the resolver needs.
+					waterPurveyorId:
+						"waterPurveyorId" in input
+							? (input.waterPurveyorId ?? null)
+							: undefined,
+					proposedWaterPurveyorName: input.proposedWaterPurveyorName,
+				});
 
+			// The name shown in the email: the existing purveyor's, or — for an
+			// invitation that creates one — the name it will be created with.
 			const purveyorName = associatedWpId
 				? await loadPurveyorName(associatedWpId)
-				: null;
+				: proposedWaterPurveyorName;
 
 			const { secret, tokenHash } = createInvitationToken();
 			const expiresAt = invitationExpiry(input.expiresInDays);
@@ -74,6 +85,7 @@ export const invitationsRouter = router({
 					status: "pending",
 					expiresAt,
 					associatedWpId,
+					proposedWaterPurveyorName,
 					invitedByProfileId: ctx.caller.profileId,
 					isRedeemed: false,
 				})
@@ -83,6 +95,7 @@ export const invitationsRouter = router({
 					role: invitations.role,
 					expiresAt: invitations.expiresAt,
 					associatedWpId: invitations.associatedWpId,
+					proposedWaterPurveyorName: invitations.proposedWaterPurveyorName,
 				});
 
 			if (!invitation) {
@@ -100,6 +113,7 @@ export const invitationsRouter = router({
 					recipient: invitation.email,
 					role: invitation.role,
 					wp_id: invitation.associatedWpId,
+					proposed_wp_name: invitation.proposedWaterPurveyorName,
 					expires_at: invitation.expiresAt.toISOString(),
 					timestamp: new Date().toISOString(),
 				}),
@@ -137,6 +151,7 @@ export const invitationsRouter = router({
 				role: invitation.role,
 				expiresAt: invitation.expiresAt,
 				waterPurveyorId: invitation.associatedWpId,
+				proposedWaterPurveyorName: invitation.proposedWaterPurveyorName,
 			};
 		}),
 });

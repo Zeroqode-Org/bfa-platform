@@ -50,6 +50,8 @@ Status as of **2026-09-09**. Update this table as work progresses — this is th
 | Landing Page | 6.13 | Lina | 09/28 | 10/02 | planned |
 | QA & Testing | 6.17 | — | 08/24 | 10/02 | in-progress |
 
+**Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
+
 **Transactional Email Integration (6.14)** stays *in-progress* on purpose. Its first step — the send helper and `consoleDriver` — shipped with onboarding, and every mail path in the app already runs through it. What remains is the provider account, the sender domain and DKIM record, and `providerDriver` itself, which needs credentials that do not exist yet. See [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer).
 
 ## Known deviation from the kickoff runbook

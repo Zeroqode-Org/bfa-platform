@@ -38,7 +38,7 @@ describe("resolveInvitationTarget — role permissions", () => {
 		for (const role of ["wp_admin", "wp_sub_admin", "wp_employee"] as const) {
 			expect(
 				resolveInvitationTarget(caller(role, WP_A), { role: "certifier" }),
-			).toEqual({ associatedWpId: WP_A });
+			).toEqual({ associatedWpId: WP_A, proposedWaterPurveyorName: null });
 		}
 	});
 
@@ -79,7 +79,7 @@ describe("resolveInvitationTarget — tenant authorization", () => {
 				role: "certifier",
 				waterPurveyorId: WP_A,
 			}),
-		).toEqual({ associatedWpId: WP_A });
+		).toEqual({ associatedWpId: WP_A, proposedWaterPurveyorName: null });
 	});
 
 	it("refuses a WP role trying to provision a brand-new purveyor", () => {
@@ -93,17 +93,51 @@ describe("resolveInvitationTarget — tenant authorization", () => {
 		);
 	});
 
+	it("refuses a WP role that so much as names a purveyor to create", () => {
+		for (const role of ["wp_admin", "wp_sub_admin", "wp_employee"] as const) {
+			reject(
+				() =>
+					resolveInvitationTarget(caller(role, WP_A), {
+						role: "wp_admin",
+						proposedWaterPurveyorName: "Sneaky Water District",
+					}),
+				"FORBIDDEN",
+			);
+		}
+	});
+
+	it("refuses a certifier naming a purveyor to create", () => {
+		reject(
+			() =>
+				resolveInvitationTarget(caller("certifier"), {
+					role: "wp_admin",
+					proposedWaterPurveyorName: "Sneaky Water District",
+				}),
+			"FORBIDDEN",
+		);
+	});
+
 	it("lets a Super-Admin provision a new purveyor with a null WP", () => {
 		expect(
-			resolveInvitationTarget(caller("super_admin"), { role: "wp_admin" }),
-		).toEqual({ associatedWpId: null });
+			resolveInvitationTarget(caller("super_admin"), {
+				role: "wp_admin",
+				proposedWaterPurveyorName: "Riverside Water District",
+			}),
+		).toEqual({
+			associatedWpId: null,
+			proposedWaterPurveyorName: "Riverside Water District",
+		});
 
 		expect(
 			resolveInvitationTarget(caller("super_admin"), {
 				role: "wp_admin",
 				waterPurveyorId: null,
+				proposedWaterPurveyorName: "  Riverside Water District  ",
 			}),
-		).toEqual({ associatedWpId: null });
+		).toEqual({
+			associatedWpId: null,
+			proposedWaterPurveyorName: "Riverside Water District",
+		});
 	});
 
 	it("lets a Super-Admin invite into any existing purveyor", () => {
@@ -112,13 +146,16 @@ describe("resolveInvitationTarget — tenant authorization", () => {
 				role: "wp_employee",
 				waterPurveyorId: WP_B,
 			}),
-		).toEqual({ associatedWpId: WP_B });
+		).toEqual({ associatedWpId: WP_B, proposedWaterPurveyorName: null });
 	});
 
 	it("refuses a null purveyor for any role but wp_admin", () => {
 		reject(
 			() =>
-				resolveInvitationTarget(caller("super_admin"), { role: "wp_employee" }),
+				resolveInvitationTarget(caller("super_admin"), {
+					role: "wp_employee",
+					proposedWaterPurveyorName: "Riverside Water District",
+				}),
 			"BAD_REQUEST",
 		);
 	});
@@ -129,6 +166,39 @@ describe("resolveInvitationTarget — tenant authorization", () => {
 				resolveInvitationTarget(caller("super_admin"), {
 					role: "certifier",
 					waterPurveyorId: null,
+				}),
+			"BAD_REQUEST",
+		);
+	});
+});
+
+describe("resolveInvitationTarget — the purveyor name", () => {
+	it("requires a name on an invitation that creates a purveyor", () => {
+		reject(
+			() =>
+				resolveInvitationTarget(caller("super_admin"), { role: "wp_admin" }),
+			"BAD_REQUEST",
+		);
+	});
+
+	it("treats a blank name as no name at all", () => {
+		reject(
+			() =>
+				resolveInvitationTarget(caller("super_admin"), {
+					role: "wp_admin",
+					proposedWaterPurveyorName: "   ",
+				}),
+			"BAD_REQUEST",
+		);
+	});
+
+	it("refuses a name on an invitation into an existing purveyor", () => {
+		reject(
+			() =>
+				resolveInvitationTarget(caller("super_admin"), {
+					role: "wp_employee",
+					waterPurveyorId: WP_B,
+					proposedWaterPurveyorName: "Riverside Water District",
 				}),
 			"BAD_REQUEST",
 		);

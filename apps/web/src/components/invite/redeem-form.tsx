@@ -27,7 +27,6 @@ const initialState: RedeemState = { error: null };
  */
 export function RedeemForm({ secret, mode, isCertifier }: RedeemFormProps) {
 	const fullNameId = useId();
-	const companyNameId = useId();
 	const passwordId = useId();
 	const confirmPasswordId = useId();
 	const certifierCompanyId = useId();
@@ -54,22 +53,6 @@ export function RedeemForm({ secret, mode, isCertifier }: RedeemFormProps) {
 
 			{isExistingCertifier ? null : (
 				<>
-					{mode === "new_water_purveyor" ? (
-						<div className="flex flex-col gap-1.5">
-							<Label htmlFor={companyNameId}>Company name</Label>
-							<Input
-								id={companyNameId}
-								name="companyName"
-								autoComplete="organization"
-								placeholder="Riverside Water District"
-								required
-							/>
-							<p className="text-[12px] text-muted-foreground">
-								This becomes the water purveyor you administer.
-							</p>
-						</div>
-					) : null}
-
 					<div className="flex flex-col gap-1.5">
 						<Label htmlFor={fullNameId}>Full name</Label>
 						<Input

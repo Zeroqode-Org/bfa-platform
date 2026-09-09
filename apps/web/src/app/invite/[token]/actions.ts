@@ -29,7 +29,6 @@ const redeemSchema = z
 		secret: z.string().min(1),
 		mode: z.enum(["new_profile", "new_water_purveyor", "existing_certifier"]),
 		fullName: z.string().trim().max(200).optional(),
-		companyName: z.string().trim().max(200).optional(),
 		password: z.string().max(200).optional(),
 		confirmPassword: z.string().max(200).optional(),
 		certifierCompany: z.string().trim().max(200).optional(),
@@ -54,10 +53,6 @@ const redeemSchema = z
 			});
 		} else if (value.password !== value.confirmPassword) {
 			ctx.addIssue({ code: "custom", message: "The passwords do not match" });
-		}
-
-		if (value.mode === "new_water_purveyor" && !value.companyName) {
-			ctx.addIssue({ code: "custom", message: "Enter your company name" });
 		}
 
 		if (value.isCertifier === "yes") {
@@ -99,7 +94,6 @@ export async function redeemInvitationAction(
 			secret: input.secret,
 			password: input.password,
 			fullName: input.fullName,
-			companyName: input.companyName,
 			certifier:
 				input.isCertifier === "yes" &&
 				input.certifierCompany &&

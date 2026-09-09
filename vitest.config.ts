@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "vitest/config";
 
 /**
@@ -8,13 +10,20 @@ import { defineConfig } from "vitest/config";
  * `createInvitation` — write real rows, so they are opt-in behind
  * `npm run test:db`, which sets `RUN_DB_TESTS=1`. Without that flag they report
  * as skipped and `vitest.setup.ts` does not even look for `apps/web/.env.local`.
+ *
+ * Component tests opt into a DOM per file with `@vitest-environment jsdom`,
+ * rather than the whole suite paying for one it mostly does not use.
  */
 export default defineConfig({
 	test: {
 		environment: "node",
 		globals: false,
 		setupFiles: ["./vitest.setup.ts"],
-		include: ["packages/**/*.test.ts", "apps/web/**/*.test.ts"],
+		include: [
+			"packages/**/*.test.ts",
+			"apps/web/**/*.test.ts",
+			"apps/web/**/*.test.tsx",
+		],
 		exclude: [
 			"**/node_modules/**",
 			"**/.next/**",
@@ -33,4 +42,15 @@ export default defineConfig({
 		testTimeout: 30_000,
 		hookTimeout: 60_000,
 	},
+	// `@/…` is `apps/web`'s own alias, declared in its tsconfig where Next reads
+	// it. Vitest resolves modules itself, so it needs telling separately.
+	resolve: {
+		alias: {
+			"@": fileURLToPath(new URL("./apps/web/src", import.meta.url)),
+		},
+	},
+	// The React 17+ JSX runtime, matching `apps/web`'s `"jsx": "react-jsx"`.
+	// Without it esbuild falls back to the classic transform and every component
+	// file would need `React` in scope.
+	esbuild: { jsx: "automatic" },
 });

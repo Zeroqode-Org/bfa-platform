@@ -15,8 +15,9 @@ integration*.
 ## The flow end to end
 
 1. A Super-Admin or any WP role calls the `invitations.createInvitation`
-   procedure. The procedure decides which purveyor the invitation belongs to
-   from the caller's own profile — never from the request body.
+   procedure — from the invite-new-WP dialog on `/admin`, or directly. The
+   procedure decides which purveyor the invitation belongs to from the caller's
+   own profile — never from the request body.
 2. A 256-bit secret is generated. Its SHA-256 digest is stored in
    `invitations.token`; the secret itself only ever appears in the email.
 3. The email goes out through the shared send helper. With no provider
@@ -34,12 +35,20 @@ integration*.
 `packages/api/src/routers/invitations.ts`
 
 ```ts
+// Into an existing purveyor — the caller's own, decided server-side.
 await trpc.invitations.createInvitation.mutate({
   email: "certifier@example.com",
   role: "certifier",
-  // Super-Admin only. Omitted or null provisions a brand-new water purveyor.
-  waterPurveyorId: undefined,
   expiresInDays: 7,
+});
+
+// Provisioning a new purveyor. Super-Admin only; this is what the
+// invite-new-WP dialog sends.
+await trpc.invitations.createInvitation.mutate({
+  email: "admin@riversidewater.gov",
+  role: "wp_admin",
+  waterPurveyorId: null,
+  proposedWaterPurveyorName: "Riverside Water District",
 });
 ```
 
@@ -63,6 +72,36 @@ Two combinations are rejected as `BAD_REQUEST`, because they describe an
 invitation nothing could redeem: a null purveyor with any role but `wp_admin`
 (only a first administrator brings a purveyor into existence), and a certifier
 invitation with no purveyor to authorize against.
+
+### Inviting a new water purveyor
+
+`apps/web/src/components/admin/invite-wp-dialog.tsx`
+
+The Super-Admin names the purveyor and gives the address of its first
+administrator. The invitation is stored with `associated_wp_id` null and the
+name in `proposed_water_purveyor_name`; redeeming it creates the
+`water_purveyors` row and that administrator's profile in one transaction.
+
+**The name is collected once, by the Super-Admin.** It travels on the
+invitation, so the person redeeming the link is shown the name rather than asked
+for it — nobody is invited to name an organisation that has already been named
+for them, and two people cannot disagree about what it is called.
+
+Three layers keep this to the Super-Admin, and they are independent:
+
+1. `/admin` is gated to `super_admin` in its layout, so the button is not
+   reachable by anyone else. A hidden button is not a permission, which is why
+   it is the weakest of the three.
+2. `resolveInvitationTarget` refuses a null purveyor, and refuses a
+   `proposedWaterPurveyorName` at all, for every role but Super-Admin —
+   `FORBIDDEN`, not a silently dropped field.
+3. A check constraint, `invitations_new_wp_name_shape`, refuses any row where
+   the two do not agree: a name is present exactly on a `wp_admin` invitation
+   with no purveyor, and absent on every other kind.
+
+Until the email provider lands, the confirmation says what actually happened —
+the invitation exists and its link is in the server log. It does not say an
+email was sent, because none was.
 
 ### Tokens
 
@@ -129,7 +168,10 @@ the provider lands.
 
 ## Row-level security
 
-Migration `0001_invitation_onboarding_policies`.
+Migration `0001_invitation_onboarding_policies`. The
+`proposed_water_purveyor_name` column and its check constraint arrive separately
+in `0002_invitation_proposed_wp_name` — one migration per change, so neither has
+to be edited after the fact.
 
 Every policy resolves the caller through their own `profiles` row. Reading
 `profiles` from inside a policy *on* `profiles` recurses, so the lookup lives in
@@ -208,7 +250,7 @@ measure and pending by the other must not be usable.
 | Mode | When | What the form asks for |
 |---|---|---|
 | `new_profile` | the ordinary case | full name, password; plus company, ID number and license expiration date for a certifier |
-| `new_water_purveyor` | `associated_wp_id` is null | the above, plus the company name that becomes the purveyor |
+| `new_water_purveyor` | `associated_wp_id` is null | the same as above — the purveyor's name came with the invitation and is shown, not asked for |
 | `existing_certifier` | the address already belongs to a certifier | nothing — one confirm button |
 
 The mode is decided on the server from the invitation itself and passed into the
@@ -308,6 +350,7 @@ every statement it makes, so nothing it does survives itself.
 | `packages/api/src/lib/email.test.ts` | no | the console driver's payload and the send-attempt log line |
 | `packages/api/src/lib/invitations.test.ts` | no | the tenant-authorization matrix and the invitation state machine |
 | `packages/api/src/lib/invitation-token.test.ts` | no | digest, entropy, uniqueness, link shape |
+| `apps/web/src/components/admin/invite-wp-dialog.test.tsx` | no | the invite-new-WP form — what it sends, its pending state, the honest success message, and a refused call leaving the dialog open |
 
 The RLS suite runs as the `authenticated` role because the application itself
 reads through a privileged connection that bypasses RLS — nothing in the app
@@ -316,8 +359,10 @@ would notice the policies break, so they need a test of their own.
 ## Not built here
 
 - **`providerDriver`.** Week 5, with the provider account and DNS.
-- **An invite UI.** `createInvitation` is the API; the Super-Admin's
-  invite-new-WP dialog is wired up with the rest of the Super-Admin work.
+- **A general invite UI.** The Super-Admin's invite-new-WP dialog is wired.
+  There is still no screen for inviting a certifier or a colleague into an
+  existing purveyor — `createInvitation` is the API for that, and its screen
+  lands with the WP dashboard's certifiers section.
 - **Session-refresh middleware.** Still deferred on portability grounds — Next
   middleware defaults to the Edge runtime, which this project forbids without
   sign-off.

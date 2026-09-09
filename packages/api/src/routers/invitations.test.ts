@@ -41,11 +41,13 @@ let callerFor: (profileId: string) => {
 			email: string;
 			role: "wp_admin" | "wp_sub_admin" | "wp_employee" | "certifier";
 			waterPurveyorId?: string | null;
+			proposedWaterPurveyorName?: string;
 			expiresInDays?: number;
 		}) => Promise<{
 			id: string;
 			email: string;
 			waterPurveyorId: string | null;
+			proposedWaterPurveyorName: string | null;
 		}>;
 	};
 };
@@ -211,7 +213,7 @@ describeDb("createInvitation", () => {
 		).rejects.toMatchObject({ code: "BAD_REQUEST" });
 	});
 
-	it("lets a Super-Admin create a new-purveyor invitation with a null WP", async () => {
+	it("lets a Super-Admin create a new-purveyor invitation, storing its name", async () => {
 		captureLogs();
 
 		const invitation = await callerFor(superAdmin).invitations.createInvitation(
@@ -219,10 +221,65 @@ describeDb("createInvitation", () => {
 				email: "new.purveyor@example.com",
 				role: "wp_admin",
 				waterPurveyorId: null,
+				proposedWaterPurveyorName: "  Riverside Water District  ",
 			},
 		);
 
 		expect(invitation.waterPurveyorId).toBeNull();
+		expect(invitation.proposedWaterPurveyorName).toBe(
+			"Riverside Water District",
+		);
+
+		const { rows } = await pool.query(
+			"select role, associated_wp_id, proposed_water_purveyor_name from invitations where id = $1",
+			[invitation.id],
+		);
+		expect(rows[0]).toMatchObject({
+			role: "wp_admin",
+			associated_wp_id: null,
+			proposed_water_purveyor_name: "Riverside Water District",
+		});
+	});
+
+	it("names the purveyor being created in the invite email", async () => {
+		const lines = captureLogs();
+
+		await callerFor(superAdmin).invitations.createInvitation({
+			email: "named.purveyor@example.com",
+			role: "wp_admin",
+			waterPurveyorId: null,
+			proposedWaterPurveyorName: "Lakeside Water District",
+		});
+
+		const delivery = lines.find(
+			(line) => line.event === "email_console_delivery",
+		);
+		expect(String(delivery?.html)).toContain("Lakeside Water District");
+	});
+
+	it("requires a name on a new-purveyor invitation", async () => {
+		captureLogs();
+
+		await expect(
+			callerFor(superAdmin).invitations.createInvitation({
+				email: "unnamed.purveyor@example.com",
+				role: "wp_admin",
+				waterPurveyorId: null,
+			}),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+	});
+
+	it("refuses a name on an invitation into an existing purveyor", async () => {
+		captureLogs();
+
+		await expect(
+			callerFor(superAdmin).invitations.createInvitation({
+				email: "named.joiner@example.com",
+				role: "wp_employee",
+				waterPurveyorId: wpB,
+				proposedWaterPurveyorName: "Riverside Water District",
+			}),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
 	});
 
 	it("refuses a WP Admin creating a new-purveyor invitation", async () => {
@@ -233,6 +290,39 @@ describeDb("createInvitation", () => {
 				email: "sneaky.purveyor@example.com",
 				role: "wp_admin",
 				waterPurveyorId: null,
+			}),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+	});
+
+	it("refuses any WP role that names a purveyor to create", async () => {
+		captureLogs();
+
+		for (const writer of [adminA, employeeA]) {
+			await expect(
+				callerFor(writer).invitations.createInvitation({
+					email: "sneaky.purveyor@example.com",
+					role: "wp_admin",
+					proposedWaterPurveyorName: "Sneaky Water District",
+				}),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+		}
+
+		// And nothing reached the table on the way to being refused.
+		const { rows } = await pool.query(
+			"select id from invitations where email = $1",
+			["sneaky.purveyor@example.com"],
+		);
+		expect(rows).toHaveLength(0);
+	});
+
+	it("refuses a certifier naming a purveyor to create", async () => {
+		captureLogs();
+
+		await expect(
+			callerFor(certifier).invitations.createInvitation({
+				email: "certifier.purveyor@example.com",
+				role: "wp_admin",
+				proposedWaterPurveyorName: "Sneaky Water District",
 			}),
 		).rejects.toMatchObject({ code: "FORBIDDEN" });
 	});

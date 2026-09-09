@@ -113,9 +113,9 @@ describeDb("RLS — invitations and profiles", () => {
 			}
 
 			await client.query(
-				`insert into invitations (id, email, role, token, status, expires_at, associated_wp_id, invited_by_profile_id, is_redeemed)
-				 values ($1, 'shared.name@example.com', 'certifier', $2, 'pending', $3, $4, $5, false),
-				        ($6, 'shared.name@example.com', 'certifier', $7, 'pending', $3, $8, $9, false)`,
+				`insert into invitations (id, email, role, token, status, expires_at, associated_wp_id, proposed_water_purveyor_name, invited_by_profile_id, is_redeemed)
+				 values ($1, 'shared.name@example.com', 'certifier', $2, 'pending', $3, $4, null, $5, false),
+				        ($6, 'shared.name@example.com', 'certifier', $7, 'pending', $3, $8, null, $9, false)`,
 				[
 					invitationA,
 					`rls-fixture-${invitationA}`,
@@ -219,18 +219,50 @@ describeDb("RLS — invitations and profiles", () => {
 	});
 
 	describe("invitations — writes", () => {
-		const insert = `insert into invitations (email, role, token, status, expires_at, associated_wp_id, invited_by_profile_id, is_redeemed)
-			 values ($1, 'certifier', $2, 'pending', $3, $4, $5, false) returning id`;
+		const insert = `insert into invitations (email, role, token, status, expires_at, associated_wp_id, proposed_water_purveyor_name, invited_by_profile_id, is_redeemed)
+			 values ($1, $2::invitation_role, $3, 'pending', $4, $5, $6, $7, false) returning id`;
+
+		/**
+		 * An invitation into an existing purveyor. The check constraint on the
+		 * table demands a null name for this shape, so passing one here would fail
+		 * for a reason that has nothing to do with the policy under test.
+		 */
+		function joinExisting(email: string, wpId: string, writer: string) {
+			return [
+				email,
+				"certifier",
+				`rls-write-${randomUUID()}`,
+				futureTimestamp(),
+				wpId,
+				null,
+				writer,
+			];
+		}
+
+		/**
+		 * An invitation that provisions a purveyor. Deliberately well-formed —
+		 * `wp_admin` with a name — so that when the database refuses it, the row
+		 * policy is the only thing that could have done the refusing.
+		 */
+		function provisionNew(email: string, writer: string) {
+			return [
+				email,
+				"wp_admin",
+				`rls-write-${randomUUID()}`,
+				futureTimestamp(),
+				null,
+				"Provisioned Water District",
+				writer,
+			];
+		}
 
 		it("lets every WP role invite into their own purveyor", async () => {
 			for (const writer of [ids.adminA, ids.subAdminA, ids.employeeA]) {
-				const rows = await rowsFor(writer, insert, [
-					"new.invitee@example.com",
-					`rls-write-${randomUUID()}`,
-					futureTimestamp(),
-					wpA,
+				const rows = await rowsFor(
 					writer,
-				]);
+					insert,
+					joinExisting("new.invitee@example.com", wpA, writer),
+				);
 
 				expect(rows).toHaveLength(1);
 			}
@@ -238,50 +270,83 @@ describeDb("RLS — invitations and profiles", () => {
 
 		it("refuses a WP role writing an invitation for the other tenant", async () => {
 			await expect(
-				rowsFor(ids.employeeA, insert, [
-					"cross.tenant@example.com",
-					`rls-write-${randomUUID()}`,
-					futureTimestamp(),
-					wpB,
+				rowsFor(
 					ids.employeeA,
-				]),
+					insert,
+					joinExisting("cross.tenant@example.com", wpB, ids.employeeA),
+				),
 			).rejects.toThrow(/row-level security/i);
 		});
 
 		it("refuses a WP role provisioning a new purveyor with a null WP", async () => {
 			await expect(
-				rowsFor(ids.adminA, insert, [
-					"new.purveyor@example.com",
-					`rls-write-${randomUUID()}`,
-					futureTimestamp(),
-					null,
+				rowsFor(
 					ids.adminA,
-				]),
+					insert,
+					provisionNew("new.purveyor@example.com", ids.adminA),
+				),
 			).rejects.toThrow(/row-level security/i);
 		});
 
 		it("lets a Super-Admin provision a new purveyor with a null WP", async () => {
-			const rows = await rowsFor(ids.superAdmin, insert, [
-				"new.purveyor@example.com",
-				`rls-write-${randomUUID()}`,
-				futureTimestamp(),
-				null,
+			const rows = await rowsFor(
 				ids.superAdmin,
-			]);
+				insert,
+				provisionNew("new.purveyor@example.com", ids.superAdmin),
+			);
 
 			expect(rows).toHaveLength(1);
 		});
 
 		it("refuses a certifier writing an invitation at all", async () => {
 			await expect(
-				rowsFor(ids.certifier, insert, [
-					"certifier.tried@example.com",
+				rowsFor(
+					ids.certifier,
+					insert,
+					joinExisting("certifier.tried@example.com", wpA, ids.certifier),
+				),
+			).rejects.toThrow(/row-level security/i);
+		});
+
+		it("refuses either malformed shape, whoever writes it", async () => {
+			// A purveyor name on an invitation into an existing purveyor.
+			await expect(
+				rowsFor(ids.superAdmin, insert, [
+					"named.but.joining@example.com",
+					"certifier",
 					`rls-write-${randomUUID()}`,
 					futureTimestamp(),
 					wpA,
-					ids.certifier,
+					"Should Not Be Here",
+					ids.superAdmin,
 				]),
-			).rejects.toThrow(/row-level security/i);
+			).rejects.toThrow(/invitations_new_wp_name_shape/i);
+
+			// A provisioning invitation with nothing to name the purveyor.
+			await expect(
+				rowsFor(ids.superAdmin, insert, [
+					"unnamed.purveyor@example.com",
+					"wp_admin",
+					`rls-write-${randomUUID()}`,
+					futureTimestamp(),
+					null,
+					null,
+					ids.superAdmin,
+				]),
+			).rejects.toThrow(/invitations_new_wp_name_shape/i);
+
+			// A provisioning invitation for a role that cannot create a purveyor.
+			await expect(
+				rowsFor(ids.superAdmin, insert, [
+					"wrong.role@example.com",
+					"wp_employee",
+					`rls-write-${randomUUID()}`,
+					futureTimestamp(),
+					null,
+					"Provisioned Water District",
+					ids.superAdmin,
+				]),
+			).rejects.toThrow(/invitations_new_wp_name_shape/i);
 		});
 
 		it("gives a WP role no way to edit or delete an invitation", async () => {

@@ -22,6 +22,18 @@ export type InvitationTargetInput = {
 	 * role, whose tenant comes from their own profile.
 	 */
 	waterPurveyorId?: string | null;
+	/**
+	 * The name the new water purveyor will be created with. Required for a
+	 * provisioning invitation and forbidden on every other kind, so the first
+	 * administrator is never asked to name an organisation the Super-Admin has
+	 * already named.
+	 */
+	proposedWaterPurveyorName?: string;
+};
+
+export type InvitationTarget = {
+	associatedWpId: string | null;
+	proposedWaterPurveyorName: string | null;
 };
 
 const WP_ROLES: readonly GlobalRole[] = [
@@ -47,7 +59,7 @@ const WP_ROLES: readonly GlobalRole[] = [
 export function resolveInvitationTarget(
 	caller: InvitingCaller,
 	input: InvitationTargetInput,
-): { associatedWpId: string | null } {
+): InvitationTarget {
 	if (caller.globalRole === "certifier") {
 		throw new TRPCError({
 			code: "FORBIDDEN",
@@ -55,17 +67,20 @@ export function resolveInvitationTarget(
 		});
 	}
 
-	const associatedWpId = resolveAssociatedWpId(caller, input);
-
-	// A new purveyor is created by its first administrator redeeming the invite;
-	// there is no other role that could bring one into existence.
-	if (associatedWpId === null && input.role !== "wp_admin") {
+	// Naming a purveyor into existence is a Super-Admin act. Refused outright
+	// rather than dropped, so a WP role attempting it is a `FORBIDDEN` in the
+	// logs instead of an invitation that quietly did something else.
+	if (
+		caller.globalRole !== "super_admin" &&
+		input.proposedWaterPurveyorName !== undefined
+	) {
 		throw new TRPCError({
-			code: "BAD_REQUEST",
-			message:
-				"An invitation without a water purveyor provisions a new one, so its role must be wp_admin",
+			code: "FORBIDDEN",
+			message: "Only a Super-Admin can create a water purveyor",
 		});
 	}
+
+	const associatedWpId = resolveAssociatedWpId(caller, input);
 
 	// A certifier invitation exists to attach an authorization to a purveyor.
 	if (input.role === "certifier" && associatedWpId === null) {
@@ -75,7 +90,38 @@ export function resolveInvitationTarget(
 		});
 	}
 
-	return { associatedWpId };
+	if (associatedWpId !== null) {
+		if (input.proposedWaterPurveyorName !== undefined) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message:
+					"A water purveyor name belongs only on an invitation that creates one",
+			});
+		}
+
+		return { associatedWpId, proposedWaterPurveyorName: null };
+	}
+
+	// A new purveyor is created by its first administrator redeeming the invite;
+	// there is no other role that could bring one into existence.
+	if (input.role !== "wp_admin") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"An invitation without a water purveyor provisions a new one, so its role must be wp_admin",
+		});
+	}
+
+	const proposedWaterPurveyorName = input.proposedWaterPurveyorName?.trim();
+
+	if (!proposedWaterPurveyorName) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Name the water purveyor this invitation will create",
+		});
+	}
+
+	return { associatedWpId: null, proposedWaterPurveyorName };
 }
 
 function resolveAssociatedWpId(

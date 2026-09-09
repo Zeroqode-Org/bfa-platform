@@ -84,6 +84,13 @@ export default async function InvitePage({
 				. Your sign-in email is <strong>{invitation.email}</strong>.
 			</p>
 
+			{mode === "new_water_purveyor" ? (
+				<p className="mt-1.5 text-[13px] text-muted-foreground">
+					<strong>{invitation.waterPurveyorName}</strong> is created when you
+					finish here, with you as its first administrator.
+				</p>
+			) : null}
+
 			<RedeemForm
 				secret={decodeURIComponent(token)}
 				mode={mode}

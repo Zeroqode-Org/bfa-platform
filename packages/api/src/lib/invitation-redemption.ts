@@ -44,6 +44,11 @@ export type PublicInvitation = {
 	email: string;
 	role: InvitationRole;
 	associatedWpId: string | null;
+	/**
+	 * The purveyor this invitation is for: the existing one's name, or — when the
+	 * invitation provisions a purveyor — the name the Super-Admin gave it. Either
+	 * way the invitee reads a name rather than typing one.
+	 */
 	waterPurveyorName: string | null;
 	expiresAt: Date;
 };
@@ -78,6 +83,7 @@ type InvitationRow = {
 	expiresAt: Date;
 	associatedWpId: string | null;
 	waterPurveyorName: string | null;
+	proposedWaterPurveyorName: string | null;
 };
 
 async function loadInvitation(secret: string): Promise<InvitationRow | null> {
@@ -91,6 +97,7 @@ async function loadInvitation(secret: string): Promise<InvitationRow | null> {
 			expiresAt: invitations.expiresAt,
 			associatedWpId: invitations.associatedWpId,
 			waterPurveyorName: waterPurveyors.companyName,
+			proposedWaterPurveyorName: invitations.proposedWaterPurveyorName,
 		})
 		.from(invitations)
 		.leftJoin(waterPurveyors, eq(waterPurveyors.id, invitations.associatedWpId))
@@ -106,7 +113,8 @@ function toPublic(row: InvitationRow): PublicInvitation {
 		email: row.email,
 		role: row.role,
 		associatedWpId: row.associatedWpId,
-		waterPurveyorName: row.waterPurveyorName,
+		// One field for the screen to render, whichever kind of invitation it is.
+		waterPurveyorName: row.waterPurveyorName ?? row.proposedWaterPurveyorName,
 		expiresAt: row.expiresAt,
 	};
 }
@@ -181,8 +189,6 @@ export type RedeemInvitationInput = {
 	/** Required for every mode but `existing_certifier`. */
 	password?: string;
 	fullName?: string;
-	/** Required for `new_water_purveyor`. */
-	companyName?: string;
 	/** Required when the invited role is `certifier` and the profile is new. */
 	certifier?: {
 		company: string;
@@ -380,7 +386,20 @@ async function createAccount(
 	let waterPurveyorId = invitation.associatedWpId;
 
 	if (mode === "new_water_purveyor") {
-		const companyName = requireField(input.companyName, "a company name");
+		// The name came from the Super-Admin at invite time and rode along on the
+		// invitation, so there is nothing to ask the first administrator for. A
+		// check constraint on `invitations` keeps it from ever being absent here;
+		// this guard is what turns a violated invariant into a readable error
+		// instead of a null-constraint failure two statements later.
+		const companyName = invitation.waterPurveyorName?.trim();
+
+		if (!companyName) {
+			throw new RedemptionError(
+				"invalid_input",
+				"This invitation does not name the water purveyor it should create",
+			);
+		}
+
 		const [purveyor] = await tx
 			.insert(waterPurveyors)
 			.values({ companyName })
