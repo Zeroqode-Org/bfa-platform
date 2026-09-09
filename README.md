@@ -41,7 +41,12 @@ Then, run the development server:
 npm run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001) in your browser to see the fullstack application.
+This starts both development applications:
+
+- [http://localhost:3001](http://localhost:3001) — fullstack web application
+- [http://localhost:4000](http://localhost:4000) — Fumadocs documentation
+
+Use `npm run dev:web` to start only the web application.
 
 ## UI Customization
 
