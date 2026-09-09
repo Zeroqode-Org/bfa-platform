@@ -17,6 +17,7 @@ user-invocable: false
 
 - New crypto/token/auth dependencies must use FIPS-compatible algorithms (AES-256, SHA-256). Flag MD5, SHA-1, DES for review before adding.
 - Every auth event and sensitive DB row modification emits a structured JSON log via `console.log(JSON.stringify({ event, actor_id, target_..., wp_id, timestamp }))` — never a plain string.
+- Update operations that do not change persisted values are no-ops: they must not issue an effective update, change `updated_at`, or create audit/event records. Mutations with audit behavior require regression tests for both no-op saves and real changes.
 - Multi-tenant isolation is enforced via Supabase RLS. Every new table has RLS enabled from its first migration. Every feature touching WP-scoped data has an explicit RLS policy — application-level filtering alone is not sufficient.
 
 ## Docker readiness
