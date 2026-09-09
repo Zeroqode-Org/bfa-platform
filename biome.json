@@ -35,6 +35,7 @@
 			"!**/src-tauri",
 			"!**/.nuxt",
 			"!bts.jsonc",
+			"!**/package-lock.json",
 			"!**/.expo",
 			"!**/.wrangler",
 			"!**/.alchemy",

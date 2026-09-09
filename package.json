@@ -17,7 +17,10 @@
 		"db:migrate": "npm run db:migrate --workspace @bfa-platform/db --",
 		"db:seed": "tsx packages/db/src/seed.ts",
 		"check": "biome check --write .",
-		"prepare": "husky || true"
+		"prepare": "husky || true",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:db": "node scripts/run-db-tests.mjs"
 	},
 	"dependencies": {
 		"@bfa-platform/env": "*",
@@ -31,7 +34,8 @@
 		"concurrently": "^9.2.4",
 		"husky": "^9.1.7",
 		"lint-staged": "^17.2.0",
-		"typescript": "^6.0.3"
+		"typescript": "^6.0.3",
+		"vitest": "^3.2.7"
 	},
 	"lint-staged": {
 		"*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc}": [

@@ -1,55 +1,23 @@
-"use client";
+import type { Route } from "next";
 
-import { Button } from "@bfa-platform/ui/components/button";
-import { Input } from "@bfa-platform/ui/components/input";
-import { Label } from "@bfa-platform/ui/components/label";
-import { TriangleAlert } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
-
-import { createClient } from "@/lib/supabase/client";
+import { LoginForm } from "@/components/auth/login-form";
 
 /**
- * Minimal email/password sign-in. `createBrowserClient` persists the session in
- * cookies, which is what the tRPC context reads back through
- * `supabase.auth.getUser()` — so signing in here is enough for the Super-Admin
- * procedures to resolve a caller.
+ * Sign-in screen. Deliberately minimal: no sign-up and no password reset —
+ * accounts exist only because someone redeemed an invitation.
  *
- * Deliberately minimal: no sign-up, no password reset, and no role-aware
- * landing — everyone arrives at the workspace picker on `/`.
+ * `?redirect=` is honoured for the one flow that needs it: an existing
+ * certifier redeeming a second purveyor's invitation without a live session.
+ * It is validated here rather than in the client component, so a crafted link
+ * cannot turn the sign-in screen into an open redirect.
  */
-export default function LoginPage() {
-	const emailId = useId();
-	const passwordId = useId();
-	const errorId = useId();
-	const router = useRouter();
-
-	const [email, setEmail] = useState("");
-	const [password, setPassword] = useState("");
-	const [error, setError] = useState<string | null>(null);
-	const [isSubmitting, setIsSubmitting] = useState(false);
-
-	async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		setError(null);
-		setIsSubmitting(true);
-
-		const supabase = createClient();
-		const { error: signInError } = await supabase.auth.signInWithPassword({
-			email: email.trim(),
-			password,
-		});
-
-		if (signInError) {
-			setError(signInError.message);
-			setIsSubmitting(false);
-			return;
-		}
-
-		// refresh() so the server re-reads the freshly written session cookies.
-		router.replace("/");
-		router.refresh();
-	}
+export default async function LoginPage({
+	searchParams,
+}: {
+	searchParams: Promise<{ redirect?: string | string[] }>;
+}) {
+	const { redirect } = await searchParams;
+	const requested = Array.isArray(redirect) ? redirect[0] : redirect;
 
 	return (
 		<main className="flex min-h-svh items-center justify-center bg-background px-4 py-12">
@@ -66,6 +34,7 @@ export default function LoginPage() {
 							strokeLinejoin="round"
 							aria-hidden="true"
 						>
+							<title>Backflow Assembly</title>
 							<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z" />
 						</svg>
 					</span>
@@ -82,58 +51,21 @@ export default function LoginPage() {
 						Use the email and password for your account.
 					</p>
 
-					<form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
-						<div className="flex flex-col gap-1.5">
-							<Label htmlFor={emailId}>Email</Label>
-							<Input
-								id={emailId}
-								name="email"
-								type="email"
-								value={email}
-								onChange={(event) => setEmail(event.target.value)}
-								autoComplete="email"
-								placeholder="you@example.com"
-								required
-							/>
-						</div>
-
-						<div className="flex flex-col gap-1.5">
-							<Label htmlFor={passwordId}>Password</Label>
-							<Input
-								id={passwordId}
-								name="password"
-								type="password"
-								value={password}
-								onChange={(event) => setPassword(event.target.value)}
-								autoComplete="current-password"
-								required
-							/>
-						</div>
-
-						{error ? (
-							<p
-								id={errorId}
-								role="alert"
-								className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-							>
-								<TriangleAlert
-									className="mt-px size-4 shrink-0"
-									aria-hidden="true"
-								/>
-								{error}
-							</p>
-						) : null}
-
-						<Button
-							type="submit"
-							disabled={isSubmitting}
-							className="mt-1 w-full"
-						>
-							{isSubmitting ? "Signing in…" : "Sign in"}
-						</Button>
-					</form>
+					<LoginForm redirectTo={safeRedirect(requested)} />
 				</div>
 			</div>
 		</main>
 	);
+}
+
+/**
+ * Only same-origin paths are followed. A protocol-relative `//evil.example`
+ * is a valid URL to a browser and would otherwise send a freshly signed-in
+ * user off-site with their session already written.
+ */
+function safeRedirect(value: string | undefined): Route {
+	if (!value) return "/";
+	if (!value.startsWith("/") || value.startsWith("//")) return "/";
+
+	return value as Route;
 }

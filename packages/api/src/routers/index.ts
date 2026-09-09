@@ -1,8 +1,10 @@
 import { protectedProcedure, publicProcedure, router } from "../index";
+import { invitationsRouter } from "./invitations";
 import { superAdminRouter } from "./super-admin";
 
 export const appRouter = router({
 	superAdmin: superAdminRouter,
+	invitations: invitationsRouter,
 	healthCheck: publicProcedure.query(() => {
 		return "OK";
 	}),

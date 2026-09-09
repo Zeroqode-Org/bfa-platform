@@ -23,14 +23,14 @@ Target delivery: **2026-10-02** (~6 weeks from kickoff on 2026-08-24). Team: **L
 
 ## Task tracker
 
-Status as of **2026-09-03**. Update this table as work progresses — this is the source of truth, not the phase table above.
+Status as of **2026-09-09**. Update this table as work progresses — this is the source of truth, not the phase table above.
 
 | Task | PRD § | Owner | Start | End | Status |
 |---|---|---|---|---|---|
 | Project Management | 6.16 | — | 08/24 | 10/02 | in-progress |
 | App Shell, Navigation & Design System | 6.15 | Lina | 08/24 | 08/28 | in-progress |
 | Super-Admin (incl. Impersonate) | 6.11 | Daniil | 08/24 | 08/28 | in-progress |
-| Invitation & Onboarding Flow | 6.2 | Daniil | 08/24 | 08/28 | in-progress |
+| Invitation & Onboarding Flow | 6.2 | Daniil | 08/24 | 08/28 | done |
 | Transactional Email Integration | 6.14 | Daniil | 08/24 | 10/02 | in-progress |
 | Data Model, Auth & Backend Setup | 6.1 | Lina | 08/31 | 09/04 | in-progress |
 | Certifier Dashboard | 6.3 | Lina | 08/31 | 09/04 | planned |
@@ -50,6 +50,8 @@ Status as of **2026-09-03**. Update this table as work progresses — this is th
 | Landing Page | 6.13 | Lina | 09/28 | 10/02 | planned |
 | QA & Testing | 6.17 | — | 08/24 | 10/02 | in-progress |
 
+**Transactional Email Integration (6.14)** stays *in-progress* on purpose. Its first step — the send helper and `consoleDriver` — shipped with onboarding, and every mail path in the app already runs through it. What remains is the provider account, the sender domain and DKIM record, and `providerDriver` itself, which needs credentials that do not exist yet. See [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer).
+
 ## Known deviation from the kickoff runbook
 
 The runbook (and this repo's `bfa-requirements` skill / compliance checks) refer to the docs app as `apps/docs`. Better-T-Stack actually scaffolded it as **`apps/fumadocs`** (package name `fumadocs`). All documentation-path references in this repo use the real path — `apps/fumadocs/content/docs` — not `apps/docs`.
@@ -58,7 +60,7 @@ The runbook (and this repo's `bfa-requirements` skill / compliance checks) refer
 
 Carried from [PRD § 10](/docs/prd#10-open-questions-for-the-client) — resolve before the owning phase is marked done:
 
-- **Phase 2:** WPAdmin/WPsubAdmin/WPEmployee permission differences; second-WP-invite notification behavior.
+- **Phase 2:** WPAdmin/WPsubAdmin/WPEmployee permission differences — all three currently share identical invitation policies; second-WP-invite notification behavior.
 - **Phase 3:** signature vs. certify-checkbox; legacy PDF/results-document layout match (reference wizard: [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard)).
 - **Phase 4:** whether a WP can reassign the BIN itself on an existing asset (vs. one-time assignment only).
 - **Phase 5:** dynamic variables for notice text; AG Renewal Date auto-update behavior; monthly CSV export field list.
