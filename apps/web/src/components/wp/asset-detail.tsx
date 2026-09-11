@@ -517,7 +517,17 @@ function AssignmentHistory({
 							assignments.map((assignment) => (
 								<TableRow key={assignment.id}>
 									<TableCell className="font-semibold">
-										{assignment.customerName}
+										{/* The name is null only when the assignment points at a
+										    customer outside this purveyor — a data problem the
+										    read path withholds the name for rather than leaking
+										    it. The occupancy itself is this purveyor's record and
+										    still shows, so the cell says what it cannot show
+										    instead of going quietly blank. */}
+										{assignment.customerName ?? (
+											<span className="font-normal text-muted-foreground">
+												Unknown customer
+											</span>
+										)}
 									</TableCell>
 									<TableCell className="tabular-nums">
 										{formatAssetDate(assignment.startDate)}

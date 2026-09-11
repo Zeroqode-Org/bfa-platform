@@ -488,6 +488,65 @@ Daniil 21h · Lina has no scheduled row — the natural window to start on the w
 
 **Done when:** every card and chart reflects real rows for the caller's WP only, and the numbers reconcile with the underlying tables when checked by hand.
 
+**Status: done.** All six steps shipped in a new `dashboard` router — five
+`wpProcedure` reads: `dashboardMetrics`, `complianceTrend`, `passFailBreakdown`,
+`incomingReports` and `delinquentAssets`. No migration: the feature reads what
+6.6.2 and 6.6.6 already store, and `test_submissions_wp_status_test_date_idx`
+already serves every submission query on the screen. Reconciliation is asserted
+rather than checked by hand — the database suite re-derives every card, every
+trend month and every breakdown count straight from SQL and compares, against
+two purveyors seeded as deliberate mirror images and a frozen clock. Full
+writeup: [WP Dashboard — Core & Analytics](/docs/wp-dashboard).
+
+**Step 1's "submissions awaiting review" ships as "Submitted reports", counting
+`status = 'submitted'`.** This was the one open product question on the feature,
+and it was put to the client rather than guessed. `test_submissions.status` is
+only `draft | submitted` — there is no reviewed state, no reviewer and no review
+timestamp — so the confirmed answer was to count submitted rows and **not** to
+invent a review lifecycle, a review status or a migration for one. The rename is
+the other half of that answer: nothing ever marks a test reviewed, so the number
+only goes up, and a card labelled "Awaiting review" would promise a queue that
+drains. It carries the line *"Filed to date — not a review queue"* so the reading
+is on the screen and not only in the docs. Two alternatives were considered and
+rejected: `bfa_asset_id is null` is already the No-BIN card and would have made
+two of five cards identical, and `edited_by_wp_profile_id is null` would read a
+WP correction as a review sign-off, which is not what that column means. A real
+review lifecycle later is a column, a migration and a different query for this
+one card; nothing shipped here has to be unwound first.
+
+**Step 4 ships the build plan's five cards, not the prototype's six.** The
+approved prototype also shows Certifiers and Customers. On what this screen
+counts the build plan is authoritative, and both omitted figures already have a
+screen of their own in the WP sidebar, where the number arrives with the list it
+counts.
+
+**Step 5's incoming list has no detail view of its own.** A row links to
+`/wp/tests?test=<id>`, and the Submitted Tests screen from 6.6.6 reads that
+query string on the server and opens the record in its existing document dialog
+— so the document, the corrections form, the link-to-asset flow and the
+Admin/SubAdmin role check remain that screen's single copy of each. The two also
+share the `newestSubmittedTestFirst` ordering constant rather than restating it,
+so the dashboard's rows genuinely are the head of that list, and a test asserts
+it. Delinquent rows link to `/wp/assets/[assetId]` from 6.6.2.
+
+**Step 6 adds no charting dependency.** Both charts are inline SVG and plain
+elements on the existing design tokens, and each carries a screen-reader table
+holding the same figures the picture shows. A month nobody tested in is `null`
+rather than `0` — the line breaks across it rather than plotting a point on the
+floor — and a genuine zero in the pass/fail range renders both bars at zero
+rather than an empty state, so a finding is not mistaken for a request that
+never happened.
+
+**Step 3's contract is strictly `pass`, `fail` and `total`.** Bounds are
+inclusive calendar dates — `test_date` is a Postgres `date`, so the comparison
+carries no zone at all. A submitted row with a null `test_result` is in neither
+count and not in `total`; it is reported one level down as
+`supplemental.unrecorded` and rendered as a note *beneath* the chart rather than
+inside it, so it can never be read as a third bar or added into the breakdown.
+The only zone-dependent step in the whole feature is naming the calendar day
+"now" falls on — for "this month" and the trailing-twelve window — which is done
+in UTC and documented as such.
+
 ## Week 3 — Remaining tables and both dashboards
 
 Lina 10h · Daniil 13h. The widest week — six features, no hard ordering between them.

@@ -160,11 +160,15 @@ export const submittedTestsRouter = router({
 				// Left, not inner: an unresolved submission — no BIN typed, or one
 				// that matched no asset — is precisely the row this screen exists to
 				// surface, and an inner join would hide the ones needing work.
-				.leftJoin(bfaAssets, eq(bfaAssets.id, testSubmissions.bfaAssetId))
+				//
+				// Tenant-scoped in the `ON` clause as well as by id — see
+				// `tenantAsset` below for why the foreign key is not enough, and why
+				// this belongs here rather than in the `where`.
+				.leftJoin(bfaAssets, tenantAsset(ctx.caller.waterPurveyorId))
 				.innerJoin(certifiers, eq(certifiers.id, testSubmissions.certifierId))
 				.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
 				.where(where)
-				.orderBy(...newestTestFirst)
+				.orderBy(...newestSubmittedTestFirst)
 				.limit(input.pageSize)
 				.offset((input.page - 1) * input.pageSize);
 
@@ -394,6 +398,37 @@ function submittedRowsOf(waterPurveyorId: string) {
 }
 
 /**
+ * The join condition attaching a submission to its asset: the right row, *and*
+ * the caller's own purveyor.
+ *
+ * Both halves are load-bearing. `test_submissions.water_purveyor_id` scopes the
+ * submission, and the foreign key on `bfa_asset_id` proves only that the asset
+ * exists — not that it belongs to the same purveyor. A link that crossed
+ * tenants would otherwise pull a foreign asset's BIN and service address onto a
+ * row this caller is entitled to read, through the privileged connection, on
+ * both the list and the detail path.
+ *
+ * `linkSubmissionAsset` has always refused to *create* such a link, and
+ * `0009_test_submission_asset_tenancy` added the same clause to the row policy's
+ * WITH CHECK. Neither retroactively cleans a row written before them, and
+ * deliberately so: `0009` kept the clause out of USING precisely so an
+ * already-crossed row stays reachable and repairable. This is the read side of
+ * that decision — the row stays visible, its foreign asset does not.
+ *
+ * In the `ON` clause rather than the `where`, which is the difference between
+ * failing safe and failing silent. Here, a mismatched row comes back with null
+ * asset columns — exactly how an unlinked submission already reads, and a state
+ * both screens already render as "not linked to an asset". In the `where` it
+ * would vanish from the list altogether, hiding the one row that needs fixing.
+ */
+function tenantAsset(waterPurveyorId: string) {
+	return and(
+		eq(bfaAssets.id, testSubmissions.bfaAssetId),
+		eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+	);
+}
+
+/**
  * Newest test first, with a total order behind it.
  *
  * `test_date` is nullable, and a submission missing one is not the most recent
@@ -401,8 +436,13 @@ function submittedRowsOf(waterPurveyorId: string) {
  * ahead of everything. `created_at` then `id` break the tie, so a page boundary
  * cannot repeat or skip a row between two tests dated the same day, which is
  * ordinary: a certifier files a morning's work in one sitting.
+ *
+ * Exported because the WP dashboard's "incoming reports" list is the head of
+ * *this* list — the reader clicks a row there and lands on the document this
+ * screen opens. Restating the ordering there would have made that true only
+ * until one of the two copies was edited.
  */
-const newestTestFirst = [
+export const newestSubmittedTestFirst = [
 	sql`${testSubmissions.testDate} desc nulls last`,
 	desc(testSubmissions.createdAt),
 	asc(testSubmissions.id),
@@ -413,7 +453,7 @@ async function readSubmission(waterPurveyorId: string, submissionId: string) {
 	const [row] = await db
 		.select(submissionSelection)
 		.from(testSubmissions)
-		.leftJoin(bfaAssets, eq(bfaAssets.id, testSubmissions.bfaAssetId))
+		.leftJoin(bfaAssets, tenantAsset(waterPurveyorId))
 		.innerJoin(certifiers, eq(certifiers.id, testSubmissions.certifierId))
 		.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
 		.where(

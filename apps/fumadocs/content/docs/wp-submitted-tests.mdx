@@ -42,6 +42,25 @@ draft, for another purveyor's submission, and for an id that never existed. A
 message that distinguished them would confirm the row exists, which is the
 single fact a probe with a guessed uuid is after.
 
+## The asset join is tenant-scoped
+
+`listSubmittedTests` and `getSubmittedTest` both LEFT JOIN `bfa_assets` to put
+the resolved BIN and service address on the row. That join matches on the asset
+id **and** on the caller's own purveyor.
+
+The submission's own `water_purveyor_id` scopes the row; the foreign key on
+`bfa_asset_id` proves only that the asset exists, not whose it is. Without the
+second clause a submission whose link crossed tenants would carry another
+purveyor's BIN and address onto a row this caller is entitled to read — through
+the privileged Drizzle connection, on both the list and the document path.
+
+It is in the `ON` clause deliberately. There, a crossed row comes back with null
+asset columns, which is exactly how an unresolved submission already reads and a
+state this screen already renders as "Not linked to an asset". In the `WHERE` it
+would disappear from the list altogether, hiding the one row that needs
+repairing. That matches `0009_test_submission_asset_tenancy`, which kept its own
+tenancy clause out of USING for the same reason.
+
 ## Who may correct one
 
 All three WP roles read the list and open the document. **WP Admin and SubAdmin

@@ -2,6 +2,7 @@ import { protectedProcedure, publicProcedure, router } from "../index";
 import { assetsRouter } from "./assets";
 import { certifiersRouter } from "./certifiers";
 import { customersRouter } from "./customers";
+import { dashboardRouter } from "./dashboard";
 import { invitationsRouter } from "./invitations";
 import { repairCompaniesRouter } from "./repair-companies";
 import { submittedTestsRouter } from "./submitted-tests";
@@ -12,6 +13,7 @@ export const appRouter = router({
 	invitations: invitationsRouter,
 	customers: customersRouter,
 	assets: assetsRouter,
+	dashboard: dashboardRouter,
 	certifiers: certifiersRouter,
 	repairCompanies: repairCompaniesRouter,
 	submittedTests: submittedTestsRouter,

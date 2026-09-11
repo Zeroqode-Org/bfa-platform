@@ -87,7 +87,26 @@ const PAGE_SIZE = 25;
  * view, because a column for them would either be eight columns or one that
  * means something different on every line.
  */
-export function SubmittedTestsTable() {
+export function SubmittedTestsTable({
+	initialSubmissionId,
+}: {
+	/**
+	 * A record to open on arrival, named in the URL as `?test=<id>`.
+	 *
+	 * This is how the dashboard's incoming-reports list drills in: it links to
+	 * this screen rather than to a detail view of its own, so the document, the
+	 * corrections form, the link-to-asset flow and the role check are this
+	 * screen's single copy of each.
+	 *
+	 * Initial state rather than a controlled prop — closing the dialog has to
+	 * leave the reader on the list they arrived at, not reopen the record
+	 * because the query string still says so. The id is read on the server from
+	 * `searchParams` and handed down; nothing here trusts it, because
+	 * `getSubmittedTest` scopes by tenant and status and answers a foreign id,
+	 * a draft id and an invented one identically.
+	 */
+	initialSubmissionId?: string;
+} = {}) {
 	const queryClient = useQueryClient();
 	const fromId = useId();
 	const toId = useId();
@@ -96,7 +115,9 @@ export function SubmittedTestsTable() {
 	const [result, setResult] = useState<ResultFilter>("all");
 	const [from, setFrom] = useState("");
 	const [to, setTo] = useState("");
-	const [openSubmissionId, setOpenSubmissionId] = useState<string | null>(null);
+	const [openSubmissionId, setOpenSubmissionId] = useState<string | null>(
+		initialSubmissionId ?? null,
+	);
 
 	// A range typed backwards is a typo, and the server refuses it. Catching it
 	// here keeps the screen from reporting a validation error as a failed

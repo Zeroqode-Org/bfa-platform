@@ -1,0 +1,598 @@
+"use client";
+
+import { Badge } from "@bfa-platform/ui/components/badge";
+import { Button } from "@bfa-platform/ui/components/button";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@bfa-platform/ui/components/card";
+import {
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "@bfa-platform/ui/components/empty";
+import { Input } from "@bfa-platform/ui/components/input";
+import { Label } from "@bfa-platform/ui/components/label";
+import { Skeleton } from "@bfa-platform/ui/components/skeleton";
+import {
+	StatCard,
+	StatCardSkeleton,
+	type StatCardTone,
+} from "@bfa-platform/ui/components/stat-card";
+import { useQuery } from "@tanstack/react-query";
+import {
+	CalendarCheck,
+	ClipboardList,
+	FileQuestion,
+	FileText,
+	Inbox,
+	TriangleAlert,
+} from "lucide-react";
+import Link from "next/link";
+import { useId, useState } from "react";
+
+import { trpc } from "@/utils/trpc";
+
+import {
+	ComplianceTrendChart,
+	PassFailChart,
+	UnrecordedNote,
+} from "./dashboard-charts";
+import type {
+	DashboardMetrics,
+	DelinquentAsset,
+	IncomingReport,
+} from "./dashboard-types";
+import {
+	assetHref,
+	daysOverdue,
+	defaultBreakdownRange,
+	formatCount,
+	formatDay,
+	formatMonth,
+	isCalendarDate,
+	submittedTestHref,
+} from "./dashboard-types";
+import {
+	binLabel,
+	TEST_RESULT_LABELS,
+	TEST_RESULT_VARIANTS,
+} from "./submission-types";
+
+/**
+ * The Water Purveyor home screen.
+ *
+ * Five numbers, two work queues, two charts — every one of them derived from
+ * rows belonging to the caller's own purveyor, because the procedures behind
+ * them take their tenant from `ctx.caller.waterPurveyorId` and accept no input
+ * naming one. There is nothing on this screen a client could ask a different
+ * question with.
+ *
+ * Five queries rather than one, and deliberately: `httpBatchLink` sends them as
+ * a single HTTP request anyway, so the cost is nothing, and each panel gets to
+ * fail, load and empty on its own. A single combined query would mean a slow
+ * trend hiding the cards, and one broken panel blanking the screen.
+ *
+ * **The cards are the build plan's five** (§ 6.4.1), not the prototype's six.
+ * The approved prototype also shows Certifiers and Customers; the build plan is
+ * authoritative on what this screen counts, and both of those already have a
+ * screen of their own in the sidebar. That deviation is intentional and
+ * recorded in the docs.
+ */
+export function WpDashboard({ today }: { today: string }) {
+	const fromId = useId();
+	const toId = useId();
+
+	// Seeded from the server's `today` rather than from the browser clock: this
+	// component renders on the server first, and a default computed from
+	// `new Date()` would be computed twice, a moment apart, either side of the
+	// hydration boundary.
+	const [range, setRange] = useState(() => defaultBreakdownRange(today));
+
+	// Two ways a range can be unusable, and they are different problems with
+	// different answers, so the screen tells them apart.
+	//
+	// *Incomplete* is a cleared box — an ordinary step on the way to typing a
+	// different date. A native date input hands back `""`, which `z.iso.date()`
+	// refuses, and a refusal surfaces as a failed request: the screen would
+	// report that something went wrong when the truth is the reader is mid-edit.
+	//
+	// *Backwards* is both dates filled in and the wrong way round. A typo, not
+	// an empty result — reporting it as two zeroes would let somebody conclude
+	// nobody tested anything that month.
+	//
+	// Neither is sent. The server's own validation is untouched and is still the
+	// boundary; this only decides whether there is a question worth asking yet.
+	// The backwards case keeps the wording the Submitted Tests filters use.
+	const rangeIsComplete =
+		isCalendarDate(range.from) && isCalendarDate(range.to);
+	const rangeIsBackwards = rangeIsComplete && range.from > range.to;
+	const rangeIsUsable = rangeIsComplete && !rangeIsBackwards;
+
+	const metrics = useQuery(trpc.dashboard.dashboardMetrics.queryOptions());
+	const trend = useQuery(trpc.dashboard.complianceTrend.queryOptions());
+	const incoming = useQuery(trpc.dashboard.incomingReports.queryOptions({}));
+	const delinquent = useQuery(trpc.dashboard.delinquentAssets.queryOptions({}));
+	const breakdown = useQuery(
+		trpc.dashboard.passFailBreakdown.queryOptions(range, {
+			// Filling the blank box back in flips this to true and the query runs
+			// itself — there is nothing for the reader to press.
+			enabled: rangeIsUsable,
+		}),
+	);
+
+	return (
+		<div className="flex flex-col gap-5">
+			<section aria-label="Key figures">
+				<div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-5">
+					{metrics.isPending ? (
+						CARDS.map((card) => (
+							<StatCardSkeleton key={card.key} tone={card.tone} />
+						))
+					) : metrics.isError ? (
+						<Card className="col-span-full">
+							<CardContent>
+								<StateBlock
+									tone="danger"
+									title="Couldn&rsquo;t load your figures"
+									description={metrics.error.message}
+									onRetry={() => metrics.refetch()}
+								/>
+							</CardContent>
+						</Card>
+					) : (
+						CARDS.map((card) => (
+							<StatCard
+								key={card.key}
+								tone={card.tone}
+								icon={<card.Icon strokeWidth={1.8} />}
+								label={card.label}
+								value={formatCount(metrics.data[card.key])}
+								hint={
+									card.key === "testsThisMonth"
+										? formatMonth(metrics.data.month)
+										: card.hint
+								}
+							/>
+						))
+					)}
+				</div>
+			</section>
+
+			<div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+				<section aria-label="Incoming reports" className="flex">
+					<Card className="w-full">
+						<CardHeader>
+							<CardTitle>Incoming reports</CardTitle>
+							<CardDescription>
+								The newest tests filed against you. Opening one takes you to
+								Submitted Tests, where you can correct it.
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							{incoming.isPending ? (
+								<ListSkeleton />
+							) : incoming.isError ? (
+								<StateBlock
+									tone="danger"
+									title="Couldn&rsquo;t load incoming reports"
+									description={incoming.error.message}
+									onRetry={() => incoming.refetch()}
+								/>
+							) : incoming.data.length === 0 ? (
+								<StateBlock
+									icon={<Inbox />}
+									title="Nothing filed yet"
+									description="A test appears here the moment a certifier submits one against your purveyor. Drafts never do."
+								/>
+							) : (
+								<ul className="flex flex-col">
+									{incoming.data.map((report) => (
+										<IncomingRow key={report.id} report={report} />
+									))}
+								</ul>
+							)}
+						</CardContent>
+					</Card>
+				</section>
+
+				<section aria-label="Delinquent assets" className="flex">
+					<Card className="w-full">
+						<CardHeader>
+							<CardTitle>Delinquent assets</CardTitle>
+							<CardDescription>
+								Past due, worst first. The status is the scheduler&rsquo;s, read
+								from the asset rather than worked out here.
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							{delinquent.isPending ? (
+								<ListSkeleton />
+							) : delinquent.isError ? (
+								<StateBlock
+									tone="danger"
+									title="Couldn&rsquo;t load delinquent assets"
+									description={delinquent.error.message}
+									onRetry={() => delinquent.refetch()}
+								/>
+							) : delinquent.data.length === 0 ? (
+								<StateBlock
+									icon={<CalendarCheck />}
+									title="Nothing is past due"
+									description="Every assembly you are responsible for is inside its annual test window."
+								/>
+							) : (
+								<ul className="flex flex-col">
+									{delinquent.data.map((asset) => (
+										<DelinquentRow key={asset.id} asset={asset} today={today} />
+									))}
+								</ul>
+							)}
+						</CardContent>
+					</Card>
+				</section>
+			</div>
+
+			<div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+				<section aria-label="Compliance trend" className="flex">
+					<Card className="w-full">
+						<CardHeader>
+							<CardTitle>Compliance trend</CardTitle>
+							<CardDescription>
+								Pass rate by month over the last twelve. Only tests carrying a
+								recorded result are counted.
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							{trend.isPending ? (
+								<Skeleton className="h-[240px] w-full rounded-lg" />
+							) : trend.isError ? (
+								<StateBlock
+									tone="danger"
+									title="Couldn&rsquo;t load the compliance trend"
+									description={trend.error.message}
+									onRetry={() => trend.refetch()}
+								/>
+							) : (
+								<ComplianceTrendChart months={trend.data.months} />
+							)}
+						</CardContent>
+					</Card>
+				</section>
+
+				<section aria-label="Pass / fail breakdown" className="flex">
+					<Card className="w-full">
+						<CardHeader>
+							<CardTitle>Pass / fail breakdown</CardTitle>
+							<CardDescription>
+								Results by test date. Both dates are included in the range.
+							</CardDescription>
+						</CardHeader>
+						<CardContent className="flex flex-col gap-4">
+							<div className="flex flex-wrap items-end gap-3">
+								<div className="flex flex-col gap-1.5">
+									<Label
+										htmlFor={fromId}
+										className="text-[12px] text-muted-foreground"
+									>
+										Tested from
+									</Label>
+									<Input
+										id={fromId}
+										type="date"
+										value={range.from}
+										max={range.to || undefined}
+										onChange={(event) =>
+											setRange((current) => ({
+												...current,
+												from: event.target.value,
+											}))
+										}
+										className="w-[170px]"
+									/>
+								</div>
+								<div className="flex flex-col gap-1.5">
+									<Label
+										htmlFor={toId}
+										className="text-[12px] text-muted-foreground"
+									>
+										Tested to
+									</Label>
+									<Input
+										id={toId}
+										type="date"
+										value={range.to}
+										min={range.from || undefined}
+										onChange={(event) =>
+											setRange((current) => ({
+												...current,
+												to: event.target.value,
+											}))
+										}
+										className="w-[170px]"
+									/>
+								</div>
+								<Button
+									variant="secondary"
+									size="sm"
+									onClick={() => setRange(defaultBreakdownRange(today))}
+								>
+									Last 12 months
+								</Button>
+							</div>
+
+							{!rangeIsComplete ? (
+								/* Names the box that is actually empty. "Pick both dates"
+								   when somebody has cleared the pair is honest; saying it
+								   when only one is blank would make them check the one
+								   they already filled in. */
+								<StateBlock
+									tone="warning"
+									title={
+										isCalendarDate(range.from)
+											? "Pick an end date"
+											: isCalendarDate(range.to)
+												? "Pick a start date"
+												: "Pick both dates"
+									}
+									description="The breakdown counts results between two dates, so it needs both before it can count anything."
+								/>
+							) : rangeIsBackwards ? (
+								<StateBlock
+									tone="warning"
+									title="That date range runs backwards"
+									description="&ldquo;Tested to&rdquo; is earlier than &ldquo;tested from&rdquo;, so nothing could fall inside it."
+								/>
+							) : breakdown.isPending ? (
+								<Skeleton className="h-[120px] w-full rounded-lg" />
+							) : breakdown.isError ? (
+								<StateBlock
+									tone="danger"
+									title="Couldn&rsquo;t load the breakdown"
+									description={breakdown.error.message}
+									onRetry={() => breakdown.refetch()}
+								/>
+							) : (
+								/* Note what is *not* here: a zero total is not an empty state.
+							   The chart renders both bars at zero and says so, because
+							   "nobody tested anything in this window" is a finding, and
+							   replacing it with a placeholder would hide it.
+
+							   The unrecorded count is a sibling of the chart rather than
+							   part of it — `supplemental` on the response, its own note on
+							   the screen. Worth telling a purveyor about; not a third
+							   bar. */
+								<>
+									<PassFailChart breakdown={breakdown.data} />
+									<UnrecordedNote
+										count={breakdown.data.supplemental.unrecorded}
+									/>
+								</>
+							)}
+						</CardContent>
+					</Card>
+				</section>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * The five cards, in the build plan's order.
+ *
+ * A table rather than five copies of the same JSX, so the tone vocabulary is
+ * visible in one place: primary for a figure counted straight off a table,
+ * accent for one computed over a period or a condition, danger for the one that
+ * means somebody has to act.
+ *
+ * The `key` is the field name on `dashboardMetrics`, so a card cannot be
+ * labelled with one number and filled from another.
+ */
+const CARDS = [
+	{
+		key: "totalAssets",
+		label: "Total assets",
+		tone: "primary",
+		Icon: ClipboardList,
+		hint: "Every assembly on your system",
+	},
+	{
+		key: "testsThisMonth",
+		label: "Tests this month",
+		tone: "accent",
+		Icon: CalendarCheck,
+		// Replaced at render with the month the server measured, so the card
+		// cannot claim a month the number did not come from.
+		hint: undefined,
+	},
+	{
+		key: "pastDue",
+		label: "Past due",
+		tone: "danger",
+		Icon: TriangleAlert,
+		hint: "Assets outside their test window",
+	},
+	{
+		key: "submittedReports",
+		label: "Submitted reports",
+		tone: "primary",
+		Icon: FileText,
+		// Says what the number is, because the build plan called this card
+		// "awaiting review" and the schema has no review state to drain. It
+		// counts what has come in, and it does not go down.
+		hint: "Filed to date — not a review queue",
+	},
+	{
+		key: "noBinSubmissions",
+		label: "No-BIN submissions",
+		tone: "accent",
+		Icon: FileQuestion,
+		hint: "Not yet linked to an asset",
+	},
+] as const satisfies readonly {
+	key: keyof DashboardMetrics & string;
+	label: string;
+	tone: StatCardTone;
+	Icon: typeof ClipboardList;
+	hint: string | undefined;
+}[];
+
+/**
+ * One incoming report.
+ *
+ * The whole row is the link, because the whole row is one record and a reader
+ * aiming at a five-character BIN is aiming at the wrong thing. It goes to
+ * `/wp/tests?test=<id>` — the existing Submitted Tests screen, which opens the
+ * record in its document dialog. Nothing about the document, the corrections
+ * form or the role check is re-implemented here.
+ */
+function IncomingRow({ report }: { report: IncomingReport }) {
+	const bin = binLabel(report);
+
+	return (
+		<li className="border-border-soft border-b last:border-b-0">
+			<Link
+				href={submittedTestHref(report.id)}
+				className="flex items-center justify-between gap-3 rounded-md px-1 py-2.5 transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
+			>
+				<span className="flex min-w-0 flex-col gap-0.5">
+					<span className="truncate font-semibold text-[13.5px] text-foreground">
+						{bin.text}
+						<span className="ml-2 font-normal text-[12px] text-muted-foreground">
+							{report.bfaType}
+						</span>
+					</span>
+					<span className="truncate text-[12px] text-muted-foreground">
+						{report.certifierName ?? "Unnamed certifier"} ·{" "}
+						{formatDay(report.testDate)}
+					</span>
+					{bin.resolved ? null : (
+						<span className="text-[11px] text-warning">
+							Not linked to an asset
+						</span>
+					)}
+				</span>
+
+				{report.testResult ? (
+					<Badge variant={TEST_RESULT_VARIANTS[report.testResult]}>
+						{TEST_RESULT_LABELS[report.testResult]}
+					</Badge>
+				) : (
+					<Badge variant="neutral">No result</Badge>
+				)}
+			</Link>
+		</li>
+	);
+}
+
+/** One past-due asset, linking to the asset's own detail route. */
+function DelinquentRow({
+	asset,
+	today,
+}: {
+	asset: DelinquentAsset;
+	today: string;
+}) {
+	const overdue = daysOverdue(asset.annualTestDate, today);
+
+	return (
+		<li className="border-border-soft border-b last:border-b-0">
+			<Link
+				href={assetHref(asset.id)}
+				className="flex items-center justify-between gap-3 rounded-md px-1 py-2.5 transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
+			>
+				<span className="flex min-w-0 flex-col gap-0.5">
+					<span className="truncate font-semibold text-[13.5px] text-foreground">
+						{asset.bin}
+						<span className="ml-2 font-normal text-[12px] text-muted-foreground">
+							{asset.bfaType}
+						</span>
+					</span>
+					<span className="truncate text-[12px] text-muted-foreground">
+						{asset.serviceAddress}
+						{asset.currentCustomerName ? ` · ${asset.currentCustomerName}` : ""}
+					</span>
+					<span className="text-[11px] text-text-tertiary">
+						Due {formatDay(asset.annualTestDate)}
+					</span>
+				</span>
+
+				<Badge variant="danger">
+					{overdue === null
+						? "Past due"
+						: `${formatCount(overdue)} ${overdue === 1 ? "day" : "days"}`}
+				</Badge>
+			</Link>
+		</li>
+	);
+}
+
+/**
+ * The one loading, empty and error block every panel on this screen uses.
+ *
+ * Built on the project's `Empty` primitives rather than a local layout, so a
+ * failed panel here looks like a failed table on the Assets or Submitted Tests
+ * screen. Three tones because the icon carries the difference between "nothing
+ * happened", "something is wrong with your input", and "the request failed" —
+ * and a reader should not have to parse the sentence to tell them apart.
+ */
+function StateBlock({
+	tone = "neutral",
+	icon,
+	title,
+	description,
+	onRetry,
+}: {
+	tone?: "neutral" | "warning" | "danger";
+	icon?: React.ReactNode;
+	title: string;
+	description: string;
+	onRetry?: () => void;
+}) {
+	const toneIcon =
+		tone === "danger" ? (
+			<TriangleAlert className="text-danger" />
+		) : tone === "warning" ? (
+			<TriangleAlert className="text-warning" />
+		) : (
+			icon
+		);
+
+	return (
+		<Empty className="p-6">
+			<EmptyHeader>
+				<EmptyMedia variant="icon">{toneIcon}</EmptyMedia>
+				<EmptyTitle>{title}</EmptyTitle>
+				<EmptyDescription>{description}</EmptyDescription>
+			</EmptyHeader>
+			{onRetry ? (
+				<Button variant="secondary" size="sm" onClick={onRetry}>
+					Try again
+				</Button>
+			) : null}
+		</Empty>
+	);
+}
+
+/** Placeholder rows at the height the real ones will occupy. */
+function ListSkeleton() {
+	return (
+		<ul className="flex flex-col">
+			{Array.from({ length: 5 }, (_, index) => (
+				<li
+					// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder list, never reordered
+					key={index}
+					className="border-border-soft border-b py-3 last:border-b-0"
+				>
+					<Skeleton className="h-4 w-2/5 rounded-sm" />
+					<Skeleton className="mt-1.5 h-3 w-3/5 rounded-sm" />
+				</li>
+			))}
+		</ul>
+	);
+}

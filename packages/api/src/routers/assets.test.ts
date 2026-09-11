@@ -885,4 +885,149 @@ describeDb("asset procedures", () => {
 			).rejects.toThrow(/not found/i);
 		});
 	});
+
+	/**
+	 * An asset in WP A whose occupant — live pointer and history alike — is a
+	 * customer belonging to WP B.
+	 *
+	 * Not a state any procedure can produce: `assignCustomer` validates that the
+	 * customer shares the asset's purveyor, and refuses otherwise. It is seeded
+	 * here with SQL because the question is what the *read* path does on meeting
+	 * one anyway — corruption, a restore, or a row written before that rule.
+	 *
+	 * The asset is scoped by `bfa_assets.water_purveyor_id`; the foreign key on
+	 * `current_customer_id` proves only that the customer exists, not whose it
+	 * is. Two different joins depend on that distinction, so both are asserted.
+	 *
+	 * The foreign customer is given a name that appears nowhere else in the
+	 * fixture. The mirrored "Marta Ellison" the rest of this suite uses would
+	 * hide exactly this bug.
+	 */
+	describe("an asset whose customer link crosses tenants", () => {
+		const foreignCustomer = randomUUID();
+		const mispointedAsset = randomUUID();
+		const mispointedAssignment = randomUUID();
+
+		beforeAll(async () => {
+			await pool.query(
+				`insert into customers (id, water_purveyor_id, name, email, rate_category, status)
+				 values ($1, $2, 'Leak Canary Holdings', 'canary@example.com', 'standard', 'active')`,
+				[foreignCustomer, wpB],
+			);
+
+			await pool.query(
+				`insert into bfa_assets
+				   (id, water_purveyor_id, bin, current_customer_id, bfa_type, service_address, annual_test_date)
+				 values ($1, $2, 'CROSS-TENANT-OCCUPANT', $3, 'RP', '5 Mispointed Lane', '2027-05-01')`,
+				[mispointedAsset, wpA, foreignCustomer],
+			);
+
+			await pool.query(
+				`insert into customer_assignments (id, bfa_asset_id, customer_id, start_date)
+				 values ($1, $2, $3, '2026-01-01')`,
+				[mispointedAssignment, mispointedAsset, foreignCustomer],
+			);
+		});
+
+		afterAll(async () => {
+			await pool.query("delete from customer_assignments where id = $1", [
+				mispointedAssignment,
+			]);
+			await pool.query("delete from bfa_assets where id = $1", [
+				mispointedAsset,
+			]);
+			await pool.query("delete from customers where id = $1", [
+				foreignCustomer,
+			]);
+		});
+
+		it("still lists the asset for the purveyor that owns it", async () => {
+			const { rows } = await callerFor(ids.adminA).assets.listAssets({
+				page: 1,
+				pageSize: 100,
+			});
+
+			// Visible, not filtered away: this list is the only place somebody
+			// could go and repair the row.
+			expect(rows.map((row) => row.id)).toContain(mispointedAsset);
+		});
+
+		it("shows no occupant on the listed row, rather than a foreign one", async () => {
+			const { rows } = await callerFor(ids.adminA).assets.listAssets({
+				page: 1,
+				pageSize: 100,
+			});
+			const row = rows.find((candidate) => candidate.id === mispointedAsset);
+
+			expect(row?.currentCustomerName).toBeNull();
+			expect(row?.currentCustomerStatus).toBeNull();
+			expect(JSON.stringify(row)).not.toContain("Leak Canary Holdings");
+		});
+
+		it("withholds the occupant on the detail view too", async () => {
+			const detail = await callerFor(ids.adminA).assets.getAsset({
+				id: mispointedAsset,
+			});
+
+			expect(detail.asset.currentCustomerName).toBeNull();
+			expect(detail.asset.currentCustomerStatus).toBeNull();
+			expect(JSON.stringify(detail.asset)).not.toContain(
+				"Leak Canary Holdings",
+			);
+		});
+
+		it("keeps the occupancy in the history, with the foreign name withheld", async () => {
+			const detail = await callerFor(ids.adminA).assets.getAsset({
+				id: mispointedAsset,
+			});
+			const row = detail.assignments.find(
+				(candidate) => candidate.id === mispointedAssignment,
+			);
+
+			// The assignment is the purveyor's own record — that an occupancy
+			// started on this date is theirs to see, and a join that dropped the
+			// row would erase the history instead of protecting it. Only the name
+			// is withheld.
+			expect(row).toBeDefined();
+			expect(row?.startDate).toBe("2026-01-01");
+			expect(row?.customerName).toBeNull();
+			expect(row?.customerStatus).toBeNull();
+			expect(JSON.stringify(detail.assignments)).not.toContain(
+				"Leak Canary Holdings",
+			);
+		});
+
+		it("leaks the name through no part of the response", async () => {
+			const detail = await callerFor(ids.adminA).assets.getAsset({
+				id: mispointedAsset,
+			});
+
+			expect(JSON.stringify(detail)).not.toContain("Leak Canary Holdings");
+			expect(JSON.stringify(detail)).not.toContain("canary@example.com");
+		});
+
+		it("stays invisible to the purveyor whose customer it points at", async () => {
+			const { rows } = await callerFor(ids.adminB).assets.listAssets({
+				page: 1,
+				pageSize: 100,
+			});
+
+			expect(rows.map((row) => row.id)).not.toContain(mispointedAsset);
+
+			await expect(
+				callerFor(ids.adminB).assets.getAsset({ id: mispointedAsset }),
+			).rejects.toThrow(/not found/i);
+		});
+
+		it("leaves the customer reachable to the purveyor that owns it", async () => {
+			// The customer is not the problem and is not quarantined — only the
+			// link from another tenant's asset is refused.
+			const { rows } = await pool.query(
+				"select name from customers where id = $1 and water_purveyor_id = $2",
+				[foreignCustomer, wpB],
+			);
+
+			expect(rows[0]?.name).toBe("Leak Canary Holdings");
+		});
+	});
 });

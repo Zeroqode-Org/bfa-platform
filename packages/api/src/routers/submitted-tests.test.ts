@@ -94,6 +94,16 @@ let callerFor: (profileId: string) => {
 			input: Inputs["linkSubmissionAsset"],
 		) => Promise<Outputs["linkSubmissionAsset"]>;
 	};
+	/**
+	 * The asset procedures, reached from here for one assertion only: that a
+	 * cross-tenant *link* being refused does not quarantine the asset itself from
+	 * the purveyor that legitimately owns it.
+	 */
+	assets: {
+		getAsset: (
+			input: inferProcedureInput<AppRouter["assets"]["getAsset"]>,
+		) => Promise<inferProcedureOutput<AppRouter["assets"]["getAsset"]>>;
+	};
 };
 
 function captureLogs() {
@@ -564,6 +574,131 @@ describeDb("submitted-test procedures", () => {
 			expect(
 				first.rows.map((row) => row.id).includes(second.rows[0]?.id ?? ""),
 			).toBe(false);
+		});
+	});
+
+	/**
+	 * A submission in one purveyor whose `bfa_asset_id` points at another
+	 * purveyor's asset.
+	 *
+	 * Not a state any procedure can produce — `linkSubmissionAsset` refuses it,
+	 * and `0009_test_submission_asset_tenancy` put the same clause in the row
+	 * policy's WITH CHECK. It is seeded here directly, with SQL, because the
+	 * question is what the *read* path does when it meets one anyway: corruption,
+	 * a restore, or a row written before those two rules existed.
+	 *
+	 * `0009` deliberately left the clause out of USING so such a row stays
+	 * reachable and repairable. That makes the read side's job specific: keep the
+	 * submission visible to the purveyor who owns it, and do not carry the
+	 * foreign asset's fields along with it.
+	 *
+	 * The foreign asset is given values that exist nowhere else in the fixture,
+	 * so a leak cannot be mistaken for a plausible row.
+	 */
+	describe("a submission whose asset link crosses tenants", () => {
+		const foreignAsset = randomUUID();
+		const crossLinked = randomUUID();
+
+		beforeAll(async () => {
+			await pool.query(
+				`insert into bfa_assets (id, water_purveyor_id, bin, bfa_type, service_address, annual_test_date)
+				 values ($1, $2, 'LEAK-CANARY-BIN', 'DC', '99 Foreign Street', '2027-06-01')`,
+				[foreignAsset, wpB],
+			);
+
+			// Straight to SQL: no procedure will make this link, which is the point.
+			await pool.query(
+				`insert into test_submissions
+				   (id, bfa_asset_id, certifier_id, water_purveyor_id, status, bfa_type,
+				    wizard_data, submitted_bin_text, test_date, test_result)
+				 values ($1, $2, $3, $4, 'submitted', 'RP', $5::jsonb, 'TYPED-BY-CERTIFIER', '2027-04-02', 'pass')`,
+				[
+					crossLinked,
+					foreignAsset,
+					certifierA,
+					wpA,
+					JSON.stringify({ fixtureKey: "cross-tenant-link" }),
+				],
+			);
+		});
+
+		afterAll(async () => {
+			await pool.query("delete from test_submissions where id = $1", [
+				crossLinked,
+			]);
+			await pool.query("delete from bfa_assets where id = $1", [foreignAsset]);
+		});
+
+		it("still lists the row for the purveyor that owns the submission", async () => {
+			const { rows } = await callerFor(
+				ids.adminA,
+			).submittedTests.listSubmittedTests({ page: 1, pageSize: 100 });
+
+			// Visible, not filtered away. Dropping it would hide the one row
+			// somebody has to go and repair.
+			expect(rows.map((row) => row.id)).toContain(crossLinked);
+		});
+
+		it("carries none of the foreign asset's fields on the listed row", async () => {
+			const { rows } = await callerFor(
+				ids.adminA,
+			).submittedTests.listSubmittedTests({ page: 1, pageSize: 100 });
+			const row = rows.find((candidate) => candidate.id === crossLinked);
+
+			expect(row?.bin).toBeNull();
+			expect(row?.serviceAddress).toBeNull();
+			expect(JSON.stringify(row)).not.toContain("LEAK-CANARY-BIN");
+			expect(JSON.stringify(row)).not.toContain("99 Foreign Street");
+		});
+
+		it("reads on the list exactly as an unlinked submission does", async () => {
+			const { rows } = await callerFor(
+				ids.adminA,
+			).submittedTests.listSubmittedTests({ page: 1, pageSize: 100 });
+			const row = rows.find((candidate) => candidate.id === crossLinked);
+
+			// Null BIN plus the certifier's typed text is the shape both screens
+			// already render as "not linked to an asset" — so the failure mode is a
+			// state the UI has copy for, rather than a blank.
+			expect(row?.submittedBinText).toBe("TYPED-BY-CERTIFIER");
+		});
+
+		it("opens on the detail path with the foreign asset withheld", async () => {
+			const row = await callerFor(ids.adminA).submittedTests.getSubmittedTest({
+				id: crossLinked,
+			});
+
+			expect(row.id).toBe(crossLinked);
+			expect(row.bin).toBeNull();
+			expect(row.serviceAddress).toBeNull();
+			expect(JSON.stringify(row)).not.toContain("LEAK-CANARY-BIN");
+			expect(JSON.stringify(row)).not.toContain("99 Foreign Street");
+		});
+
+		it("stays invisible to the purveyor whose asset it points at", async () => {
+			const { rows } = await callerFor(
+				ids.adminB,
+			).submittedTests.listSubmittedTests({ page: 1, pageSize: 100 });
+
+			expect(rows.map((row) => row.id)).not.toContain(crossLinked);
+
+			// And by id, not merely unlisted: the submission's own tenant is what
+			// scopes it, and B does not own it whatever its asset says.
+			await expect(
+				callerFor(ids.adminB).submittedTests.getSubmittedTest({
+					id: crossLinked,
+				}),
+			).rejects.toThrow(/not found/i);
+		});
+
+		it("leaves the foreign asset reachable to the purveyor that owns it", async () => {
+			// The asset is not the problem and is not quarantined — only the link
+			// from another tenant's submission is refused.
+			const found = await callerFor(ids.adminB).assets.getAsset({
+				id: foreignAsset,
+			});
+
+			expect(found.asset.bin).toBe("LEAK-CANARY-BIN");
 		});
 	});
 

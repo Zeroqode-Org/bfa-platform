@@ -11,6 +11,34 @@ on. Water purveyors create and maintain them from `/wp/assets`.
 This page describes the screen as built. It covers *WP dashboard — BFA assets*
 in the [build plan](/docs/build-plan) and PRD § 6.6.2.
 
+## The customer joins are tenant-scoped
+
+`listAssets` and `getAsset` both LEFT JOIN `customers` to put the current
+occupant's name and status on the asset, and the detail view joins it again for
+the occupancy history. All three match on the customer id **and** on the
+caller's own purveyor.
+
+The asset is scoped by `bfa_assets.water_purveyor_id`, but that does not scope
+the customer: `current_customer_id` and `customer_assignments.customer_id` are
+foreign keys to `customers`, and neither says the two share a tenant.
+`assignCustomer` refuses to point one across — it validates the customer's
+purveyor before writing — but a row written before that rule, a restore, or
+corruption is not bound by it. Without the extra clause such a row would put
+another purveyor's customer on an asset this caller is entitled to read.
+
+The predicate is in the `ON` clause, so it fails safe. The asset comes back with
+a null occupant, which is exactly how an unassigned asset already reads and a
+state every screen already renders as "Unassigned"; in the `WHERE` the asset
+itself would vanish from the list, hiding the row that needs repairing.
+
+The history join changed from INNER to LEFT for the same reason. A
+`customer_assignments` row is keyed by `bfa_asset_id` — the fact that an
+occupancy existed is the purveyor's own record — so an INNER join carrying this
+predicate would delete that fact whenever the customer it named turned out to be
+foreign. The occupancy stays, the dates stay, and the name reads "Unknown
+customer". On a correct database the two are identical; they differ only on the
+mispointed row.
+
 ## What an asset record is
 
 | Field | Required | Notes |

@@ -98,7 +98,7 @@ export const assetsRouter = router({
 			const rows = await db
 				.select(assetSelection)
 				.from(bfaAssets)
-				.leftJoin(customers, eq(customers.id, bfaAssets.currentCustomerId))
+				.leftJoin(customers, tenantOccupant(ctx.caller.waterPurveyorId))
 				.where(where)
 				// `id` breaks the tie so two assets sharing a BIN prefix keep a stable
 				// order between renders rather than swapping places on refetch. The BIN
@@ -396,12 +396,60 @@ function searchPredicate(search: string | undefined) {
 	);
 }
 
+/**
+ * The join condition attaching an asset to its current occupant: the right
+ * customer, *and* the caller's own purveyor.
+ *
+ * The asset is already scoped by the `where` on every query that uses this, but
+ * that does not scope the customer. `bfa_assets.current_customer_id` is a
+ * foreign key to `customers` and nothing about it says the two share a tenant —
+ * `assignCustomer` refuses to point one across, but a row written before that
+ * rule, a restore, or corruption is not bound by it. Without this clause such a
+ * row would put another purveyor's customer name and status on an asset this
+ * caller is entitled to read, through the privileged connection.
+ *
+ * In the `ON` clause rather than the `where`, which is the difference between
+ * failing safe and failing silent. Here the asset comes back with a null
+ * occupant — exactly how an unassigned asset already reads, and a state every
+ * screen already renders as "Unassigned". In the `where` the asset itself would
+ * vanish from the list, hiding the row that needs repairing.
+ */
+function tenantOccupant(waterPurveyorId: string) {
+	return and(
+		eq(customers.id, bfaAssets.currentCustomerId),
+		eq(customers.waterPurveyorId, waterPurveyorId),
+	);
+}
+
+/**
+ * The same rule for the occupancy history: the assignment's customer, in the
+ * caller's own purveyor.
+ *
+ * A LEFT join where this used to be an INNER one, and the change is the point.
+ * `customer_assignments` is keyed by `bfa_asset_id` — the history belongs to
+ * the purveyor's own asset, and the fact that an occupancy existed is theirs to
+ * see. An INNER join carrying this predicate would delete that fact from the
+ * record whenever the customer it named turned out to be foreign, which is a
+ * worse answer than showing the occupancy with no name on it.
+ *
+ * On a correct database the two are identical: every assignment names a
+ * customer in the asset's own tenant, so nothing is nulled and nothing is
+ * dropped. They differ only on the corrupt row, and there the left join keeps
+ * the purveyor's history intact while still withholding the foreign name.
+ */
+function tenantAssignmentCustomer(waterPurveyorId: string) {
+	return and(
+		eq(customers.id, customerAssignments.customerId),
+		eq(customers.waterPurveyorId, waterPurveyorId),
+	);
+}
+
 /** One asset with its occupancy history, or a not-found. */
 async function readAssetDetail(waterPurveyorId: string, assetId: string) {
 	const [asset] = await db
 		.select(assetSelection)
 		.from(bfaAssets)
-		.leftJoin(customers, eq(customers.id, bfaAssets.currentCustomerId))
+		.leftJoin(customers, tenantOccupant(waterPurveyorId))
 		.where(
 			and(
 				eq(bfaAssets.id, assetId),
@@ -427,7 +475,10 @@ async function readAssetDetail(waterPurveyorId: string, assetId: string) {
 			endDate: customerAssignments.endDate,
 		})
 		.from(customerAssignments)
-		.innerJoin(customers, eq(customers.id, customerAssignments.customerId))
+		// Left, not inner, and tenant-scoped — see `tenantAssignmentCustomer`.
+		// The history row is the purveyor's own record and stays either way; what
+		// the predicate withholds is a foreign customer's name.
+		.leftJoin(customers, tenantAssignmentCustomer(waterPurveyorId))
 		.where(eq(customerAssignments.bfaAssetId, assetId))
 		// Newest first, so the open row is at the top where the current occupant
 		// is looked for. `created_at` breaks the tie for two assignments that

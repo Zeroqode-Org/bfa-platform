@@ -23,7 +23,7 @@ Target delivery: **2026-10-02** (~6 weeks from kickoff on 2026-08-24). Team: **L
 
 ## Task tracker
 
-Status as of **2026-09-10**. Update this table as work progresses — this is the source of truth, not the phase table above.
+Status as of **2026-09-11**. Update this table as work progresses — this is the source of truth, not the phase table above.
 
 | Task | PRD § | Owner | Start | End | Status |
 |---|---|---|---|---|---|
@@ -34,7 +34,7 @@ Status as of **2026-09-10**. Update this table as work progresses — this is th
 | Transactional Email Integration | 6.14 | Daniil | 08/24 | 10/02 | in-progress |
 | Data Model, Auth & Backend Setup | 6.1 | Lina | 08/31 | 09/04 | in-progress |
 | Certifier Dashboard | 6.3 | Lina | 08/31 | 09/04 | planned |
-| WP Dashboard — Core & Analytics | 6.6.1 | Daniil | 09/07 | 09/11 | planned |
+| WP Dashboard — Core & Analytics | 6.6.1 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — BFA Assets | 6.6.2 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Certifiers | 6.6.3 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Customers | 6.6.4 | Daniil | 09/07 | 09/11 | done |
@@ -55,6 +55,37 @@ Status as of **2026-09-10**. Update this table as work progresses — this is th
 shortcut from before roles were resolved server-side; `/` now forwards each
 signed-in user to their own dashboard by role, and anonymous visitors to
 `/login`. See [Where people land](/docs/invitations-onboarding#where-people-land).
+
+**WP Dashboard — Core & Analytics (6.6.1)**: shipped. `/wp` is no longer a
+placeholder. Five WP-scoped read procedures in a new `dashboard` router back the
+five build-plan metric cards, an incoming-reports list, a delinquent-asset list,
+a trailing-twelve-month compliance trend and a pass/fail breakdown over a
+selectable range. **No migration ships with it** — it reads what the assets and
+submitted-tests features already store, through indexes those features already
+put there.
+
+Two decisions worth carrying forward. The build plan's *"submissions awaiting
+review"* card ships as **Submitted reports**, counting `status = 'submitted'`:
+the schema has no review lifecycle, and rather than invent one the card was
+renamed to what it actually counts, with a line on the card saying it is an
+incoming total and not a queue that drains. And the screen shows the build
+plan's **five** cards rather than the approved prototype's six — Certifiers and
+Customers are prototype-only, and both already have a screen of their own in the
+sidebar.
+
+The pass/fail breakdown returns `pass`, `fail` and `total` and nothing else;
+submitted rows with no recorded result are reported as
+`supplemental.unrecorded` and shown as a note beneath the chart rather than as
+part of it. All date filtering is calendar-date comparison against Postgres
+`date` columns — the one zone-dependent step is naming the day "now" falls on,
+done in UTC.
+
+Incoming reports do not get a detail view of their own. A row links to
+`/wp/tests?test=<id>`, and the existing Submitted Tests screen opens that record
+in its own document dialog — so the document, the corrections form, the
+link-to-asset flow and the role check stay in one place. The two share the
+ordering constant as well, so the dashboard's rows really are the head of that
+list. Full writeup: [WP Dashboard — Core & Analytics](/docs/wp-dashboard).
 
 **WP Dashboard — Customers (6.6.4)**: shipped. `/wp/customers` creates, edits
 and suspends customers through three WP-scoped procedures, `customers` has row
