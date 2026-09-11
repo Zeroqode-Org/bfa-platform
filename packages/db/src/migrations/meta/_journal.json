@@ -22,6 +22,62 @@
 			"when": 1788953200970,
 			"tag": "0002_invitation_proposed_wp_name",
 			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1789640000000,
+			"tag": "0003_customer_policies",
+			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "7",
+			"when": 1789900000000,
+			"tag": "0004_bfa_asset_policies",
+			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "7",
+			"when": 1790160000000,
+			"tag": "0005_repair_company_policies",
+			"breakpoints": true
+		},
+		{
+			"idx": 6,
+			"version": "7",
+			"when": 1790420000000,
+			"tag": "0006_certifier_policies",
+			"breakpoints": true
+		},
+		{
+			"idx": 7,
+			"version": "7",
+			"when": 1790430000000,
+			"tag": "0007_certifier_column_permissions",
+			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "7",
+			"when": 1790700000000,
+			"tag": "0008_test_submission_policies",
+			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "7",
+			"when": 1790800000000,
+			"tag": "0009_test_submission_asset_tenancy",
+			"breakpoints": true
+		},
+		{
+			"idx": 10,
+			"version": "7",
+			"when": 1791000000000,
+			"tag": "0010_notice_template_policies",
+			"breakpoints": true
 		}
 	]
 }

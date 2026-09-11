@@ -1,0 +1,362 @@
+---
+title: WP Dashboard — Core & Analytics
+description: The purveyor home screen — how each card and chart is calculated, why "awaiting review" ships as "Submitted reports", the tenant boundary behind every figure, and how incoming reports drill into Submitted Tests
+---
+
+`/wp` is the water purveyor's home screen: five numbers, two work queues, and
+two charts. Every figure on it is derived from rows belonging to the caller's
+own purveyor, and nothing on it is a placeholder or a sample.
+
+This page describes the screen as built. It covers *WP dashboard — core and
+analytics* in the [build plan](/docs/build-plan) and PRD § 6.6.1.
+
+## The tenant boundary
+
+Nothing on this screen accepts a water purveyor id. Every procedure in
+`packages/api/src/routers/dashboard.ts` is a `wpProcedure`, which takes the
+tenant from the caller's own `profiles` row and puts a non-null
+`waterPurveyorId` back on the context — so a downstream query cannot forget the
+null case, because by then there is not one. `passFailBreakdownInput` is a
+`strictObject`, so a request that sends a `waterPurveyorId` alongside its dates
+is *refused* rather than quietly having the field dropped: a silently ignored
+field looks like a successful request to whatever sent it.
+
+Who may call them:
+
+| Caller | Result |
+|---|---|
+| WP Admin, SubAdmin, Employee | Reads every figure for their own purveyor |
+| Certifier | `FORBIDDEN` — "Water Purveyor only" |
+| Super-Admin | `FORBIDDEN` — refused rather than shown every tenant summed together |
+| A WP role whose profile carries no purveyor | `FORBIDDEN` — "No water purveyor on this account" |
+
+All three WP roles read the dashboard. Reading a figure is not an
+administrative act — the role split on this platform governs *corrections*, and
+that lives on the Submitted Tests router's two mutations
+([WP Submitted Tests](/docs/wp-submitted-tests#who-may-correct-one)).
+
+Every statement reads through the privileged Drizzle connection, which bypasses
+RLS. That makes `wpProcedure` plus the explicit `water_purveyor_id` predicate on
+each query the authorization boundary in the app, and the policies already on
+`bfa_assets` (`0004`) and `test_submissions` (`0008`/`0009`) the same boundary
+for anything reaching those tables through PostgREST. Neither substitutes for
+the other.
+
+**The asset join is tenant-scoped too, not only the submission.**
+`test_submissions.water_purveyor_id` scopes the row, but the foreign key on
+`bfa_asset_id` proves only that the asset exists — not that it belongs to the
+same purveyor. So `incomingReports` joins on both the id *and* the caller's
+purveyor, and `listSubmittedTests` and `getSubmittedTest` do the same.
+
+The clause sits in the `ON` rather than the `WHERE`, which is the difference
+between failing safe and failing silent: a submission whose link crossed tenants
+still appears, with its asset columns null — exactly how an unlinked row already
+reads, and a state both screens already label "not linked to an asset" — rather
+than vanishing from the list that is the only place somebody could go and fix
+it. `linkSubmissionAsset` has always refused to create such a link and
+`0009_test_submission_asset_tenancy` put the same clause in the row policy's
+WITH CHECK; this is the read side of the same rule, for a row that predates them
+or arrives some other way.
+
+The delinquent list applies the same rule one table further along:
+`bfa_assets.current_customer_id` is a foreign key to `customers` and does not
+prove the customer shares the asset's tenant, so that join carries the caller's
+purveyor too. It matters most here — this list is a work queue whose next step
+is contacting the occupant, so the occupant's name is the field most likely to
+be acted on.
+
+**This feature ships no migration.** It adds no table, no column and no index —
+it reads what the assets and submitted-tests features already store, through
+indexes those features already put there. `test_submissions_wp_status_test_date_idx`
+covers every submission query here, because they all lead with
+`(water_purveyor_id, status)` and then bound or sort on `test_date`.
+
+## Drafts are nowhere on this screen
+
+Every submission predicate on the dashboard pins `status = 'submitted'`. A draft
+is a certifier's working copy of a test nobody has attested to, and counting one
+would put a number on a purveyor's home screen for work that has not been filed.
+A draft dated today does not move "Tests this month", does not appear in
+incoming reports, and is in neither chart.
+
+## The five metric cards
+
+`dashboardMetrics` returns all five in one request — two SQL statements, each a
+set of filtered aggregates over a single scan.
+
+| Card | Counts | Tone |
+|---|---|---|
+| **Total assets** | Every `bfa_assets` row in the tenant, at any status | Primary |
+| **Tests this month** | Submitted tests whose `test_date` falls in the current calendar month | Accent |
+| **Past due** | Assets the scheduler has marked `asset_status = 'past_due'` | Danger |
+| **Submitted reports** | Every submitted row in the tenant | Primary |
+| **No-BIN submissions** | Submitted rows with a null `bfa_asset_id` | Accent |
+
+"Tests this month" is dated by when the test was **performed**, not by when the
+row was created. That is the number a compliance officer is asked for, and it
+puts the card on the same basis as the trend chart below it. A submitted row
+carrying no `test_date` at all falls in no month — it is a record with a gap in
+it, not a test performed today.
+
+The tone vocabulary comes from the [design system](/docs/design-system): primary
+for a figure counted straight off a table, the secondary accent for one computed
+over a period or a condition, danger for the one that means somebody has to act.
+
+### Deliberately five cards, not the prototype's six
+
+The client-approved prototype shows six: these five plus **Certifiers** and
+**Customers**. The build plan lists five, and on what this screen counts the
+build plan is authoritative. Both of the omitted figures already have a screen
+of their own in the WP sidebar, where the number comes with the list it counts.
+
+## "Awaiting review" ships as "Submitted reports"
+
+The build plan's card list says *"submissions awaiting review"*. **The schema has
+no review lifecycle.** `test_submissions.status` is only `draft | submitted`;
+there is no reviewed state, no reviewer, and no timestamp for a review.
+
+**Confirmed decision: the card counts `status = 'submitted'`, and is labelled
+"Submitted reports".** No review workflow, review status or migration was
+invented for it.
+
+The rename is the honest half of that decision. Counting submitted rows under
+the label "Awaiting review" would promise a queue that drains, and nothing on
+this platform ever marks a test reviewed — the number only goes up. The card
+therefore carries the line *"Filed to date — not a review queue"* directly under
+it, so the reading is on the screen and not only in this page.
+
+Two other readings were considered and rejected:
+
+- **`bfa_asset_id is null`** — that is already the No-BIN card, and adopting it
+  would have made two of five cards permanently identical.
+- **`edited_by_wp_profile_id is null`** — that would read a WP *correction* as a
+  review sign-off. A correction is a change to the legal record of a backflow
+  test; it is not an attestation that somebody checked one.
+
+If a real review lifecycle is wanted later, it is a column and a migration, and
+this card becomes a different query. Nothing shipped here has to be unwound
+first.
+
+## Incoming reports
+
+The newest submitted tests filed against the purveyor, cross-certifier — this is
+the purveyor's inbox, not one certifier's archive. Each row shows the BIN, the
+assembly type, the certifier who filed it, the test date, and the result.
+
+A submission that never resolved to an asset shows **what the certifier typed**
+(`submitted_bin_text`) and is flagged *"Not linked to an asset"*. A submission
+with neither says it has no BIN at all. That is `binLabel`, shared with the
+Submitted Tests table, so the two screens cannot describe the same row
+differently.
+
+### It is literally the head of Submitted Tests
+
+`incomingReports` shares its ordering constant — `newestSubmittedTestFirst` —
+with `listSubmittedTests`, rather than restating it. So the five rows here are
+the first five rows there, and a database test asserts exactly that. Two
+orderings meant to match but written twice would eventually stop matching.
+
+Clicking a row goes to **`/wp/tests?test=<id>`** — the existing
+[Submitted Tests](/docs/wp-submitted-tests) screen, which reads the query string
+on the server and opens that record in its document dialog. There is no second
+detail view, no parallel route and no second copy of the corrections form, the
+link-to-asset flow or the role check. The dashboard owns a link; Submitted Tests
+owns the record.
+
+The id in that query string is not trusted. `getSubmittedTest` scopes by tenant
+*and* status, so a foreign id, a draft id and an invented one all get the same
+"Submitted test not found".
+
+## Delinquent assets
+
+Assets the scheduler has marked `past_due`, **worst first** — ordered by the
+annual test date that made them delinquent, not by BIN, because the question
+this list answers is "who is worst" rather than "who is where". Each row carries
+the BIN, the type, the service address and the current occupant, because the
+next action on one of these rows is contacting somebody.
+
+A past-due asset carrying no annual test date sorts **last**, not first: it is a
+data problem rather than the most overdue valve on the system. The badge on such
+a row says "Past due" rather than "0 days" — a zero would read as "due today".
+
+Each row links to `/wp/assets/[assetId]`, the asset's existing detail route.
+
+`asset_status` is read here and written nowhere. The scheduler computes it from
+`annual_test_date` and no procedure in the app accepts one, so this list is a
+view of that computation rather than a second opinion about it. Nothing yet
+recomputes it — that is Workflow 1 — so on today's data the list reflects
+whatever the column currently holds.
+
+## Compliance trend
+
+`complianceTrend` returns the monthly pass rate over the **trailing twelve
+calendar months**, oldest first, ending with the current month.
+
+- **Always twelve entries**, whether or not a month has a row in it. The x-axis
+  is a property of the calendar rather than of the data, and a trend that
+  dropped its quiet months would draw a straight line across a gap and call it
+  continuity.
+- **Only rows with a non-null `test_result` are counted.** A submitted test
+  missing its result is not a failure; it is a record that never recorded one,
+  and letting it into the denominator would quietly depress the rate of every
+  month it appeared in.
+- **A month nobody tested in has `passRate: null`, never `0`.** The chart breaks
+  its line across a `null` and plots a point on a real `0`. A month in which
+  nobody tested anything is not a month in which every test failed.
+
+Grouped in Postgres with `to_char(test_date, 'YYYY-MM')`, then re-attached to the
+calendar in TypeScript. The month arithmetic lives in
+`packages/api/src/lib/dashboard-calendar.ts` so it can be tested without a
+database — and the arithmetic is the part with the edge cases in it.
+
+## Pass / fail breakdown
+
+`passFailBreakdown` takes a required `from` and `to`, **both inclusive calendar
+dates**, and returns `pass`, `fail` and `total` for that window. Those three are
+the whole contract — `total` is `pass + fail`, the denominator of a rate, and
+nothing else is counted into it. The range is refused if it ends before it
+starts: that is a typo, not an empty result, and reporting it as two zeroes
+would let a reader conclude nobody tested anything that month.
+
+The screen opens on the same trailing twelve months the trend chart covers. Two
+charts on one screen showing different spans of the same data is how a reader
+comes away with a number that does not reconcile with the one above it. The
+range is visible and editable, and a "Last 12 months" button puts it back.
+
+The response **echoes the range back**, and the chart captions itself from the
+echo rather than from the two date inputs. Those disagree for as long as a
+request is in flight, and a chart labelled with the pending range would tell a
+small lie every time somebody changed it.
+
+An incomplete range is caught on the client and simply not sent: clearing either
+date box yields `""`, which `z.iso.date()` refuses, and a refusal would reach
+the screen as a failed request — telling the reader something is broken while
+they are mid-edit. The screen names the empty box instead, keeps that state
+distinct from the backwards-range one, and re-enables the query the moment a
+valid date is typed back in. The server's validation is unchanged and is still
+the boundary.
+
+### Tests with no recorded result
+
+A submitted test with a null `test_result` lands in **neither** count and is
+**not** in `total`. It is not a failure — it is a record that never recorded one
+— so folding it into `fail` would accuse a certifier of something that never
+happened, and dropping it entirely would make `pass + fail` look like the number
+of tests filed in the window when it is not.
+
+So it is reported, and reported outside the breakdown, in both the response and
+the UI:
+
+- On the response it is `supplemental.unrecorded` — a deliberate second level
+  rather than a fourth sibling of `pass` and `fail`. A caller has to name
+  `supplemental` to read it, which is what keeps it from drifting into `total`
+  as a third addend or into the chart as a third bar. Nothing in the contract
+  depends on it; a consumer that ignores it still gets a correct breakdown.
+- On screen it is a separate note *beneath* the chart — "Not counted above: N
+  submitted tests in this range have no result recorded" — rendered outside the
+  `<figure>`, and absent entirely when the count is zero. The chart's own
+  screen-reader table lists two rows, Passed and Failed, and not a third.
+
+The separation is structural rather than a matter of wording. Inside the figure
+the count would read as part of the breakdown — to a screen reader walking the
+table most of all — and a reader could reasonably add it to the two bars and
+expect the sum to mean something.
+
+**A zero total is a result, not an empty state.** Both bars still render, at
+zero, with the caption "No pass or fail results fall in this range." Replacing
+them with a placeholder would make a genuine finding look like a request that
+never happened — and the loading and error states are separate and distinct.
+
+## Calendar dates, and the one place a zone matters
+
+`test_submissions.test_date` and `bfa_assets.annual_test_date` are Postgres
+`date` columns — a calendar day, with no time and no zone on it.
+
+**So every filter and bucket on this screen is a calendar-date comparison.**
+"Tests this month" is `test_date between '2026-09-01' and '2026-09-30'`; the
+pass/fail range is `between` its two chosen days; the trend groups by
+`to_char(test_date, 'YYYY-MM')`. There is no zone in any of those comparisons to
+get wrong, and no time component for an inclusive upper bound to clip — the 1st
+to the 30th means exactly those thirty days, for every reader, wherever they
+are.
+
+**One step is zone-dependent: naming the calendar day "now" falls on.** Before
+any of the above can run, the server has to turn an instant — `new Date()`, the
+process clock — into a day, in order to decide which month is "this month",
+where the trailing-twelve window ends, and what `today` is for the overdue
+count. That conversion is done in **UTC**, in exactly two places:
+
+- `dashboard-calendar.ts`, via `getUTCFullYear` / `getUTCMonth` / `Date.UTC`,
+  for the month and window boundaries;
+- the `/wp` page's `new Date().toISOString().slice(0, 10)`, for the `today` it
+  hands the client component.
+
+Both do it the same way so the screen cannot label a figure with a different day
+than the procedure counted. UTC rather than the server's local zone so that
+which month a figure covers is a property of the data rather than of where the
+process happens to run — and so the arithmetic is testable without pinning `TZ`.
+
+The trade is stated rather than hidden, and it is confined to that single step:
+for a purveyor west of UTC, the last few hours of a month's final day already
+count as the next month. Everything downstream of the conversion is zone-free.
+
+Rendering is a separate matter again. A `YYYY-MM-DD` or `YYYY-MM` value carries
+no zone, but `Intl` needs an instant — so the formatters in `dashboard-types.ts`
+invent one at a fixed point and read it back at that same fixed point. Pinning
+both ends is what makes the round trip lossless; formatting in the browser's
+zone instead would show a test performed on the 1st as the 31st for anyone west
+of UTC, from a value that never had a zone to begin with.
+
+`today` is decided once on the server and handed to the client component as a
+prop. `WpDashboard` renders on the server first, so a default date range or an
+overdue count derived from `new Date()` inside it would be computed twice, a
+moment apart, either side of the hydration boundary.
+
+## Charts without a chart library
+
+Both charts are inline SVG and plain elements. Nothing in the project depends on
+a charting library, and a twelve-point line and two proportional bars are a
+hundred lines of arithmetic against several hundred kilobytes of runtime that
+would also need restyling onto the design tokens before it matched anything else
+on screen.
+
+Every colour is a token class — the SVG uses Tailwind's `stroke-*` and `fill-*`
+utilities, for the same reason nothing else in the app inlines a hex.
+
+Accessibility is not the `aria-label` on the `<svg>`. Each chart carries a
+screen-reader table holding the same figures the picture shows, so the data is
+readable rather than merely summarised: a one-sentence label answers "what is
+this" and is useless for "what was March". Each of the four panels is a named
+landmark region, so a screen reader can move between them directly.
+
+## Loading, empty and error
+
+Five separate queries rather than one. `httpBatchLink` sends them as a single
+HTTP request anyway, so the cost is nothing — and each panel gets to fail, load
+and empty on its own. A single combined query would mean a slow trend hiding the
+cards, and one broken panel blanking the screen.
+
+The cards show placeholder cards rather than zeroes while the request is in
+flight. No number is better than the wrong number: a card defaulting to `0`
+would tell a purveyor they have no assets.
+
+## Tests
+
+- `packages/api/src/lib/dashboard-calendar.test.ts` — month bounds, leap
+  February, year rollover, the trailing window, and the null-versus-zero rate.
+- `packages/api/src/lib/dashboard-input.test.ts` — limits, required bounds, a
+  backwards range, and the refusal of a client-supplied tenant.
+- `packages/api/src/routers/dashboard.test.ts` — the procedures against real
+  Postgres, with a frozen clock and two purveyors seeded as deliberate mirror
+  images. Role refusals on every procedure, two-WP isolation for every metric,
+  trend point, breakdown count and list row, drafts, null results, null
+  `bfa_asset_id`, calendar boundaries, the pass/fail contract holding
+  `total = pass + fail` with unrecorded rows present, and reconciliation of
+  every figure against SQL run straight at the tables. Opt-in behind
+  `npm run test:db`.
+- `apps/web/src/components/wp/dashboard-types.test.ts` — link targets, zone-safe
+  date rendering, the default range, and the overdue count.
+- `apps/web/src/components/wp/wp-dashboard.test.tsx` — loading, empty, error and
+  populated states for every panel, the five build-plan cards and the absence of
+  the prototype's two, the Submitted Tests and asset links, the selected date
+  range, and the unrecorded note sitting outside the chart rather than in it.

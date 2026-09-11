@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
 	date,
 	index,
@@ -51,5 +52,13 @@ export const bfaAssets = pgTable(
 			table.waterPurveyorId,
 			table.bin,
 		),
+		// The general-info broadcast's past-due audience: does this customer own
+		// any assembly the scheduler has marked past_due? The two lookup columns
+		// are in the index and the status is in the predicate, so it covers only
+		// the delinquent slice rather than carrying a third column across every
+		// asset row. Added in 0010 alongside the notice_templates policies.
+		index("bfa_assets_wp_past_due_customer_idx")
+			.on(table.waterPurveyorId, table.currentCustomerId)
+			.where(sql`${table.assetStatus} = 'past_due'`),
 	],
 ).enableRLS();

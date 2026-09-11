@@ -1,0 +1,389 @@
+---
+title: WP BFA Assets
+description: How a water purveyor registers and maintains the assemblies it is responsible for — the assets screen, its procedures, the customer-assignment transaction, and the row policies behind them
+---
+
+A BFA asset is the permanent record of one physical backflow assembly: its BIN,
+what kind of valve it is, where it sits, and when it is next due to be tested.
+It is the row every notice, every submission and every wizard prefill is keyed
+on. Water purveyors create and maintain them from `/wp/assets`.
+
+This page describes the screen as built. It covers *WP dashboard — BFA assets*
+in the [build plan](/docs/build-plan) and PRD § 6.6.2.
+
+## The customer joins are tenant-scoped
+
+`listAssets` and `getAsset` both LEFT JOIN `customers` to put the current
+occupant's name and status on the asset, and the detail view joins it again for
+the occupancy history. All three match on the customer id **and** on the
+caller's own purveyor.
+
+The asset is scoped by `bfa_assets.water_purveyor_id`, but that does not scope
+the customer: `current_customer_id` and `customer_assignments.customer_id` are
+foreign keys to `customers`, and neither says the two share a tenant.
+`assignCustomer` refuses to point one across — it validates the customer's
+purveyor before writing — but a row written before that rule, a restore, or
+corruption is not bound by it. Without the extra clause such a row would put
+another purveyor's customer on an asset this caller is entitled to read.
+
+The predicate is in the `ON` clause, so it fails safe. The asset comes back with
+a null occupant, which is exactly how an unassigned asset already reads and a
+state every screen already renders as "Unassigned"; in the `WHERE` the asset
+itself would vanish from the list, hiding the row that needs repairing.
+
+The history join changed from INNER to LEFT for the same reason. A
+`customer_assignments` row is keyed by `bfa_asset_id` — the fact that an
+occupancy existed is the purveyor's own record — so an INNER join carrying this
+predicate would delete that fact whenever the customer it named turned out to be
+foreign. The occupancy stays, the dates stay, and the name reads "Unknown
+customer". On a correct database the two are identical; they differ only on the
+mispointed row.
+
+## What an asset record is
+
+| Field | Required | Notes |
+|---|---|---|
+| `bin` | yes | Unique **per purveyor** — two WPs may number their valves the same way |
+| `bfa_type` | yes | One of the eight types: RP, RPDA, RPDA-2, DC, DCDA, DCDA-2, PVB, SVB |
+| `service_address` | yes | Searchable alongside the BIN |
+| `assembly_location` | no | Where on the property the assembly sits; blank is stored as NULL |
+| `make`, `model`, `serial_number`, `size` | no | Assembly details; blank is stored as NULL |
+| `annual_test_date` | yes on this screen | What the reminder workflow schedules against |
+| `asset_status` | — | Computed by the scheduler; not editable by anyone |
+| `current_customer_id` | no | Optional on the add form; afterwards it moves only through `assignCustomer` |
+| `water_purveyor_id` | — | Never sent by the client; derived from the caller |
+
+Every text field has a maximum length, defined once in
+`packages/api/src/lib/asset-field-limits.ts`. The Zod shapes are built from
+those numbers and the form puts the same ones on its `maxLength` attributes, so
+the browser stops typing exactly where the server stops accepting. None of them
+is a product rule — the columns are Postgres `text` and neither the PRD nor the
+build plan puts a ceiling on a BIN or an address — they are input hygiene: wide
+enough that no real value meets them, narrow enough that a pasted document does
+not become a row.
+
+### What the form checks, and what the server checks
+
+The same three required answers, in both places. The form trims before it
+judges, so a BIN of spaces reads as empty exactly as it does in
+`createAssetInput`; the save button stays disabled until a BIN, a service
+address and a valid calendar date are all present, and its tooltip names
+whichever is still missing. The date is round-tripped through `Date` rather than
+pattern-matched, because `2027-02-31` parses to 3 March — the kind of wrong that
+surfaces months later as a reminder that fired on a day nobody chose.
+
+None of that is the boundary. Everything the form refuses, `createAssetInput` /
+`updateAssetInput` refuse again, and the client half exists only so a request
+that would be rejected is not sent.
+
+One thing the form will not let happen at all, rather than validating: there is
+no status control, because the scheduler owns it. The BFA type is a select over
+exactly the eight enum values, so there is no free-text path into it. The
+customer picker exists on the add form only — see below.
+
+### Why the annual test date is required
+
+The column is nullable, and the form still insists on a value. The client's
+[confirmed answer](/docs/prd#9-confirmed-decisions-client-qa-log) is that the
+annual test date is set by the WP *at the moment they assign the BIN* — it is
+what [Workflow 1](/docs/build-plan) schedules the reminder and the three late
+notices against. Every asset created from this screen is created with a BIN, so
+an asset without a date would be one that can never be reminded about,
+discovered months later by a notice that never fired. The column stays nullable
+for rows that reach the table another way.
+
+This is also the second half of the no-BIN submission flow (PRD § 7, flow 2): a
+certifier may leave the BIN blank, and the WP later works out which assembly the
+test belongs to, assigns the BIN here, and sets the date that puts it on the
+schedule. And per flow 3, a WP can register an assembly directly with no
+certifier submission behind it at all — that is what the **Add asset** button
+does.
+
+### Why the status is not on the form
+
+`asset_status` is derived from `annual_test_date`: active, due soon, past due.
+Letting somebody set it by hand would let the badge and the schedule disagree,
+and the badge is the one people read. The form has no control for it, the two
+mutations do not accept one, and — because a row policy cannot allow one column
+and refuse another — `authenticated` was never granted the column at all. The
+scheduler runs through the privileged connection and is unaffected.
+
+### The customer picker is on the add form and nowhere else
+
+Registering an asset and knowing who occupies it are usually the same moment, so
+**Add asset** carries an optional customer dropdown. Leaving it on *No customer
+yet* is a normal answer — an asset can be registered before its occupant is
+known and attached later from its own page.
+
+Naming one there is safe for a reason that does not hold on the edit form: a
+brand-new asset has no occupancy to close, so attaching a customer *opens* the
+first `customer_assignments` row rather than replacing an existing one. The
+insert and that row go in a single transaction, so an asset never exists
+pointing at a customer with no record of when that started — and a failure in
+either (a taken BIN, say) leaves no asset behind. The customer's tenant is
+checked before anything is written, so a cross-purveyor id creates nothing
+either. The history afterwards reads exactly as it would if the customer had
+been attached a week later, and the same `bfa_asset_customer_assigned` line is
+logged, with `from: null`.
+
+The **edit** form has no customer control at all, and `updateAssetInput` does
+not accept one. On an asset that already has an occupant, moving the pointer has
+to close the outgoing occupancy row in the same transaction — a field there
+would be the one way to change an occupant without recording it. That case
+belongs to `assignCustomer`, on the asset's own page, next to the history it
+writes.
+
+Choosing a *suspended* customer on the add form is allowed and warned about
+inline: the asset starts with its automated email already paused, and the form
+says so above the save button. It needs no separate confirmation the way a
+reassignment does, because there is no running notice pipeline to interrupt —
+the asset is new. The audit line still records `to_customer_suspended: true`.
+
+## Changing a BIN
+
+Allowed, and never casual. Per the
+[confirmed decision](/docs/prd#9-confirmed-decisions-client-qa-log), a WP may
+correct any data it owns, the BIN included. What `updateAsset` adds is that the
+correction is recorded: a change emits its own `bfa_asset_bin_changed` line
+carrying the asset id, the old value, the new one and the acting profile —
+separate from the generic `bfa_asset_updated` line, because the BIN is the most
+protected value in the system and hiding its movement inside a general update
+would be the same as not recording it.
+
+A BIN that is already in use inside the same purveyor comes back as a
+`CONFLICT` with the BIN in the message, from the unique constraint rather than
+from a check-then-write — so there is no window between the check and the write
+for a second clerk to take the same BIN. Uniqueness is checked on the server
+only: a client-side pre-check would be a second answer that can disagree with
+the constraint, and would still have to be re-checked at the write.
+
+The screen carries that back to the field it is about. `CONFLICT` is raised for
+exactly one reason, so the message goes under the BIN input with `aria-invalid`
+and `aria-describedby` rather than into the form-wide banner, and it clears the
+moment the BIN is edited — the refusal was about the value that was submitted,
+and leaving it on screen would make a BIN the person has already fixed look
+like it is still refused. Routing is by error code, not by matching the wording,
+so the sentence can be rewritten without silently moving the message.
+
+The edit form also warns *while* a BIN is being changed, not after saving: a
+panel naming the value being left behind appears as soon as the field differs
+from the record, and disappears if it is typed back. The warning is the point at
+which the decision can still be taken back.
+
+## Assigning a customer
+
+`assignCustomer` is three writes in one transaction:
+
+1. close the open `customer_assignments` row by setting its `end_date`,
+2. insert a new row with today's `start_date`,
+3. move `bfa_assets.current_customer_id` to the new customer.
+
+Both dates come from Postgres' `current_date` rather than from the Node process,
+so the closing and the opening row cannot disagree about what day it is.
+
+Doing only the third — the update a "current customer" field invites — would
+answer *who gets the email* while quietly erasing *who had this valve last
+year*, which is the question a disputed test needs. The
+[confirmed cardinality](/docs/prd#9-confirmed-decisions-client-qa-log) is
+many-changing-over-time in both directions, and this table is where that lives.
+
+Three refusals worth naming:
+
+- **A customer from another purveyor.** The customer is looked up inside the
+  caller's own tenant, so a foreign id is never found rather than found and
+  rejected, and the message says nothing about whether that uuid exists
+  elsewhere. Nothing is written on the way out — no pointer moved, no half-open
+  history. The screen cannot offer one either: the picker reads the same
+  WP-scoped `listCustomers` the customers screen does.
+- **The customer who is already attached.** Re-attaching them is not a
+  reassignment. Writing anyway would close today's occupancy row and open an
+  identical one beside it, turning one continuous tenancy into two — history
+  recording a move nobody made. The procedure returns the asset unchanged and
+  logs nothing; in the picker that customer is disabled and labelled *current*.
+- **A suspended customer, unacknowledged.** See below.
+
+### Suspended customers
+
+Automated email goes to whichever customer is currently attached to the BIN. If
+that customer is suspended, the asset's email pipeline stops entirely until a
+different customer is attached — see [WP Customers](/docs/wp-customers). That
+consequence belongs to the asset, so the asset shows it: *Suspended — email
+paused* under the name in the table, and a warning panel on the detail view.
+
+Because that consequence is large, attaching a suspended customer is not
+something to reach by mis-clicking a list. `assignCustomerInput` carries an
+`acknowledgeSuspendedCustomer` flag, defaulting to `false`, and the procedure
+answers `PRECONDITION_FAILED` when the chosen customer is suspended and the flag
+is absent. The default is the point: a client that has never heard of the flag
+gets the refusal, not a silently muted asset.
+
+The modal is how the flag gets set, not where the rule lives. Choosing a
+suspended customer shows the warning beside the list; pressing **Attach
+customer** then moves the dialog to a confirmation naming what stops, and only
+that second press sends the acknowledgement. The order of the checks matters
+too: the already-attached case is decided *before* the suspension gate, so a
+customer suspended after they were attached does not turn a re-save into a
+confirmation prompt for a change nobody is making.
+
+An assignment made this way logs `to_customer_suspended: true` — the line that
+explains why an asset's notices went quiet from that date.
+
+The history table below the control is read-only. Nothing in the app edits a
+`start_date` or an `end_date`: no procedure accepts one, and the row policies
+grant `authenticated` only `end_date`, only on assignments whose asset the
+caller can see, with no DELETE at all.
+
+## Procedures
+
+`assets.*` in `packages/api/src/routers/assets.ts`. All five sit behind
+`wpProcedure`.
+
+| Procedure | Does |
+|---|---|
+| `listAssets` | One page of the caller's own assets, ordered by BIN; filterable by status, searchable by BIN or service address |
+| `getAsset` | One asset with its full occupancy history |
+| `createAsset` | Registers one asset under the caller's purveyor, with its BIN, assembly details, initial annual test date and — optionally — its first customer |
+| `updateAsset` | Rewrites one record — every field is sent, the BIN included |
+| `assignCustomer` | The three-write transaction above |
+
+`listAssets` is page-based rather than cursor-based: the screen shows a numbered
+pager over a set measured in hundreds, and a page number is what the person
+actually asks for. The count is over the whole filtered set, so *page 3 of 7*
+stays true even when a page comes back empty. The search escapes `%` and `_`,
+because somebody looking for `50%` means those three characters.
+
+### A save that changes nothing writes nothing
+
+Same rule as the customers screen. The whole record is sent on every save, so a
+request that edits a field and one that opens the dialog and presses save look
+identical on the wire. `updateAsset` compares the incoming values against the
+row it already read and, when every writable column matches, returns that row
+without touching the table — no `updated_at` bump, no `bfa_asset_updated` line,
+and in particular no BIN-change line naming the same value twice.
+
+### Where the tenant comes from
+
+`ctx.caller`, and nowhere else. There is no `waterPurveyorId` on any input
+shape, so a client cannot ask for another purveyor's tenant — there is no field
+in which to ask. Every read and every write also carries the caller's purveyor
+in its `where`, so a guessed uuid from another tenant matches no row and comes
+back as a not-found rather than as a silent success.
+
+All of these run through the privileged Drizzle connection, which bypasses RLS.
+The procedure layer is the application's authorization boundary; the policies
+below are a second, independent one.
+
+## Row policies
+
+`0004_bfa_asset_policies` adds the `bfa_assets` and `customer_assignments`
+policies. RLS was enabled on both tables in the first migration; until now
+neither had a policy, so nothing reaching them through PostgREST could see a
+row.
+
+| Policy | Who | What |
+|---|---|---|
+| `bfa_assets_all_super_admin` | `super_admin` | Read, insert and update, in every tenant |
+| `bfa_assets_select_own_wp` | all three WP roles | Read rows where `water_purveyor_id` matches their own |
+| `bfa_assets_insert_own_wp` | all three WP roles | Insert rows into their own purveyor |
+| `bfa_assets_update_own_wp` | all three WP roles | Update rows in their own purveyor, and only into it |
+| `customer_assignments_all_super_admin` | `super_admin` | Read, insert and update, in every tenant |
+| `customer_assignments_select_own_wp` | all three WP roles | Read assignments whose asset they can see |
+| `customer_assignments_insert_own_wp` | all three WP roles | Open an assignment when *both* the asset and the customer are theirs |
+| `customer_assignments_update_own_wp` | all three WP roles | Close an assignment on an asset they can see |
+
+Caller resolution goes through the `private.current_global_role()` and
+`private.current_wp_id()` helpers from `0001`, so a blocked profile resolves to
+NULL and keeps no access at all — same as everywhere else.
+
+Four things worth stating outright:
+
+- **`customer_assignments` has no tenant of its own.** Tenancy is read through
+  the asset the row points at: you may see an assignment exactly when you may
+  see its asset. That subquery is itself subject to `bfa_assets`' policies,
+  which is what makes the coupling hold rather than merely look right.
+- **The grants are column lists, not table grants.** `asset_status` is in
+  neither the INSERT nor the UPDATE list, and `water_purveyor_id` is not in the
+  UPDATE list, so the scheduler's column and the tenant cannot be written by
+  `authenticated` at all. On `customer_assignments` only `end_date` is
+  updatable — a past occupancy that can be edited into a different one is not
+  history.
+- **`WITH CHECK` as well as `USING` on both update policies.** They answer
+  different questions — which rows can be reached, and what they may be turned
+  into. The tenant column is already withheld by the grant; the policy says the
+  same thing again for a future migration that widens it.
+- **No DELETE for anybody, Super-Admin included.** An asset is referenced by
+  occupancy history, by `test_submissions` and by `scheduled_jobs`; an
+  assignment *is* the history. The `FOR ALL` Super-Admin policies still get
+  nowhere, because the grants never handed DELETE over —
+  `bfa-assets-rls.test.ts` asserts the refusal rather than trusting the reading.
+
+There is no certifier read path yet. The wizard will need one — an asset
+reachable through an active authorization, for BIN prefill — and it belongs with
+the wizard; granting it now would open the tables to a role with no screen for
+them.
+
+## Audit logging
+
+Every write emits one structured JSON line, the same shape as `customer_created`
+and `caller_resolved`:
+
+| Event | When |
+|---|---|
+| `bfa_asset_created` | An asset is registered, carrying its BIN, type and annual test date |
+| `bfa_asset_updated` | A record actually changed — never for a save that changed nothing |
+| `bfa_asset_bin_changed` | …and the BIN was part of what moved, carrying `from` and `to` |
+| `bfa_asset_customer_assigned` | An occupancy changed, carrying `from` and `to` customer ids |
+
+Each carries `actor_id`, `asset_id`, `wp_id` and `timestamp`.
+
+## The screen
+
+`/wp/assets`, in the standard WP shell. The table shows BIN, BFA type, service
+address, current customer, annual test date and a status badge, with a search
+box (BIN or service address, debounced), a status filter and a pager above and
+below it. **Add asset** and per-row **Edit** open the same modal form —
+`AddAssetForm` and `EditAssetForm` are that one field set with their starting
+values and labels fixed, so the BIN and annual-test-date rules have one home.
+The add variant additionally renders the optional customer dropdown; its list is
+the WP-scoped `listCustomers`, fetched only once the dialog is open, because
+most visits to this page never open it.
+
+A BIN links to `/wp/assets/[assetId]`: the assembly details, the current
+customer with the control that changes them, and the full assignment history —
+current occupancy at the top, every past one below it with its start and end
+dates. Attaching a customer opens its own modal, so the choice, the suspended
+warning and the confirmation are one focused decision rather than a control
+sitting live on the page.
+
+Design notes, from the [design system](/docs/design-system): the three statuses
+use the success, warning and danger tint pairs (`active`, `due_soon`,
+`past_due`), the page title is the only Sora on the screen, and colours come
+from the tokens in `packages/ui/src/styles/globals.css` rather than hex values
+in the components. The screen adds no new dependencies and no new `packages/ui`
+primitives.
+
+## Tests
+
+| Suite | Runs | Covers |
+|---|---|---|
+| `packages/api/src/lib/asset-input.test.ts` | `npm test` | The validation rules on their own — no database |
+| `apps/web/src/components/wp/asset-form.test.tsx` | `npm test` | What the form sends, when save unlocks, the BIN-change warning, field-level errors |
+| `apps/web/src/components/wp/asset-assign.test.ts` | `npm test` | The attach decision: blocked, confirm-first, send |
+| `apps/web/src/components/wp/assets-table.test.tsx` | `npm test` | Status wording, the suspended-occupant note, both empty states, search, paging |
+| `packages/api/src/routers/assets.test.ts` | `npm run test:db` | Tenant isolation, BIN uniqueness and logging, the assignment transaction, the no-op guards |
+| `packages/db/src/bfa-assets-rls.test.ts` | `npm run test:db` | The row policies and column grants, as the `authenticated` role |
+
+The two database suites seed two purveyors with deliberately interchangeable
+assets — same BIN, same service address — so a leak between them looks like a
+leak rather than like a plausible row, and the shared BIN doubles as proof that
+uniqueness is per purveyor.
+
+## Related pages
+
+- [Product Requirements Document](/docs/prd) — § 6.6.2, § 7 flows 2 and 3, and
+  the confirmed decisions on the annual test date, BIN reassignment and asset ↔
+  customer cardinality.
+- [WP Customers](/docs/wp-customers) — the other side of the assignment, and
+  what suspension does.
+- [Build Plan](/docs/build-plan) — the task list this page closes.
+- [Design System](/docs/design-system) — the tokens the screen is built from.

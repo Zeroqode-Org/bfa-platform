@@ -1,0 +1,357 @@
+---
+title: WP Submitted Tests
+description: The purveyor's cross-certifier inbox of filed tests — the document view, who may correct one, the overridden-field flag, and resolving a submission that never found its asset
+---
+
+`/wp/tests` is where a water purveyor reads the tests filed against it. Every
+certifier who works for the purveyor files into the same list, and the purveyor
+opens one as a document, reads it, and corrects it.
+
+That last part is the whole point of the screen, and it is the one rule on this
+platform that runs in two directions at once:
+
+- **A certifier can edit a test only while it is a draft.** At submit the record
+  locks for them permanently (PRD § 8). Their only path to change a submitted
+  test is re-running the wizard for the same BIN, which files a *new* row.
+- **The purveyor who receives it may correct any field on it** — confirmed, full
+  field-level edit, not limited corrections (PRD § 9, "Correcting a submitted
+  test").
+
+Locked for the person who filed it, editable by the purveyor it was filed to.
+A certifier who made a mistake files a new test rather than asking for the old
+one to be reopened.
+
+This page describes the screen as built. It covers *WP dashboard — submitted
+tests* in the [build plan](/docs/build-plan) and PRD § 6.6.6.
+
+## Drafts are invisible, not filtered
+
+A draft is a certifier's working copy of a test nobody has attested to yet, so a
+WP does not see one — anywhere, by any route.
+
+That is enforced three times over, and the repetition is deliberate:
+
+- `listSubmittedTests` pins `status = 'submitted'` in its `where`.
+- `getSubmittedTest` pins it too, so naming a draft's id directly returns
+  nothing rather than the row the list declined to show.
+- `test_submissions_select_own_wp` carries the same predicate, so a request
+  arriving through PostgREST gets the same answer.
+
+`getSubmittedTest` gives one refusal — *"Submitted test not found"* — for a
+draft, for another purveyor's submission, and for an id that never existed. A
+message that distinguished them would confirm the row exists, which is the
+single fact a probe with a guessed uuid is after.
+
+## The asset join is tenant-scoped
+
+`listSubmittedTests` and `getSubmittedTest` both LEFT JOIN `bfa_assets` to put
+the resolved BIN and service address on the row. That join matches on the asset
+id **and** on the caller's own purveyor.
+
+The submission's own `water_purveyor_id` scopes the row; the foreign key on
+`bfa_asset_id` proves only that the asset exists, not whose it is. Without the
+second clause a submission whose link crossed tenants would carry another
+purveyor's BIN and address onto a row this caller is entitled to read — through
+the privileged Drizzle connection, on both the list and the document path.
+
+It is in the `ON` clause deliberately. There, a crossed row comes back with null
+asset columns, which is exactly how an unresolved submission already reads and a
+state this screen already renders as "Not linked to an asset". In the `WHERE` it
+would disappear from the list altogether, hiding the one row that needs
+repairing. That matches `0009_test_submission_asset_tenancy`, which kept its own
+tenancy clause out of USING for the same reason.
+
+## Who may correct one
+
+All three WP roles read the list and open the document. **WP Admin and SubAdmin
+correct a test and link one to an asset; WP Employee is read-only.**
+
+This is a decision taken for *this screen*, not a project-wide answer. PRD § 10
+records the SubAdmin/Employee difference as an open question, and § 6.6.3
+already took the same narrow answer for `certifiers.status`. Correcting a
+submitted test rewrites the legal record of a backflow test, so the reversible
+direction is the one shipped: widening it later is one predicate in
+`test_submissions_update_own_wp` plus one in `wpSubmissionEditorProcedure`;
+narrowing it later takes access away from people who already had it.
+
+Nothing outside that migration and that procedure inherits the choice. There is
+deliberately no shared `wpAdminProcedure` — the next feature that reached for
+one would be settling the open question by accident.
+
+An Employee opening a document sees the record laid out exactly as an Admin
+does, with values rendered as text instead of inputs, and a line saying why.
+The overridden-field flags stay visible to them: the people who cannot change a
+value are the ones who most need to know it was already changed.
+
+## The document view
+
+Opening a row shows the test as a document, not as a form. A purveyor opening
+one is usually *reading* it — checking a reading, answering a certifier's phone
+call — so it reads top to bottom as the record, and the fields happen to be
+editable rather than the record happening to be laid out as a form.
+
+Four blocks: the header (BIN, type, date, result, certifier), the test record,
+the answers, and the sign-off.
+
+**The per-BFA-type layout is deliberately not built yet.** The results document
+has one layout per type — an RP report carries relief-valve rows, a PVB report
+carries air-inlet rows, no empty sections — built as a shared frame plus a
+swappable per-type test block (PRD § 9), and that frame ships with the wizard
+(§ 6.5). Until then this screen renders the shared frame and reads whatever
+`wizard_data` actually holds, labelling each key by splitting it on the
+boundaries it already has. When the per-type blocks land, the answers section is
+what they replace; `humanizeFieldName` is the one function that becomes a
+lookup.
+
+**The signature is shown, not typed into.** It is a drawing the property owner
+made on a phone. The correction a purveyor actually makes to one is removing a
+signature that should not be there and recording the owner-absent bypass
+instead, which is the control beside it — a text box over image bytes would
+offer an edit nobody wants and every accidental keystroke would corrupt.
+
+### A save that changes nothing is not a save
+
+Opening a document and pressing save without touching a field issues no update.
+Writing one anyway would make two records lie: `updated_at` would come to mean
+"when somebody last pressed save", and `edited_by_wp_profile_id` would name the
+last person to *look* at the test rather than the last to change it. On a record
+that is evidence of a backflow test, that is the difference between an
+attribution and a footprint.
+
+`wizard_data` is compared structurally rather than by reference, and key order
+is not a difference — Postgres `jsonb` does not preserve insertion order, so a
+comparison sensitive to it would report a change on every save.
+
+## The overridden-field flag
+
+The existing-BIN wizard flow prefills the questionnaire from the assembly's
+prior submission and lets the certifier overwrite any value. The PRD is explicit
+that those overwrites must be "visibly flagged to the WP, not silently
+replaced" (§ 9) — the final value alone does not say whether somebody typed over
+a known-good reading.
+
+`test_submissions.overridden_fields` is the record of which ones they were, and
+every field the document renders checks it. The flag sits on the field's
+*label*, not inside its control, so it survives the read-only rendering an
+Employee sees.
+
+The column is `jsonb` with no shape promised by the schema, because the wizard
+that writes it is week 4. `overriddenFieldNames` reads the two spellings worth
+reading — an array of names, and an object keyed by name, which is what a
+`{ field: previousValue }` map looks like — and treats anything else as nothing
+flagged rather than throwing. The failure mode of a decorative flag is a missing
+flag; the failure mode of a throw is an unreadable test.
+
+**A WP cannot rewrite the marker.** `overridden_fields` is absent from the
+update input and withheld from the `GRANT UPDATE`. A purveyor able to edit it
+could clear the flags rather than answer them.
+
+## Resolving a submission with no asset
+
+A certifier may leave the BIN blank and fill in the rest of the form; working
+out which assembly it belongs to is the purveyor's job afterward (PRD § 9,
+"Empty-BIN wizard entry", and § 7 flow 2).
+
+Unresolved rows are called out in the list rather than only inside the document,
+because the reader scanning it is looking for exactly those. Opening one puts
+the link panel at the top of the document — until the question is answered,
+every other value on the page is attached to nothing — seeded with what the
+certifier typed.
+
+The search reads `assets.listAssets`, which is WP-scoped, so there is no other
+purveyor's asset to offer. `linkSubmissionAsset` checks tenancy again anyway, on
+both sides: a control that cannot offer the wrong answer is not the same thing
+as a procedure that would refuse one.
+
+Three further rules on that mutation:
+
+- It is its own procedure, not a field on the correction form, because it is a
+  two-sided tenancy question. `test_submissions_update_own_wp` asks the same
+  question again for anything arriving through PostgREST — see
+  [the asset-tenancy clause](#the-asset-tenancy-clause) below.
+- It refuses a submission that already has an asset. Changing an existing link
+  is a different act from making a missing one, and the BIN is the single most
+  protected value in a submission.
+- The update carries `bfa_asset_id IS NULL` in its predicate as well as checking
+  it first, so two clerks racing on the same row produce a conflict rather than
+  one silently overwriting the other's answer.
+
+What the certifier typed is kept, not overwritten by the BIN it resolved to.
+`submitted_bin_text` records what was written on the day.
+
+## Procedures
+
+| Procedure | Who | What it does |
+|---|---|---|
+| `listSubmittedTests` | all three WP roles | One page of the caller's own purveyor's submitted tests, cross-certifier. Optional result filter and inclusive `from`/`to` bounds on `test_date`, narrowing together. |
+| `getSubmittedTest` | all three WP roles | One submitted row in the caller's purveyor, or the same not-found a draft and a foreign id get. |
+| `updateSubmittedTest` | Admin, SubAdmin | Corrects the record, stamps `edited_by_wp_profile_id`, logs `test_submission_corrected`. |
+| `linkSubmissionAsset` | Admin, SubAdmin | Attaches an asset to an unresolved submission, logs `test_submission_asset_linked`. |
+
+The list orders by `test_date DESC NULLS LAST`, then `created_at DESC`, then
+`id`. Nulls last because a submission missing a test date is not the most recent
+test — it is a record with a gap in it — and the two tie-breaks make the order
+total, so a page boundary cannot repeat or skip a row between tests dated the
+same day, which is ordinary: a certifier files a morning's work in one sitting.
+
+`test_submissions_wp_status_test_date_idx` matches that ordering exactly, so
+Postgres walks the index rather than sorting every submitted row for the tenant.
+
+Five fields are absent from every input shape, and their absence is the
+authorization story rather than a convenience: `water_purveyor_id`, `status`,
+`certifier_id`, `edited_by_wp_profile_id` and `overridden_fields`. A client that
+sends one is sending a field the server does not read.
+
+## Logging
+
+Both writes emit a structured JSON line, per the project's logging rule.
+
+```json
+{"event":"test_submission_corrected","actor_id":"…","submission_id":"…","wp_id":"…","certifier_id":"…","changed_fields":["testResult","submittedBinText"],"timestamp":"…"}
+```
+
+`changed_fields` carries **names, never values**. Which fields a purveyor
+touched is the audit question; the answers are in the row, and a signature image
+or a customer's details have no business in a log stream that is greppable by
+tenant.
+
+The link event carries both BINs — the asset's and what the certifier typed —
+because it is the write that decides which physical valve a test belongs to, and
+those are the two values somebody re-checking the decision needs.
+
+There is no audit-log screen. Per PRD § 9 there is none in v1; the data exists
+if a visible activity feed gets added later.
+
+## Row policies
+
+`0008_test_submission_policies` gives the table its first policies. Super-Admin
+reads and updates across both tenants and both states; WP roles are capped at
+their own purveyor's submitted rows as described above; **a certifier gets
+nothing at all**.
+
+That last one is the same call `0004` made for `bfa_assets`: the certifier read
+path — their own drafts and their own submitted archive, § 6.3 — belongs with
+the wizard that creates those rows and gets its own migration. Until then the
+table is invisible to them, which is the failing-closed direction.
+
+The grants are column lists. Withheld from `UPDATE` for everybody:
+
+| Column | Why |
+|---|---|
+| `water_purveyor_id` | A submission never changes tenant. |
+| `status` | Reopening a test as a draft would hand a locked record back to the certifier and remove it from the only screen that can still reach it. |
+| `certifier_id` | A correction able to move a submission onto a different certifier could move a failed test onto somebody who never attended it. |
+| `overridden_fields` | The certifier's record of what they typed over. |
+| `edited_by_wp_profile_id` | Withheld so a caller cannot *choose* the value — not because it must not be written. See below. |
+| `current_step`, `superseded_by_submission_id` | Draft resume state and the wizard's supersede pointer. Neither is a correction. |
+
+No `INSERT` for anybody, Super-Admin included: a submission is created by the
+certifier wizard through the privileged connection, and a row inserted through
+PostgREST would be a test nobody performed. No `DELETE` either — a submitted
+test is evidence, and nothing in the product removes one. Both policies read
+`FOR ALL` for Super-Admin and still get nowhere; a policy cannot hand back a
+privilege the grant never gave.
+
+### The asset-tenancy clause
+
+`bfa_asset_id` has to be in the `GRANT UPDATE` list — resolving a no-BIN
+submission is the one write this screen makes to it. `0008` shipped with a
+policy that checked the tenancy of the *submission* and never of the asset being
+attached to it, which let a WP Admin or SubAdmin satisfy every clause while
+pointing the column at somebody else's assembly.
+
+That is not a quiet cross-tenant row. Both read procedures LEFT JOIN
+`bfa_assets` through that column on the privileged connection, so the foreign
+asset's `bin` and `service_address` would come straight back on a row the caller
+is entitled to read — a write hole turning into a read leak one join later.
+`linkSubmissionAsset` always refused it; the second boundary did not.
+
+`0009_test_submission_asset_tenancy` adds the missing half to `WITH CHECK`:
+
+```sql
+AND (
+  bfa_asset_id IS NULL
+  OR EXISTS (
+    SELECT 1 FROM public.bfa_assets a
+    WHERE a.id = test_submissions.bfa_asset_id
+      AND a.water_purveyor_id = (SELECT private.current_wp_id())
+  )
+)
+```
+
+Three things about where it is and is not:
+
+- **`WITH CHECK` only, never `USING`.** A row whose `bfa_asset_id` somehow
+  already points across tenants is exactly the row a purveyor needs to open and
+  repair; putting the clause in `USING` would make it unreachable and therefore
+  unfixable.
+- **`NULL` stays valid**, because unresolved is the normal state for the no-BIN
+  flow and every other correction on such a row leaves the column alone. Setting
+  it back to `NULL` stays valid too — a mis-link has to be undoable.
+- **The tenant is named explicitly** even though the subquery is already subject
+  to `bfa_assets`' own row policies. Both, so the clause keeps refusing if those
+  policies are later widened — the same belt-and-braces `0004` uses for
+  `customer_assignments`.
+
+### Attribution is a trigger, not a grant
+
+"Every correction sets `edited_by_wp_profile_id`" is a rule the tRPC procedure
+keeps for the application connection. It cannot be a grant for the other one,
+because a grant only decides whether the column is writable at all and both
+answers are wrong: grant it and a caller can attribute their edit to a
+colleague; withhold it and a correction arriving through PostgREST is an
+unattributed change to a legal record.
+
+So `private.stamp_submission_editor()` writes it, from `auth.uid()` rather than
+from anything in the statement — the same shape as
+`private.enforce_certifier_column_permissions()` in
+[0007](/docs/wp-certifiers). A statement with no JWT subject is left alone,
+because that is the privileged connection, for which the procedure layer is the
+boundary exactly as it is for every other table.
+
+And a statement that changes nothing is **skipped entirely** — the trigger
+returns `NULL`, which is what `suppress_redundant_updates_trigger` does: no row
+version, no `RETURNING`, zero rows affected. `0008` merely declined to
+*attribute* a no-op and let it proceed, so `set_updated_at` — the other `BEFORE
+UPDATE` trigger on this table, from `0000` — still assigned `updated_at =
+now()`. That is the same lie in the other column, and `0009` corrects it: a
+trigger cannot un-set a column a later trigger is going to assign, so the only
+answer that reaches `set_updated_at` is not running it.
+
+**Trigger order is load-bearing in both directions.** Postgres fires same-timing
+row triggers in name order, and `attribute_wp_editor` sorts before
+`set_updated_at`. That ordering is what lets the function compare `NEW` against
+`OLD` at all — the other way round, `updated_at` would already have been
+assigned, no `NEW` would ever be "not distinct from" its `OLD`, and the no-op
+branch would be dead code that silently never fired. Renaming either trigger
+breaks both halves quietly.
+
+## Tests
+
+| Suite | Runs under | Covers |
+|---|---|---|
+| `packages/api/src/lib/submission-input.test.ts` | `npm test` | The input rules with no database: emptied fields, a backwards date range, a client-supplied tenant or actor, the no-op comparison, the marker parser. |
+| `apps/web/src/components/wp/submitted-tests-table.test.tsx` | `npm test` | List states and filters, the overridden-field flag, inline save, the link flow, and the Employee's read-only document. |
+| `packages/api/src/routers/submitted-tests.test.ts` | `npm run test:db` | The application's tenant boundary: role refusals, cross-tenant reads and writes, draft exclusion, filters, paging, attribution and logging, foreign-asset and foreign-submission refusal. |
+| `packages/db/src/test-submissions-rls.test.ts` | `npm run test:db` | The row policies as a second, independent boundary — two purveyors, a draft, an unresolved row, a blocked profile, a certifier, the Admin/SubAdmin/Employee write split, the asset-tenancy clause in both directions, and no-op suppression. |
+
+The two database suites seed deliberately interchangeable rows in both tenants —
+same certifier, same typed BIN, same day — so a leak looks like a leak rather
+than like a plausible row. One certifier files into both purveyors, which is the
+normal case on this platform and the reason a submission's tenancy cannot be
+read through the certifier who filed it.
+
+## Not in this screen
+
+Explicitly out of scope here, and each has its own owner:
+
+- **The certifier wizard** (§ 6.5) that produces these rows, and the per-type
+  results-document layout it brings with it.
+- **PDF generation and storage** — the certifier's Submitted PDFs archive
+  (§ 6.3) and whatever renders the document.
+- **The monthly CSV export** (§ 6.12), which reads submitted tests over a date
+  range and defines its column set in one place.
+- **The failure workflow and 30-day fail list** (§ 6.8). A failed test joins the
+  fail list the instant it is *submitted*; correcting a result on this screen
+  will need to interact with that when it ships.
+- **Notices** (§ 6.6.7, § 6.7).

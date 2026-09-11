@@ -488,6 +488,65 @@ Daniil 21h · Lina has no scheduled row — the natural window to start on the w
 
 **Done when:** every card and chart reflects real rows for the caller's WP only, and the numbers reconcile with the underlying tables when checked by hand.
 
+**Status: done.** All six steps shipped in a new `dashboard` router — five
+`wpProcedure` reads: `dashboardMetrics`, `complianceTrend`, `passFailBreakdown`,
+`incomingReports` and `delinquentAssets`. No migration: the feature reads what
+6.6.2 and 6.6.6 already store, and `test_submissions_wp_status_test_date_idx`
+already serves every submission query on the screen. Reconciliation is asserted
+rather than checked by hand — the database suite re-derives every card, every
+trend month and every breakdown count straight from SQL and compares, against
+two purveyors seeded as deliberate mirror images and a frozen clock. Full
+writeup: [WP Dashboard — Core & Analytics](/docs/wp-dashboard).
+
+**Step 1's "submissions awaiting review" ships as "Submitted reports", counting
+`status = 'submitted'`.** This was the one open product question on the feature,
+and it was put to the client rather than guessed. `test_submissions.status` is
+only `draft | submitted` — there is no reviewed state, no reviewer and no review
+timestamp — so the confirmed answer was to count submitted rows and **not** to
+invent a review lifecycle, a review status or a migration for one. The rename is
+the other half of that answer: nothing ever marks a test reviewed, so the number
+only goes up, and a card labelled "Awaiting review" would promise a queue that
+drains. It carries the line *"Filed to date — not a review queue"* so the reading
+is on the screen and not only in the docs. Two alternatives were considered and
+rejected: `bfa_asset_id is null` is already the No-BIN card and would have made
+two of five cards identical, and `edited_by_wp_profile_id is null` would read a
+WP correction as a review sign-off, which is not what that column means. A real
+review lifecycle later is a column, a migration and a different query for this
+one card; nothing shipped here has to be unwound first.
+
+**Step 4 ships the build plan's five cards, not the prototype's six.** The
+approved prototype also shows Certifiers and Customers. On what this screen
+counts the build plan is authoritative, and both omitted figures already have a
+screen of their own in the WP sidebar, where the number arrives with the list it
+counts.
+
+**Step 5's incoming list has no detail view of its own.** A row links to
+`/wp/tests?test=<id>`, and the Submitted Tests screen from 6.6.6 reads that
+query string on the server and opens the record in its existing document dialog
+— so the document, the corrections form, the link-to-asset flow and the
+Admin/SubAdmin role check remain that screen's single copy of each. The two also
+share the `newestSubmittedTestFirst` ordering constant rather than restating it,
+so the dashboard's rows genuinely are the head of that list, and a test asserts
+it. Delinquent rows link to `/wp/assets/[assetId]` from 6.6.2.
+
+**Step 6 adds no charting dependency.** Both charts are inline SVG and plain
+elements on the existing design tokens, and each carries a screen-reader table
+holding the same figures the picture shows. A month nobody tested in is `null`
+rather than `0` — the line breaks across it rather than plotting a point on the
+floor — and a genuine zero in the pass/fail range renders both bars at zero
+rather than an empty state, so a finding is not mistaken for a request that
+never happened.
+
+**Step 3's contract is strictly `pass`, `fail` and `total`.** Bounds are
+inclusive calendar dates — `test_date` is a Postgres `date`, so the comparison
+carries no zone at all. A submitted row with a null `test_result` is in neither
+count and not in `total`; it is reported one level down as
+`supplemental.unrecorded` and rendered as a note *beneath* the chart rather than
+inside it, so it can never be read as a third bar or added into the breakdown.
+The only zone-dependent step in the whole feature is naming the calendar day
+"now" falls on — for "this month" and the trailing-twelve window — which is done
+in UTC and documented as such.
+
 ## Week 3 — Remaining tables and both dashboards
 
 Lina 10h · Daniil 13h. The widest week — six features, no hard ordering between them.
@@ -526,6 +585,18 @@ The certifier's own immutability rule does not extend to the WP — full field-l
 
 **Done when:** a WP can correct any field on a submitted test, the edit is attributed, drafts never appear in this list, and an unresolved submission can be linked to the right asset.
 
+**Status: done.** All six steps shipped. `0008_test_submission_policies` gives the table its first row policies — WP-scoped reads and writes pinned to `status = 'submitted'`, Super-Admin across both tenants and both states, no certifier path at all, and no INSERT or DELETE grant for anybody. `listSubmittedTests`, `getSubmittedTest`, `updateSubmittedTest` and `linkSubmissionAsset` all scope by tenant *and* status, so a draft id, a foreign id and an id that never existed get one identical not-found. The document view renders the shared results-document frame and reads whatever `wizard_data` holds; the per-type test blocks land with the wizard (6.5) and replace only the answers section. Full writeup: [WP Submitted Tests](/docs/wp-submitted-tests).
+
+**Shipped with a decided answer to the SubAdmin/Employee split, scoped to this screen.** All three WP roles read the list and open the document; only Admin and SubAdmin correct a test or link one to an asset. That question is open project-wide (PRD § 10) and this does not close it — correcting a submitted test rewrites the legal record of a backflow test, so the reversible direction shipped. Widening it later is one predicate in `test_submissions_update_own_wp` and one in `wpSubmissionEditorProcedure`; narrowing it later takes access away from people who had it. As with 6.6.3, the check is local to this router rather than a shared `wpAdminProcedure`, so nothing else inherits it.
+
+**Attribution is a trigger, not a grant.** `edited_by_wp_profile_id` stays out of the `GRANT UPDATE` — granting it would let a caller attribute their edit to a colleague, and withholding it outright would make a PostgREST correction an unattributed change to a legal record. `private.stamp_submission_editor()` writes it from `auth.uid()` instead, the same shape `0007` used for per-role column enforcement.
+
+**`0009_test_submission_asset_tenancy` corrects two things review found in `0008`.** Both were cases of a rule the prose stated and the policy did not enforce; neither changes who may do what.
+
+The first was a real cross-tenant hole. `bfa_asset_id` has to be in the UPDATE grant — linking a no-BIN submission is the one write this screen makes to it — but `test_submissions_update_own_wp` only checked the tenancy of the *submission*, never of the asset being attached. A WP Admin or SubAdmin could satisfy every clause while pointing the column at another purveyor's assembly, and because both read procedures LEFT JOIN `bfa_assets` through that column on the privileged connection, the foreign asset's BIN and service address would then come back on a row the caller is entitled to read. `linkSubmissionAsset` always refused it; the row policy did not. The clause is now in WITH CHECK — and deliberately not in USING, so a row already pointing across tenants stays reachable and repairable.
+
+The second: `0008`'s trigger declined to *attribute* a no-op update but still let it proceed, so `set_updated_at` from `0000` assigned `updated_at = now()` anyway — the same lie in the other column. The trigger now returns NULL for an unchanged row, which skips it entirely: no row version, no later trigger, zero rows affected. Trigger name order is load-bearing in both directions and is documented in the migration.
+
 ### WP dashboard — customers
 
 **Owner:** Daniil.
@@ -539,6 +610,8 @@ The certifier's own immutability rule does not extend to the WP — full field-l
 5. Suspend and reactivate control on `status`, with an inline note that suspending holds all automated email for that customer's assets.
 
 **Done when:** a WP can create a customer, mark them agricultural with a renewal date, and suspend them; suspension is visible from the asset view too, not only the customer list.
+
+**Status: done**, except the asset-view half of the acceptance criterion, which waits on the assets screen (6.6.2). Steps 1–5 all shipped, plus the `wpProcedure` base every other WP screen will sit on and a `Select` primitive in `packages/ui`. The certifier read path described under `customers` above is deliberately not in the migration — it belongs with the wizard. Full writeup: [WP Customers](/docs/wp-customers).
 
 ### WP dashboard — certifiers
 
@@ -554,6 +627,14 @@ The certifier's own immutability rule does not extend to the WP — full field-l
 
 **Done when:** blocking a certifier prevents their login, and the procedure rejects an attempt to update any column other than `status`.
 
+**Status: done.** All five steps shipped, plus the invite-certifier dialog, which belongs on this screen and reuses `invitations.createInvitation` rather than adding a second invitation backend. `0006_certifier_policies` gives `certifiers` its first row policies — join-based WP reads through `wp_certifier_authorizations`, Super-Admin across tenants, a certifier's own row, and no INSERT or DELETE grant for anybody. `setCertifierStatus` takes a strict `{ id, status }` and refuses anything else rather than dropping it.
+
+`0007_certifier_column_permissions` corrects a real defect in `0006`. That migration expressed "a WP may update only `certifiers.status`" as `GRANT UPDATE (status) ON certifiers TO authenticated` — right about the mechanism, wrong about its reach: a grant belongs to the Postgres role, and PostgREST gives every signed-in user the same one, so the cap also hit the Super-Admin (full access) and the certifier (owns their own professional fields). `0007` widens the grant to the writable business columns and moves the per-actor narrowing into a `BEFORE UPDATE` trigger, the only object that can see both the old row and the new one. Effective WP access is unchanged and asserted directly, since the trigger is now the only thing standing between a WP's grant on `company` and a rewritten licence number.
+
+Blocking prevents login for real, not just in the table: `certifiers.status` is now read by `resolveCaller` alongside `profiles.status`, and folded into the two `private` helpers so a blocked certifier resolves to NULL for every policy in the schema. The certifier route group's layout moved from `requireUser` to `requireCaller` so the shell itself refuses them. Only the WP Admin and SubAdmin may set the status — the one place the three WP roles differ here; the check is local to the certifiers router rather than a shared procedure, so it does not settle the open SubAdmin/Employee question for anything else.
+
+**Shipped on the global reading of "block", which is now an open question.** `certifiers.status` is a single column on a single row, so one purveyor blocking a certifier who also works for others removes that person's access to the platform entirely. That is what this section's acceptance criterion asks for and what the column's own schema comment says it means, so it is what shipped — but it has never been through the client Q&A log, and on a platform whose premise is that a certifier can work for more than one WP it deserves a deliberate answer. The confirmation dialog states the consequence outright without revealing which other purveyors are involved. If the answer comes back "per-WP", the change is five contained points, listed in the writeup. Full writeup: [WP Certifiers](/docs/wp-certifiers).
+
 ### WP dashboard — repair companies
 
 **Owner:** Daniil.
@@ -566,6 +647,8 @@ The certifier's own immutability rule does not extend to the WP — full field-l
 3. Table plus add and edit modals. Deactivation flips `status` to `inactive`; no delete action anywhere in the UI.
 
 **Done when:** deactivating a company removes it from the active list used by the failure notice, without deleting history.
+
+**Status: done.** All three steps shipped. `0005_repair_company_policies` gives the table its first row policies — WP-scoped read/insert/update, Super-Admin across tenants, nothing for a certifier, and no DELETE grant for anybody. The management table lists both statuses so an inactive company can still be corrected or reactivated; the failure workflow (6.8) does the `status = 'active'` filtering at send time and is still planned. Full writeup: [WP Repair Companies](/docs/wp-repair-companies).
 
 ### WP dashboard — notices and email settings
 
@@ -586,6 +669,16 @@ The certifier's own immutability rule does not extend to the WP — full field-l
 Do not build the `is_enabled` toggle yet — the column exists, but what disabling a middle step means for the escalation chain is unanswered. Shipping the toggle before that answer gives WPs a control with undefined behavior.
 
 **Done when:** a WP can edit subject and body for all four notice types, an untouched type falls back to the platform default rather than sending blank, preview substitutes variables correctly, and a general-info broadcast reaches a filtered recipient set.
+
+**Status: done.** All eight steps shipped. `0010_notice_template_policies` gives `notice_templates` its first row policies — all three WP roles read their own purveyor's rows, only `wp_admin` inserts or updates, Super-Admin across tenants, nothing for a certifier, and no DELETE grant for anybody. `listNoticeTemplates` always returns four entries and fills a missing row with the platform default, so the screen has no "not set" branch. The substitution layer is one registry in `packages/api/src/lib/notice-variables.ts` that the editor, the panel, the preview and the send path all read, so a seventh variable is a list edit.
+
+**Two things the section did not settle, decided here.** `{{wp_name}}` joins the variable list — the five in step 5 leave a purveyor unable to sign its own notices. And the general-info broadcast ships *with* personalisation, limited to `{{customer_name}}` and `{{wp_name}}`: a customer may own several assemblies, so the four asset-scoped variables have no single value for a recipient and are refused server-side rather than mailed as a blank.
+
+**Shipped with a decided answer to the SubAdmin/Employee split, scoped to this screen.** All three WP roles read the templates, the audience counts and the repair-company list; only the Admin rewrites a template or sends a broadcast, because both put words in the purveyor's name in front of every customer they have. As with 6.6.3 and 6.6.6, the check is local to this router rather than a shared `wpAdminProcedure`, so nothing else inherits it. PRD § 10 stays open.
+
+**The `is_enabled` toggle was not built**, as instructed — and the column is absent from the input schema, from the mutation's `set` and from the UPDATE grant, so nothing reaching the table through PostgREST can flip it either.
+
+**Carries provisional copy.** The platform default subject and body for all four types are placeholder product copy in `packages/api/src/lib/notice-defaults.ts`, marked as such. Nothing in the PRD, this plan or the prototype specifies the customer-facing words, and inventing compliance language would put claims in a purveyor's mouth. The client must approve real text before a production tenant uses the defaults. Full writeup: [WP Notices & Email](/docs/wp-notices).
 
 ## Week 4 — The wizard
 
@@ -819,8 +912,10 @@ Most of the original list is now answered and folded into the features above. Wh
 
 | Question | Blocks | Consequence if unanswered |
 |---|---|---|
-| Exact permission split between WP Admin, SubAdmin, and Employee | Certifiers, submitted tests | Partially answered — all three roles can invite certifiers, and the Admin has full account control. The middle ground between SubAdmin and Employee is still undefined, so the two share identical policies for now |
-| Full list of dynamic variables for notice text | Notices and email settings | Substitution layer ships open-ended with customer name, BFA type, BIN, service address, and due date. The client has offered to pull the full list from the old Bubble database |
+| Is blocking a certifier global or per-WP? | Certifiers (shipped on the global reading), the WP selector | `certifiers.status` is one column on one row, so one purveyor blocking a multi-WP certifier removes their platform access for every purveyor — silently, from those purveyors' point of view. Shipped that way because the schema comment, this section's acceptance criterion and the PRD data model all describe it; `wp_certifier_authorizations.authorization_status = 'revoked'` is the narrower alternative and already exists. Needs a client answer before authorization management is built on top of it — [what changes if it flips](/docs/wp-certifiers#if-that-is-wrong-here-is-what-changes) |
+| Exact permission split between WP Admin, SubAdmin, and Employee | Notices and email settings; anything else that writes WP-owned records | Partially answered — all three roles can invite certifiers, and the Admin has full account control. Now settled for two screens, both narrowly and both locally: 6.6.3 ships all three listing and inviting certifiers with only Admin and SubAdmin blocking, and 6.6.6 ships all three reading submitted tests with only Admin and SubAdmin correcting or linking one. Both checks live in their own router rather than a shared `wpAdminProcedure`, so neither is inherited. Everywhere else the two roles still share identical policies, and the client has not answered the general question — each of these is a local decision made because correcting a filed test, like removing somebody's platform access, is not clerk work. 6.6.7 adds a third, narrower still: all three roles read the notices screen and only the Admin rewrites a template or sends a broadcast |
+| Full list of dynamic variables for notice text | Notices and email settings | Substitution layer shipped open-ended with six: customer name, WP name, BFA type, BIN, service address, and due date. Adding a seventh is one entry in `NOTICE_VARIABLES` plus a value wherever it is resolved — not a rewrite of the editor, preview or renderer. The client has offered to pull the full list from the old Bubble database |
+| Customer-facing text for the four platform default notices | Notices and email settings | **Open, and blocking a production release of 6.6.7.** The fallback mechanism shipped; the words did not. `notice-defaults.ts` carries plain provisional copy that makes no compliance claim, quotes no regulation and threatens no interruption of service. The client supplies or approves the real text for reminder, late notice 1, late notice 2 and final notice; replacing it is an edit to that one file |
 
 ### Answered, for the record
 

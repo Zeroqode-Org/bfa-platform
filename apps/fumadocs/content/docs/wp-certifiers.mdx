@@ -1,0 +1,538 @@
+---
+title: WP Certifiers
+description: How a water purveyor manages the field testers it authorizes — the certifiers screen, its procedures, the invite path, and what blocking actually does
+---
+
+Certifiers are the field testers who submit backflow-assembly tests. Unlike
+every other WP-scoped record, a certifier is **not** a tenant of a water
+purveyor: they hold one account and one `certifiers` row no matter how many
+purveyors they work for, and the relationship lives in
+`wp_certifier_authorizations`.
+
+That one fact shapes everything on this page. A water purveyor manages its
+certifiers from `/wp/certifiers`, but what it owns there is the *relationship*
+and one column — `certifiers.status` — not the person's record.
+
+This page describes the screen as built. It covers *WP dashboard — certifiers*
+in the [build plan](/docs/build-plan) and PRD § 6.6.3.
+
+## Why the join, and what it means
+
+`certifiers` has no `water_purveyor_id` column. `profiles.water_purveyor_id` is
+deliberately null for the certifier role too. So the WP-scoped reads on this
+screen cannot use the `water_purveyor_id = …` predicate every other WP table is
+written with — they join through `wp_certifier_authorizations` instead, both in
+the procedure and in the row policy.
+
+Three consequences follow, and the screen is built around all three:
+
+- **A certifier authorized by two purveyors appears on both screens.** One row,
+  two authorizations. `listWpCertifiers` returns one row per certifier, not one
+  per authorization.
+- **Blocking is not a local setting.** There is one `status` column, so blocking
+  from one purveyor's screen blocks the person everywhere — see
+  [Blocking is global, and that is a product decision](#blocking-is-global-and-that-is-a-product-decision)
+  below, which is the most consequential thing on this page.
+- **The certifier's own record is not the purveyor's to edit.** Name, company,
+  certifier ID and licence expiry belong to the person who entered them at
+  redemption. A purveyor that could rewrite them could rewrite the identity that
+  prints on a results document.
+
+## What the screen shows
+
+`/wp/certifiers`, in the standard WP shell. Columns: name, company, ID number,
+licence expiration, status, and a per-row **Block** / **Unblock** action. There
+is no delete control and no edit control.
+
+Two things are annotated rather than left to be interpreted:
+
+- a blocked row carries *Cannot sign in* under its badge,
+- a licence expiry already in the past is shown in the danger colour with
+  *License expired* under it. That is a fact about the licence, not a status the
+  purveyor set, so it is a note rather than a badge — but it is the main reason a
+  purveyor looks at this screen at all.
+
+Blocked certifiers stay in the list. This is the management table, and somebody
+who vanished from it when they were blocked could never be unblocked.
+
+Design notes, from the [design system](/docs/design-system): the status badge
+uses the success and danger tint pairs, **Block** uses the danger button until
+the row is already blocked, and the page title is the only Sora on the screen.
+Colours come from the tokens in `packages/ui/src/styles/globals.css`, not from
+hex values in the components.
+
+## Roles
+
+| | List | Invite | Block / unblock |
+|---|---|---|---|
+| WP Admin | yes | yes | yes |
+| WP SubAdmin | yes | yes | yes |
+| WP Employee | yes | yes | **no** |
+| Certifier | no | no | no |
+| Super-Admin | no (see below) | yes, for a named WP | not through this procedure |
+
+All three WP roles list and invite — inviting certifiers is confirmed as *not*
+Admin-only (PRD § 9). Blocking is the one line between them: taking somebody's
+platform access away is not clerk work.
+
+A Super-Admin is **refused** by `wpProcedure`, not handed every tenant's
+certifiers. They have no purveyor to scope the list to, and the cross-tenant
+view is a different screen. Their row-policy access is unaffected — see below.
+
+The SubAdmin/Employee split is still an open question project-wide (PRD § 10).
+This feature answers it for `certifiers` only, in the narrow way the build plan
+specifies, and expands nothing else. The role check that draws the line lives
+*in this router* rather than as a shared procedure in `packages/api/src/index.ts`,
+so the next feature that needs a WP role split has to make its own decision
+instead of inheriting one by accident.
+
+## Procedures
+
+`certifiers.*` in `packages/api/src/routers/certifiers.ts`. Both sit behind
+`wpProcedure` — the same base the customer, asset and repair-company screens use.
+
+| Procedure | Does |
+|---|---|
+| `listWpCertifiers` | Every certifier authorized for the caller's purveyor, by name, both statuses |
+| `setCertifierStatus` | Writes `certifiers.status` and nothing else |
+
+The list is ordered by `profiles.full_name` then `certifiers.id`. The tie-break
+is what keeps two certifiers with the same name from swapping places between
+refetches.
+
+### Status-only writes
+
+`setCertifierStatus` takes a **strict** `{ id, status }` and nothing else. A
+client that sends `company` alongside `status` is refused with a validation
+error rather than having the field quietly dropped — a silently ignored field
+looks like a successful edit to whatever sent it.
+
+The write itself names one column, and no procedure on this screen writes any
+other column of `certifiers`. That is the boundary for the privileged Drizzle
+connection the application uses. The matching boundary for a client reaching the
+table through PostgREST is the trigger in `0007` — see
+[Column permissions](#column-permissions-why-a-trigger). Neither substitutes for
+the other.
+
+### Tenant scoping
+
+The tenant is never an input. There is no `waterPurveyorId` field on either
+procedure's schema, so a client has nowhere to ask for somebody else's.
+
+Because `certifiers` has no tenant column, the scope is a subquery over the
+caller's own authorizations — used for the read *and* for the write:
+
+```
+certifiers.id = :id
+AND certifiers.id IN (
+  SELECT certifier_id FROM wp_certifier_authorizations
+  WHERE water_purveyor_id = <caller's purveyor>
+)
+```
+
+A certifier id from a purveyor the caller does not work with therefore matches no
+row and comes back as a `NOT_FOUND`: it cannot be read here, and it cannot be
+written. Scoping by id alone would let a guessed or leaked uuid be written
+through the privileged Drizzle connection, which bypasses RLS.
+
+### A request that changes nothing writes nothing
+
+Blocking a certifier who is already blocked is not a change.
+`setCertifierStatus` compares the incoming status against the row it just read
+and, when they match, returns that row without touching the table.
+
+Writing anyway would make two records lie. `certifiers` carries the shared
+`set_updated_at` trigger, so *any* UPDATE moves `updated_at` — the only way to
+keep it meaning "when this row last changed" is to issue no UPDATE. And the
+audit trail would carry a `certifier_status_changed` line whose `from` equalled
+its `to`, which is the one thing an audit trail must not do.
+
+## Inviting a certifier
+
+The **Invite certifier** button runs on the existing
+`invitations.createInvitation` procedure — the same one behind the Super-Admin's
+invite-new-WP dialog. There is no certifier-specific invitation backend: token
+generation, storage, delivery and redemption live in one place, and a second copy
+of any of them would be a second set of expiry and single-use rules to keep in
+step. See [Invitations and Onboarding](/docs/invitations-onboarding).
+
+The dialog collects one field — the address — and sends exactly
+`{ email, role: "certifier" }`. There is **no** `waterPurveyorId` in the payload:
+`resolveInvitationTarget` reads the tenant off the caller's own profile, and a WP
+role that names a different one is refused rather than silently corrected. A
+client cannot invite into somebody else's purveyor because it has no field in
+which to ask.
+
+Until the email provider lands, the console driver is the only delivery there is.
+The success toast says so — *"No email provider is configured yet — the invite
+link is in the server log"* — rather than claiming an email went out. A test
+asserts the wording does not say "email sent", because a clerk who believes it
+did will wait instead of copying the link out of the log.
+
+### The second-purveyor path
+
+Redemption behaviour is unchanged by this feature, and the two cases are worth
+restating because both surface on this screen:
+
+- **A new certifier** sets a password and completes their profile — full name,
+  company, ID/licence number and licence expiration date. Redemption creates the
+  `profiles` row, the `certifiers` row and one `wp_certifier_authorizations` row
+  in a single transaction.
+- **An existing certifier invited by a second purveyor** skips profile setup
+  entirely. They keep their account and their `certifiers` row; redemption inserts
+  only the new `wp_certifier_authorizations` row, `on conflict do nothing`, so a
+  duplicate invitation for a purveyor they already serve is a no-op.
+
+The invite dialog states this where the person sending the invitation is, so a
+certifier who is never asked for a profile reads as expected rather than as a bug.
+
+An invitation does not put a row on this screen. The certifier appears when the
+link is redeemed, because that is when the authorization exists.
+
+## Blocking is global, and that is a product decision
+
+**One water purveyor blocking a certifier removes that certifier's access to the
+platform for every purveyor they work for.**
+
+`certifiers.status` is a single column on a single row. A certifier has one
+account and one `certifiers` record no matter how many purveyors authorized them,
+so there is nowhere for a per-purveyor block to live on this table. If Riverside
+blocks Ada, Ada also stops being able to file tests for Kaneohe and Waimea, who
+were not consulted and are not told.
+
+### Why it is built this way
+
+This is the specified behaviour, not an accident of the schema. Four sources say
+so independently:
+
+| Source | Says |
+|---|---|
+| `packages/db/src/schema/certifiers.ts` | `// blocked prevents login`, on the column itself |
+| [Build plan](/docs/build-plan), *WP dashboard — certifiers* | **Done when:** "blocking a certifier prevents their login" |
+| [PRD](/docs/prd) § 5, `certifiers` | WP Admin and SubAdmin "update `status` only" — the global column is the one handed to the WP |
+| [Build plan](/docs/build-plan), Workflow 1 step 3 | The reminder email filters on `authorization_status = 'active'` **and** `certifiers.status = 'active'` — two columns, deliberately distinct |
+
+That last row is the important one. The per-purveyor alternative already exists:
+`wp_certifier_authorizations.authorization_status` has `pending`, `active` and
+`revoked`. Revoking it would end one relationship and leave the account intact —
+which is a different, narrower product action, listed under a different feature
+(*Certifier WP selector* / authorization management), and not yet built.
+
+So the schema carries both concepts on purpose, and this screen ships the global
+one because that is what § 6.6.3 and the build plan's acceptance criterion
+describe. `setCertifierStatus` writes `certifiers.status` and nothing else.
+
+### If that is wrong, here is what changes
+
+This has not been through the client Q&A log — it is not in
+[Confirmed Decisions](/docs/prd) — and for a platform whose whole premise is that
+"a certifier can work for more than one WP", one tenant being able to revoke
+another tenant's labour is worth a deliberate answer rather than an inherited
+one. It is now carried as an open question in the PRD.
+
+If the answer comes back "per-WP", the change is contained and known:
+
+1. `setCertifierStatus` writes `wp_certifier_authorizations.authorization_status`
+   (`active` ⇄ `revoked`) for the caller's own purveyor, instead of
+   `certifiers.status`.
+2. `listWpCertifiers` returns that per-purveyor status instead of the global one.
+3. The `certifiers` UPDATE grant and the WP branch of
+   `private.enforce_certifier_column_permissions()` go away; the WP write moves
+   to `wp_certifier_authorizations`, which needs its own policies.
+4. `resolveCaller` stops reading `certifiers.status` for the login gate; what
+   replaces it is a narrower question — a certifier with every authorization
+   revoked still has an account, and the WP selector simply has nothing in it.
+5. `certifiers.status` stays as the Super-Admin's platform-wide switch, which is
+   what it would then mean.
+
+Nothing outside those five points depends on the choice. The screen, the table,
+the invite path, the audit line and the tenant scoping are all the same either
+way.
+
+### What the screen does about it meanwhile
+
+The confirmation dialog states the consequence unconditionally — that a certifier
+has one account for every purveyor they work for, and that blocking removes
+access to all of them. It deliberately does **not** say whether *this* certifier
+works for anyone else, or how many. That count sits in
+`wp_certifier_authorizations` and belongs to the other tenants; a dialog reading
+"also works for 2 other water purveyors" would leak the existence of those
+purveyors across the boundary the rest of this feature exists to hold. Stating
+the rule is honest and leaks nothing. A test asserts both halves.
+
+## How blocking is enforced
+
+
+This is the part that has to be true rather than merely displayed.
+
+`certifiers.status` is not an `auth.users` flag. A blocked certifier still holds
+working credentials and can still sign in to Supabase Auth, so the flag only
+means anything where the caller is resolved. Two places read it, one per
+connection:
+
+- **`resolveCaller`** (`packages/api/src/context.ts`) refuses a certifier whose
+  `certifiers.status` is `blocked`, exactly as it already refuses any profile
+  whose `profiles.status` is `blocked` — same `FORBIDDEN`, same refusal. Every
+  protected procedure and every server-rendered route goes through it, including
+  `/` and the certifier shell's layout, so a blocked certifier who signs in is
+  bounced straight back to `/login`.
+- **`private.current_global_role()` and `private.current_wp_id()`**, redefined in
+  `0006_certifier_policies`, resolve a blocked certifier to NULL. Every role- or
+  tenant-scoped policy in the schema is built on those two helpers, so the loss
+  of access is platform-wide rather than local to `certifiers` — a blocked
+  certifier keeps only the `id = auth.uid()` paths, which is precisely what a
+  blocked *profile* already gets.
+
+### Where the gate has to sit
+
+An open session is not closed when a purveyor blocks somebody, and it does not
+need to be — but the *next* protected thing they do has to be refused. There are
+three ways to reach one, and they do not share a gate:
+
+| Path | What runs on the server | Gate |
+|---|---|---|
+| Full load, or a refresh | The group's `layout.tsx` **and** the page | Both |
+| Client-side navigation (`<Link>`) | **Only the changed page** | The page |
+| A tRPC query or mutation | `protectedProcedure` → `resolveCaller` | The procedure |
+
+The middle row is the one worth stating plainly, because the obvious place to
+put the gate is wrong. A layout renders once and is then reused: on a
+client-side navigation Next re-renders only the changed segment on the server,
+so a `requireAccount()` in `layout.tsx` never runs again for the rest of the
+session. `template.tsx` behaves the same way. This was verified against a
+running dev server with a probe layout, a probe template and two probe pages —
+a `<Link>` navigation logged the page and neither of the other two — rather
+than inferred from the docs.
+
+So every page under a signed-in route group calls the gate itself, and
+`apps/web/src/app/protected-pages.test.ts` asserts it over the file tree rather
+than over the pages that exist today: the failure mode is a *new* page added
+without one, which is silent.
+
+The layouts keep their gate too. It is not redundant — it is the only one that
+runs before the shell is drawn, so a blocked person never sees a sidebar at all.
+
+### A refused request in an open screen
+
+The gates cover arriving somewhere. The other half is a certifier already
+sitting on a screen when the block lands: their next query or mutation comes
+back `FORBIDDEN`, and a toast reading "Account blocked" on a page that still
+looks signed in explains nothing.
+
+The API's error formatter puts the refusal on the wire as
+`data.refusal`, and the React Query cache in `apps/web/src/utils/trpc.ts` turns
+that into a full navigation to the same `/login?notice=…`. Two details matter:
+
+- It branches on `data.refusal`, **not** on the `FORBIDDEN` code. Every ordinary
+  role check raises `FORBIDDEN` too — a WP Employee pressing Block, a certifier
+  reaching a WP list — and throwing those callers out to a sign-in screen would
+  be worse than the toast they get now. A test pins that down.
+- A full navigation rather than the router: it runs the server gate, discards a
+  React Query cache holding data the person may no longer be entitled to, and
+  clears the router cache that would otherwise keep serving already-rendered
+  segments. Several refusals arriving in one batch start one navigation, not
+  several.
+
+Nothing here revokes the Supabase session itself. The session stays valid and
+useless — every gate and every procedure re-resolves the profile on each
+request, which is what makes the block take effect without any realtime
+signalling.
+
+### The sign-in screen says so
+
+Being bounced is not the same as being told. Blocking writes `certifiers.status`
+and nothing in `auth.users`, so a blocked certifier's password is still correct:
+they sign in successfully, the profile gate refuses, and they arrive back at a
+sign-in form that appears to have cleared itself. That reads as a typo, and the
+obvious response is to retype a password that was right the first time.
+
+So the refusal carries a reason. `resolveCaller` throws a `CallerRefusedError`
+whose `refusal` is `blocked` or `no_profile`
+(`packages/api/src/caller-refusal.ts` — its own module precisely so a route gate
+can read the vocabulary without pulling in a database handle). `requireAccount`
+turns that into `/login?notice=…`, and the sign-in screen renders fixed copy for
+it:
+
+| Refusal | The screen says |
+|---|---|
+| `blocked` | The password is correct and the account has been switched off; a water purveyor you work with, or the platform administrator, can lift it |
+| `no_profile` | Sign-in works but the setup never completed — ask for a new invitation link |
+
+Two things the copy deliberately does **not** do. It does not name *which*
+purveyor blocked them — a certifier can be authorized by several, and naming the
+one that acted would disclose a tenant relationship — and it does not say which
+of the two switches was thrown, since `profiles.status` is the platform
+administrator's and `certifiers.status` is a purveyor's. "Whoever you work with"
+covers both without disclosing either.
+
+An unrecognised value in the query string renders no banner at all, and nothing
+from the URL is ever displayed: the value only selects between the fixed copy
+above. The branch is on the refusal value rather than the message, because the
+wording is copy and matching on it would move the screen's behaviour the day
+somebody edits a sentence.
+
+Their data is untouched. Submitted tests stay submitted, drafts stay drafts, and
+unblocking from the same button gives the access back — which is why unblocking
+needs no confirmation and blocking does.
+
+## Row policies
+
+`0006_certifier_policies` adds the `certifiers` policies. RLS was enabled on the
+table in the first migration; until now it had no policies at all, so nothing
+reaching the table through PostgREST could see a row.
+
+| Policy | Who | What |
+|---|---|---|
+| `certifiers_all_super_admin` | `super_admin` | Read and update, in every tenant |
+| `certifiers_select_self` | anyone | Read their own row, keyed on `auth.uid()` |
+| `certifiers_select_own_wp` | all three WP roles | Read certifiers authorized for their own purveyor |
+| `certifiers_update_status_own_wp` | WP Admin, WP SubAdmin | Update those rows |
+| `certifiers_update_self` | certifier | Update their own row (added in `0007`) |
+
+Four deliberate decisions:
+
+- **The join lives in a `SECURITY DEFINER` helper**,
+  `private.certifier_in_current_wp(uuid)`, rather than inline in the policy.
+  `wp_certifier_authorizations` has RLS enabled and no policies of its own, and a
+  table referenced from inside a policy expression is still subject to its own
+  RLS — an inline `EXISTS` over it would read zero rows and refuse every WP
+  caller. Authorization management is a separate feature, and this keeps that
+  table's policies out of this migration. The helper takes no tenant argument:
+  the purveyor comes from `private.current_wp_id()`, which reads only the
+  caller's own profile.
+- **Column permissions are a trigger, not a grant** — see the section below. The
+  first cut of this feature used `GRANT UPDATE (status)` alone, which was wrong
+  in a way worth recording.
+- **No INSERT and no DELETE for anybody.** A `certifiers` row is created by
+  invite redemption through the privileged connection, which bypasses RLS, and
+  nothing in the product removes one. `certifiers_all_super_admin` is written
+  `FOR ALL` and still cannot insert or delete: the grants are what withhold the
+  privilege, and no policy can hand back one that was never given.
+- **The self SELECT policy is keyed on `auth.uid()` alone**, unlike the self
+  UPDATE policy added in `0007`, which also requires the caller to resolve to an
+  active certifier. That asymmetry is deliberate: a blocked certifier can still
+  read their own row and find out *why* they cannot sign in, and can change
+  nothing.
+
+The application still carries its own tenant predicate on every query even though
+these policies exist. The procedures run through the privileged Drizzle
+connection, which bypasses RLS entirely, so neither layer substitutes for the
+other.
+
+## Column permissions: why a trigger
+
+Three actors need three different column sets on one table:
+
+| Actor | May update from a client session |
+|---|---|
+| Super-Admin | every business column, in every tenant |
+| WP Admin / SubAdmin | `status` only, own-WP certifiers only |
+| WP Employee | nothing — read only |
+| Certifier, own row | `company`, `id_number`, `license_expiration_date` — never `status` |
+| Certifier, anyone else's row | nothing |
+| Blocked profile or blocked certifier | nothing |
+
+A column grant cannot express that, and the first cut of this feature assumed it
+could. `0006` wrote `GRANT UPDATE (status) ON public.certifiers TO authenticated`,
+reasoning that a column grant is the only mechanism able to restrict *which
+columns* a statement touches. That was right about the mechanism and wrong about
+its reach: a grant belongs to the **Postgres** role, and PostgREST hands every
+signed-in user of this application the same one — `authenticated`. Capping that
+role at `status` capped the Super-Admin, whose access to this table is full, and
+the certifier, who owns their own professional record.
+
+`0007` fixes it. The grant widens to the union of the writable business columns,
+and the per-actor narrowing moves into a `BEFORE UPDATE` trigger,
+`private.enforce_certifier_column_permissions()` — the only Postgres object that
+can see both the old row and the new one and decide per caller. It is
+`SECURITY DEFINER` in the `private` schema, the same shape as the
+caller-resolution helpers from `0001`, and resolves the actor through
+`private.current_global_role()`.
+
+Effective access for a WP user is **unchanged** by that widening. The grant they
+hold is wider; what they can write is not, because the trigger refuses every
+column but `status` for a WP role, with an `insufficient_privilege` (42501) error
+— the same error class the missing grant used to produce. The RLS suite asserts
+that directly rather than leaving it to be read off the grant, because the
+trigger is now load-bearing: a WP role genuinely *holds* the grant on `company`,
+and the trigger is the only thing between it and a rewritten licence number.
+
+A statement with no JWT subject is left alone. That is the privileged Drizzle
+connection the application and the migrations use, which bypasses RLS entirely —
+for it, the tRPC procedure layer is the boundary, exactly as it is for every
+other table in this schema. The trigger is the PostgREST-side boundary and says
+so, rather than pretending to be a universal invariant.
+
+`id`, `profile_id`, `created_at` and `updated_at` stay out of the grant for
+everybody, Super-Admin included. They are identity and bookkeeping, not business
+data: `profile_id` is the link to the `auth.users` account whose session becomes
+this certifier, so a client session able to rewrite it could point an existing
+certifier record — and the licence number that prints on a results document — at
+a different person.
+
+### Certifier self-service is permitted, not built
+
+`certifiers_update_self` and the trigger's certifier branch let a certifier
+maintain `company`, `id_number` and `license_expiration_date` on their own row.
+No screen or procedure in this release does that — the certifier profile page is
+§ 6.3 and is not built. The *permission* belongs with the rest of this table's
+model rather than being discovered later, and without it the trigger's certifier
+branch would be unreachable and untestable.
+
+## Audit logging
+
+Every real status change emits one structured JSON line, the same shape as
+`repair_company_status_changed` and `caller_resolved`:
+
+| Event | When |
+|---|---|
+| `certifier_status_changed` | The status actually moved — never for a request that asked for the value the row already held |
+
+It carries `actor_id`, `certifier_id`, `wp_id`, `from`, `to` and `timestamp`.
+`wp_id` is the purveyor the *actor* was acting for, which is the question worth
+being able to grep: a certifier shared by two purveyors can be blocked by either,
+and the line says which one did it.
+
+## Tests
+
+| Suite | Runs | Covers |
+|---|---|---|
+| `apps/web/src/components/wp/certifiers-table.test.tsx` | `npm test` | Loading, error and retry, empty and populated states; the block confirmation; the immediate unblock; per-row pending state; the absence of delete and edit controls |
+| `apps/web/src/lib/auth.test.ts`, `apps/web/src/lib/sign-in-notice.test.ts`, `apps/web/src/components/auth/sign-in-notice.test.tsx` | `npm test` | The blocked-sign-in explanation: the gate naming the reason, the copy for each refusal, and that it discloses neither the purveyor nor the switch |
+| `apps/web/src/app/protected-pages.test.ts` | `npm test` | That every page behind a sign-in resolves the caller itself, so a client-side navigation cannot slip past a layout that already ran |
+| `packages/api/src/caller-refusal.test.ts` | `npm test` | The refusal on the wire, and that an ordinary `FORBIDDEN` is not mistaken for one |
+| `apps/web/src/components/wp/invite-certifier-dialog.test.tsx` | `npm test` | The exact mutation payload — `{ email, role }` and no tenant field; validation; the in-flight, success and refusal states; that the toast does not claim an email was sent |
+| `packages/api/src/routers/certifiers.test.ts` | `npm run test:db` | Who may call each procedure, cross-tenant list and mutation isolation, the shared-certifier case, strict status-only input, the no-op request, the audit line, and a blocked certifier's own access |
+| `packages/db/src/certifiers-rls.test.ts` | `npm run test:db` | The row policies as the `authenticated` role: read isolation through the join, the Employee read/write split, the full three-actor column model from `0007`, and a blocked certifier resolving to no role at all |
+
+The two database suites seed two purveyors with deliberately interchangeable
+certifiers — same name, same company, same licence number — plus one certifier
+authorized for both. The interchangeable pair makes a leak look like a leak
+rather than like a plausible row; the shared certifier is what proves the join is
+a join.
+
+The RLS suite is a separate boundary on purpose. The API suite runs through the
+privileged connection, which bypasses RLS entirely, so nothing it asserts says
+anything about whether the policies work.
+
+## Not in this release
+
+- Certifier profile editing as a *feature*. The WP cannot edit a certifier's
+  record at all; the certifier is now *permitted* to edit their own professional
+  fields at the database layer, but the screen that does it is § 6.3 and is not
+  built.
+- Authorization management — revoking a certifier's authorization for one
+  purveyor while leaving the others intact. `authorization_status` exists on the
+  table and nothing on this screen writes it; the list shows every authorization
+  row for the caller's purveyor.
+- Submitted tests, which are § 6.6.6.
+
+## Related pages
+
+- [Product Requirements Document](/docs/prd) — § 6.6.3 and the data model.
+- [Build Plan](/docs/build-plan) — the task list this page closes.
+- [Invitations and Onboarding](/docs/invitations-onboarding) — the invitation
+  backend this screen reuses, and the redemption paths described above.
+- [WP Repair Companies](/docs/wp-repair-companies) — the screen this one is
+  modelled on, and the one whose tenant scoping it deliberately differs from.
+- [Design System](/docs/design-system) — the tokens the screen is built from.

@@ -41,6 +41,11 @@ const ids = {
 	ridgeDraft: "10000000-0000-4000-8000-000000000082",
 	harborPass: "10000000-0000-4000-8000-000000000083",
 	ridgeFail: "10000000-0000-4000-8000-000000000084",
+	// The no-BIN flow (PRD § 7, flow 2): a submitted test carrying only what the
+	// certifier typed, with no asset behind it. It is the one fixture that
+	// exercises the WP's "link to asset" action, and without it the unresolved
+	// half of `/wp/tests` has nothing to show in development.
+	harborUnresolved: "10000000-0000-4000-8000-000000000085",
 } as const;
 
 const seedUsers = [
@@ -463,72 +468,124 @@ async function seedDatabase(authUserIds: SeedUserIds) {
 			);
 		}
 
+		// Named fields rather than a positional tuple: two of these columns are
+		// jsonb and have to be stringified while the rest are passed through, and
+		// a row whose shape is read by counting commas is one a later column will
+		// be inserted into the middle of.
 		const submissions = [
-			[
-				ids.harborDraft,
-				ids.harborPastDueAsset,
-				ids.certifierSingle,
-				ids.wpHarbor,
-				"draft",
-				"RP",
-				{ fixtureKey: "harbor-draft", notes: "Draft at assembly details" },
-				null,
-				null,
-				null,
-				1,
-			],
-			[
-				ids.ridgeDraft,
-				ids.ridgeDueSoonAsset,
-				ids.certifierMulti,
-				ids.wpRidge,
-				"draft",
-				"DC",
-				{ fixtureKey: "ridge-draft", notes: "Draft at test block" },
-				null,
-				null,
-				null,
-				4,
-			],
-			[
-				ids.harborPass,
-				ids.harborCurrentAsset,
-				ids.certifierSingle,
-				ids.wpHarbor,
-				"submitted",
-				"PVB",
-				{ fixtureKey: "harbor-pass", customerName: "Alex Morgan" },
-				null,
-				addDays(today, -30),
-				"pass",
-				6,
-			],
-			[
-				ids.ridgeFail,
-				ids.ridgePastDueAsset,
-				ids.certifierMulti,
-				ids.wpRidge,
-				"submitted",
-				"RP",
-				{ fixtureKey: "ridge-fail", customerName: "Alex Morgan" },
-				null,
-				addDays(today, -5),
-				"fail",
-				6,
-			],
+			{
+				id: ids.harborDraft,
+				bfaAssetId: ids.harborPastDueAsset,
+				certifierId: ids.certifierSingle,
+				waterPurveyorId: ids.wpHarbor,
+				status: "draft",
+				bfaType: "RP",
+				wizardData: {
+					fixtureKey: "harbor-draft",
+					notes: "Draft at assembly details",
+				},
+				overriddenFields: null,
+				submittedBinText: null,
+				testDate: null,
+				testResult: null,
+				currentStep: 1,
+			},
+			{
+				id: ids.ridgeDraft,
+				bfaAssetId: ids.ridgeDueSoonAsset,
+				certifierId: ids.certifierMulti,
+				waterPurveyorId: ids.wpRidge,
+				status: "draft",
+				bfaType: "DC",
+				wizardData: { fixtureKey: "ridge-draft", notes: "Draft at test block" },
+				overriddenFields: null,
+				submittedBinText: null,
+				testDate: null,
+				testResult: null,
+				currentStep: 4,
+			},
+			{
+				id: ids.harborPass,
+				bfaAssetId: ids.harborCurrentAsset,
+				certifierId: ids.certifierSingle,
+				waterPurveyorId: ids.wpHarbor,
+				status: "submitted",
+				bfaType: "PVB",
+				wizardData: {
+					fixtureKey: "harbor-pass",
+					customerName: "Alex Morgan",
+					assemblyLocation: "Roof plant room",
+				},
+				// The existing-BIN flow prefilled the assembly location from the
+				// asset's prior test and the certifier typed over it. § 6.6.6 asks
+				// for that to be visibly flagged to the WP rather than silently
+				// replaced, so one fixture carries the marker.
+				overriddenFields: ["assemblyLocation"],
+				submittedBinText: null,
+				testDate: addDays(today, -30),
+				testResult: "pass",
+				currentStep: 6,
+			},
+			{
+				id: ids.ridgeFail,
+				bfaAssetId: ids.ridgePastDueAsset,
+				certifierId: ids.certifierMulti,
+				waterPurveyorId: ids.wpRidge,
+				status: "submitted",
+				bfaType: "RP",
+				wizardData: { fixtureKey: "ridge-fail", customerName: "Alex Morgan" },
+				overriddenFields: null,
+				submittedBinText: null,
+				testDate: addDays(today, -5),
+				testResult: "fail",
+				currentStep: 6,
+			},
+			{
+				id: ids.harborUnresolved,
+				// No asset, which is the point of the fixture: the certifier left the
+				// BIN blank, so working out which assembly this belongs to is the
+				// purveyor's job (PRD § 7, flow 2).
+				bfaAssetId: null,
+				certifierId: ids.certifierSingle,
+				waterPurveyorId: ids.wpHarbor,
+				status: "submitted",
+				bfaType: "DC",
+				wizardData: {
+					fixtureKey: "harbor-unresolved",
+					customerName: "Priya Raman",
+					assemblyLocation: "Basement, behind the meter",
+				},
+				overriddenFields: null,
+				submittedBinText: "HRB-?? 0142",
+				testDate: addDays(today, -12),
+				testResult: "pass",
+				currentStep: 6,
+			},
 		] as const;
 		for (const submission of submissions) {
 			await client.query(
-				`insert into test_submissions (id, bfa_asset_id, certifier_id, water_purveyor_id, status, bfa_type, wizard_data, submitted_bin_text, test_date, test_result, current_step)
-				 values ($1, $2, $3, $4, $5::submission_status, $6::bfa_type, $7::jsonb, $8, $9, $10::test_result, $11)
+				`insert into test_submissions (id, bfa_asset_id, certifier_id, water_purveyor_id, status, bfa_type, wizard_data, overridden_fields, submitted_bin_text, test_date, test_result, current_step)
+				 values ($1, $2, $3, $4, $5::submission_status, $6::bfa_type, $7::jsonb, $8::jsonb, $9, $10, $11::test_result, $12)
 				 on conflict (id) do update set bfa_asset_id = excluded.bfa_asset_id, certifier_id = excluded.certifier_id,
 				 water_purveyor_id = excluded.water_purveyor_id, status = excluded.status, bfa_type = excluded.bfa_type,
-				 wizard_data = excluded.wizard_data, submitted_bin_text = excluded.submitted_bin_text,
+				 wizard_data = excluded.wizard_data, overridden_fields = excluded.overridden_fields,
+				 submitted_bin_text = excluded.submitted_bin_text,
 				 test_date = excluded.test_date, test_result = excluded.test_result, current_step = excluded.current_step`,
 				[
-					...submission.slice(0, 6),
-					JSON.stringify(submission[6]),
-					...submission.slice(7),
+					submission.id,
+					submission.bfaAssetId,
+					submission.certifierId,
+					submission.waterPurveyorId,
+					submission.status,
+					submission.bfaType,
+					JSON.stringify(submission.wizardData),
+					submission.overriddenFields
+						? JSON.stringify(submission.overriddenFields)
+						: null,
+					submission.submittedBinText,
+					submission.testDate,
+					submission.testResult,
+					submission.currentStep,
 				],
 			);
 		}
@@ -561,7 +618,7 @@ async function seedDatabase(authUserIds: SeedUserIds) {
 		log("seed_database_reconciled", {
 			water_purveyor_count: 2,
 			asset_count: 6,
-			submission_count: 4,
+			submission_count: 5,
 		});
 	} catch (error) {
 		await client.query("ROLLBACK");
