@@ -132,6 +132,16 @@ export function AssetsTable() {
 	const [formTarget, setFormTarget] = useState<FormTarget | null>(null);
 	const [isFormOpen, setIsFormOpen] = useState(false);
 
+	// The add form's optional customer picker. WP-scoped, the same list the
+	// customers screen reads, so there is no other tenant's customer to offer —
+	// and fetched only once the dialog is open, because most visits to this page
+	// never open it.
+	const customers = useQuery(
+		trpc.customers.listCustomers.queryOptions(undefined, {
+			enabled: isFormOpen,
+		}),
+	);
+
 	function invalidateList() {
 		return queryClient.invalidateQueries({
 			queryKey: trpc.assets.listAssets.queryKey(),
@@ -445,6 +455,8 @@ export function AssetsTable() {
 							<AddAssetForm
 								key="create"
 								pending={formMutation.isPending}
+								customerOptions={customers.data ?? []}
+								customersPending={customers.isPending}
 								{...assetFormErrors(
 									formMutation.isError ? formMutation.error : null,
 								)}

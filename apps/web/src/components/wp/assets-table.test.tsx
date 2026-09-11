@@ -30,11 +30,26 @@ type ListInput = {
 };
 
 const listFn = vi.fn();
+const listCustomersFn = vi.fn();
 const createFn = vi.fn();
 const updateFn = vi.fn();
 
 vi.mock("@/utils/trpc", () => ({
 	trpc: {
+		customers: {
+			// Read only for the add dialog's optional customer picker, and only
+			// while that dialog is open.
+			listCustomers: {
+				queryOptions: (
+					_input: undefined,
+					options: Record<string, unknown>,
+				) => ({
+					...options,
+					queryKey: ["customers", "listCustomers"],
+					queryFn: () => listCustomersFn(),
+				}),
+			},
+		},
 		assets: {
 			listAssets: {
 				queryOptions: (input: ListInput, options: Record<string, unknown>) => ({
@@ -121,9 +136,11 @@ function renderTable() {
 
 beforeEach(() => {
 	listFn.mockReset();
+	listCustomersFn.mockReset();
 	createFn.mockReset();
 	updateFn.mockReset();
 	listFn.mockResolvedValue(page([asset()]));
+	listCustomersFn.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -264,5 +281,23 @@ describe("AssetsTable", () => {
 		await waitFor(() =>
 			expect(listFn).toHaveBeenCalledWith(expect.objectContaining({ page: 2 })),
 		);
+	});
+
+	it("fetches the customer list only once the add dialog is opened", async () => {
+		listCustomersFn.mockResolvedValue([
+			{ id: "customer-a", name: "Marta Ellison", status: "active" },
+		]);
+
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		// Most visits to this page never open the dialog, so the picker's list is
+		// not part of loading the table.
+		expect(listCustomersFn).not.toHaveBeenCalled();
+
+		fireEvent.click(screen.getByRole("button", { name: /Add asset/ }));
+
+		expect(await screen.findByLabelText("Customer")).toBeTruthy();
+		await waitFor(() => expect(listCustomersFn).toHaveBeenCalled());
 	});
 });

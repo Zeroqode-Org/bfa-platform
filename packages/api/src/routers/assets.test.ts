@@ -486,6 +486,114 @@ describeDb("asset procedures", () => {
 		});
 	});
 
+	describe("createAsset — the optional first customer", () => {
+		it("leaves the asset unassigned when no customer is named", async () => {
+			const created = await callerFor(ids.adminA).assets.createAsset(
+				newAsset("NO-FIRST-CUSTOMER"),
+			);
+
+			const assignments = await pool.query(
+				"select id from customer_assignments where bfa_asset_id = $1",
+				[created.id],
+			);
+
+			expect(created.currentCustomerId).toBeNull();
+			expect(created.currentCustomerName).toBeNull();
+			// No occupancy row for an occupancy that never started.
+			expect(assignments.rows).toHaveLength(0);
+		});
+
+		it("attaches the named customer and opens their assignment", async () => {
+			const created = await callerFor(ids.adminA).assets.createAsset(
+				newAsset("WITH-FIRST-CUSTOMER", { currentCustomerId: customerA }),
+			);
+
+			expect(created.currentCustomerId).toBe(customerA);
+			expect(created.currentCustomerName).toBe("Marta Ellison");
+
+			// The history reads the same as if the customer had been attached a week
+			// later: one open row, starting today.
+			const detail = await callerFor(ids.adminA).assets.getAsset({
+				id: created.id,
+			});
+			expect(detail.assignments).toHaveLength(1);
+			expect(detail.assignments[0]).toMatchObject({
+				customerId: customerA,
+				endDate: null,
+			});
+		});
+
+		it("refuses a customer from another purveyor, and creates no asset", async () => {
+			await expect(
+				callerFor(ids.adminA).assets.createAsset(
+					newAsset("CROSS-TENANT-FIRST-CUSTOMER", {
+						currentCustomerId: customerB,
+					}),
+				),
+			).rejects.toThrow(/no customer with that id/i);
+
+			const { rows } = await pool.query(
+				"select id from bfa_assets where water_purveyor_id = $1 and bin = $2",
+				[wpA, "CROSS-TENANT-FIRST-CUSTOMER"],
+			);
+
+			// Refused before anything was written — not an orphan asset left behind
+			// by a half-finished create.
+			expect(rows).toHaveLength(0);
+		});
+
+		it("leaves no asset behind when the BIN is taken", async () => {
+			// The asset insert and the occupancy row are one transaction, so a
+			// failure in either rolls both back.
+			await callerFor(ids.adminA).assets.createAsset(
+				newAsset("FIRST-CUSTOMER-DUPLICATE", { currentCustomerId: customerA }),
+			);
+
+			await expect(
+				callerFor(ids.adminA).assets.createAsset(
+					newAsset("FIRST-CUSTOMER-DUPLICATE", {
+						currentCustomerId: customerA2,
+					}),
+				),
+			).rejects.toMatchObject({ code: "CONFLICT" });
+
+			const { rows } = await pool.query(
+				"select current_customer_id from bfa_assets where water_purveyor_id = $1 and bin = $2",
+				[wpA, "FIRST-CUSTOMER-DUPLICATE"],
+			);
+
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.current_customer_id).toBe(customerA);
+		});
+
+		it("logs the new occupancy the same way a later attachment would", async () => {
+			const lines = captureLogs();
+
+			const created = await callerFor(ids.adminA).assets.createAsset(
+				newAsset("AUDITED-FIRST-CUSTOMER", {
+					currentCustomerId: suspendedCustomerA,
+				}),
+			);
+
+			expect(
+				lines.find((line) => line.event === "bfa_asset_created"),
+			).toMatchObject({
+				asset_id: created.id,
+				current_customer_id: suspendedCustomerA,
+			});
+			expect(
+				lines.find((line) => line.event === "bfa_asset_customer_assigned"),
+			).toMatchObject({
+				asset_id: created.id,
+				wp_id: wpA,
+				from: null,
+				to: suspendedCustomerA,
+				// The asset starts with its email already paused, and the line says so.
+				to_customer_suspended: true,
+			});
+		});
+	});
+
 	describe("updateAsset", () => {
 		it("updates an asset in the caller's own purveyor", async () => {
 			const created = await callerFor(ids.adminA).assets.createAsset(

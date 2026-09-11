@@ -136,38 +136,85 @@ export const assetsRouter = router({
 	 * no `waterPurveyorId` on the input: a client cannot ask for another
 	 * purveyor's tenant because there is no field in which to ask.
 	 *
-	 * No customer is attached here. Occupancy is `assignCustomer`'s to set,
-	 * because attaching one has to open a `customer_assignments` row in the same
-	 * transaction — an asset that could be created already pointing at a customer
-	 * would be an occupancy with no record of when it started.
+	 * A first occupant may be named here, and only here. On a brand-new asset
+	 * there is no occupancy to close, so attaching one is opening the first
+	 * `customer_assignments` row rather than replacing an existing one — the two
+	 * writes go in one transaction, so an asset never exists pointing at a
+	 * customer with no record of when that started. Changing the occupant of an
+	 * asset that already has one stays `assignCustomer`'s, because that case does
+	 * have history to preserve.
+	 *
+	 * The customer is checked against the caller's own purveyor before anything
+	 * is written, so a cross-tenant id leaves no asset behind either.
 	 */
 	createAsset: wpProcedure
 		.input(createAssetInput)
 		.mutation(async ({ ctx, input }) => {
-			const [row] = await insertAsset({
-				...assetColumns(input),
-				waterPurveyorId: ctx.caller.waterPurveyorId,
-			});
+			const waterPurveyorId = ctx.caller.waterPurveyorId;
 
-			if (!row) {
-				throw new TRPCError({
-					code: "INTERNAL_SERVER_ERROR",
-					message: "Asset insert returned no row",
+			const customer = input.currentCustomerId
+				? await requireOwnCustomer(waterPurveyorId, input.currentCustomerId)
+				: null;
+
+			const row = await db.transaction(async (tx) => {
+				const [inserted] = await insertAsset(tx, {
+					...assetColumns(input),
+					waterPurveyorId,
+					currentCustomerId: customer?.id ?? null,
 				});
-			}
+
+				if (!inserted) {
+					throw new TRPCError({
+						code: "INTERNAL_SERVER_ERROR",
+						message: "Asset insert returned no row",
+					});
+				}
+
+				if (customer) {
+					await tx.insert(customerAssignments).values({
+						bfaAssetId: inserted.id,
+						customerId: customer.id,
+						startDate: sql`current_date`,
+					});
+				}
+
+				return inserted;
+			});
 
 			logAssetEvent("bfa_asset_created", {
 				actorId: ctx.caller.profileId,
 				assetId: row.id,
-				waterPurveyorId: ctx.caller.waterPurveyorId,
+				waterPurveyorId,
 				extra: {
 					bin: row.bin,
 					bfa_type: row.bfaType,
 					annual_test_date: row.annualTestDate,
+					current_customer_id: customer?.id ?? null,
 				},
 			});
 
-			return { ...row, currentCustomerName: null, currentCustomerStatus: null };
+			// The occupancy genuinely started, so it gets the same line a later
+			// attachment would — an asset's history reads the same whether its first
+			// customer arrived with it or a week afterwards.
+			if (customer) {
+				logAssetEvent("bfa_asset_customer_assigned", {
+					actorId: ctx.caller.profileId,
+					assetId: row.id,
+					waterPurveyorId,
+					extra: {
+						bin: row.bin,
+						from: null,
+						to: customer.id,
+						to_customer_suspended: customer.status === "suspended",
+					},
+				});
+			}
+
+			return {
+				...row,
+				currentCustomerName: customer?.name ?? null,
+				currentCustomerStatus: customer?.status ?? null,
+			};
 		}),
 
 	/**
@@ -278,31 +325,10 @@ export const assetsRouter = router({
 				throw new TRPCError({ code: "NOT_FOUND", message: "Asset not found" });
 			}
 
-			// The cross-tenant refusal. The customer is looked up inside the
-			// caller's own purveyor, so a customer belonging to another WP is not
-			// "rejected" after being found — it is never found at all, and the
-			// message says nothing about whether that uuid exists elsewhere.
-			const [customer] = await db
-				.select({
-					id: customers.id,
-					name: customers.name,
-					status: customers.status,
-				})
-				.from(customers)
-				.where(
-					and(
-						eq(customers.id, input.customerId),
-						eq(customers.waterPurveyorId, waterPurveyorId),
-					),
-				)
-				.limit(1);
-
-			if (!customer) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "No customer with that id in this water purveyor",
-				});
-			}
+			const customer = await requireOwnCustomer(
+				waterPurveyorId,
+				input.customerId,
+			);
 
 			// Re-assigning the customer who is already there is not a reassignment.
 			// Writing anyway would close today's occupancy row and open an identical
@@ -523,6 +549,40 @@ async function withCurrentCustomer(waterPurveyorId: string, asset: AssetRow) {
 }
 
 /**
+ * One customer of the caller's own purveyor, or a not-found.
+ *
+ * The cross-tenant refusal, in the one place both writers use it. The customer
+ * is looked up *inside* the caller's purveyor, so a customer belonging to
+ * another WP is not "rejected" after being found — it is never found at all,
+ * and the message says nothing about whether that uuid exists elsewhere.
+ */
+async function requireOwnCustomer(waterPurveyorId: string, customerId: string) {
+	const [customer] = await db
+		.select({
+			id: customers.id,
+			name: customers.name,
+			status: customers.status,
+		})
+		.from(customers)
+		.where(
+			and(
+				eq(customers.id, customerId),
+				eq(customers.waterPurveyorId, waterPurveyorId),
+			),
+		)
+		.limit(1);
+
+	if (!customer) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "No customer with that id in this water purveyor",
+		});
+	}
+
+	return customer;
+}
+
+/**
  * The insert, with the one database constraint a person can actually hit turned
  * into something the form can say.
  *
@@ -531,10 +591,16 @@ async function withCurrentCustomer(waterPurveyorId: string, asset: AssetRow) {
  * never collide. Catching the violation rather than checking first means there
  * is no window between the check and the write for a second clerk to take the
  * BIN.
+ *
+ * Takes its executor rather than reaching for `db`, so the insert can sit in
+ * the same transaction as the occupancy row a new asset's first customer opens.
  */
-async function insertAsset(values: typeof bfaAssets.$inferInsert) {
+async function insertAsset(
+	executor: Pick<typeof db, "insert">,
+	values: typeof bfaAssets.$inferInsert,
+) {
 	try {
-		return await db
+		return await executor
 			.insert(bfaAssets)
 			.values(values)
 			.returning(assetColumnSelection);

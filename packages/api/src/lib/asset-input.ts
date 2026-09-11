@@ -83,7 +83,29 @@ const assetFields = {
 	annualTestDate: z.iso.date("An annual test date is required"),
 };
 
-export const createAssetInput = z.object(assetFields);
+/** The columns both mutations write, without the fields only one of them takes. */
+const assetFieldsInput = z.object(assetFields);
+
+/**
+ * Creating an asset may also name its first occupant.
+ *
+ * This is the one place a customer travels with the asset fields, and it is
+ * safe here for a reason that does not hold on the edit form: a brand-new asset
+ * has no occupancy to close, so attaching one is opening the first
+ * `customer_assignments` row rather than replacing an existing one. The
+ * procedure still does both writes in a single transaction, so an asset never
+ * exists pointing at a customer with no record of when that started.
+ *
+ * Optional, and `null` is a real answer: an asset registered before its
+ * occupant is known is normal, and the customer can be attached later from the
+ * asset's own page.
+ */
+export const createAssetInput = assetFieldsInput.extend({
+	currentCustomerId: z
+		.uuid()
+		.nullish()
+		.transform((value) => value ?? null),
+});
 
 /**
  * The update shape is the create shape plus the row's id — every field is sent,
@@ -93,8 +115,13 @@ export const createAssetInput = z.object(assetFields);
  * The BIN is in here. A WP may correct any data it owns, the BIN included
  * ([confirmed decision]); what the procedure adds is that the correction is
  * logged with both values, so "allowed" never becomes "casual".
+ *
+ * `currentCustomerId` is deliberately *not* in here. On an existing asset,
+ * moving the pointer has to close the outgoing occupancy row in the same
+ * transaction — a field on this form would be the one way to change an occupant
+ * without recording it. `assignCustomer` owns that.
  */
-export const updateAssetInput = z.object({ ...assetFields, id: z.uuid() });
+export const updateAssetInput = assetFieldsInput.extend({ id: z.uuid() });
 
 /**
  * The asset list. Page-based rather than cursor-based: the screen shows a
@@ -141,6 +168,7 @@ export const assignCustomerInput = z.object({
 	acknowledgeSuspendedCustomer: z.boolean().default(false),
 });
 
+export type AssetFieldsInput = z.infer<typeof assetFieldsInput>;
 export type CreateAssetInput = z.infer<typeof createAssetInput>;
 export type UpdateAssetInput = z.infer<typeof updateAssetInput>;
 export type ListAssetsInput = z.infer<typeof listAssetsInput>;
@@ -150,11 +178,12 @@ export type ListAssetsInput = z.infer<typeof listAssetsInput>;
  *
  * Both mutations go through here so the write set has exactly one definition.
  * `asset_status` and `current_customer_id` are not in it: the first belongs to
- * the scheduler, the second to `assignCustomer`, which has to close the
- * outgoing occupancy row in the same transaction. Letting the asset form move
- * the pointer would be the one way to change an occupant without recording it.
+ * the scheduler, the second is written only alongside the occupancy row that
+ * records it — by `assignCustomer`, or by `createAsset` when the new asset
+ * names its first occupant. Letting these columns move the pointer on their own
+ * would be the one way to change an occupant without recording it.
  */
-export function assetColumns(input: CreateAssetInput) {
+export function assetColumns(input: AssetFieldsInput) {
 	return {
 		bin: input.bin,
 		bfaType: input.bfaType,

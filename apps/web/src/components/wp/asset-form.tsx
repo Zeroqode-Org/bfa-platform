@@ -16,7 +16,12 @@ import {
 import { TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 
-import type { Asset, AssetPayload } from "./asset-types";
+import type {
+	Asset,
+	AssetCustomerOption,
+	AssetPayload,
+	CreateAssetPayload,
+} from "./asset-types";
 import { BFA_TYPE_LABELS } from "./asset-types";
 
 /**
@@ -35,6 +40,12 @@ export type AssetFormValues = {
 	serialNumber: string;
 	size: string;
 	annualTestDate: string;
+	/**
+	 * The optional first occupant, on the add form only. `null` is a real
+	 * answer: an asset registered before its occupant is known is normal, and
+	 * the customer can be attached later from the asset's own page.
+	 */
+	currentCustomerId: string | null;
 };
 
 export const emptyAssetValues: AssetFormValues = {
@@ -47,7 +58,11 @@ export const emptyAssetValues: AssetFormValues = {
 	serialNumber: "",
 	size: "",
 	annualTestDate: "",
+	currentCustomerId: null,
 };
+
+/** The value the picker uses for "nobody" — a select cannot hold a real null. */
+const NO_CUSTOMER = "";
 
 /** An existing row as form values. Nullable columns become empty strings. */
 export function assetToFormValues(asset: Asset): AssetFormValues {
@@ -61,6 +76,10 @@ export function assetToFormValues(asset: Asset): AssetFormValues {
 		serialNumber: asset.serialNumber ?? "",
 		size: asset.size ?? "",
 		annualTestDate: asset.annualTestDate ?? "",
+		// Carried so the values are a complete record, not because the edit form
+		// renders it — that form has no customer control, and `buildAssetPayload`
+		// does not send one.
+		currentCustomerId: asset.currentCustomerId,
 	};
 }
 
@@ -80,6 +99,23 @@ export function buildAssetPayload(values: AssetFormValues): AssetPayload {
 		serialNumber: values.serialNumber.trim() || null,
 		size: values.size.trim() || null,
 		annualTestDate: values.annualTestDate,
+	};
+}
+
+/**
+ * The same payload plus the optional first occupant, for the add form.
+ *
+ * Separate from `buildAssetPayload` rather than a flag on it, because the
+ * difference is not cosmetic: `updateAsset` does not accept a customer at all,
+ * and a shared builder that sometimes included one would be a field quietly
+ * dropped on the way to the edit path.
+ */
+export function buildCreateAssetPayload(
+	values: AssetFormValues,
+): CreateAssetPayload {
+	return {
+		...buildAssetPayload(values),
+		currentCustomerId: values.currentCustomerId,
 	};
 }
 
@@ -133,16 +169,22 @@ export function isAssetFormValid(values: AssetFormValues) {
  * Split out from its dialog so the submit behaviour can be exercised without
  * driving a modal's portal and focus trap, the same way `CustomerForm` is.
  *
- * Two columns the table shows are deliberately not here. `asset_status` is
- * computed by the scheduler from the annual test date, so there is nothing for
- * a person to choose; and the current customer is attached from the asset's own
- * page, where the change can be recorded as occupancy rather than as an edit.
+ * `asset_status` is deliberately absent: the scheduler computes it from the
+ * annual test date, so there is nothing for a person to choose.
+ *
+ * The customer picker appears only when `customerOptions` is passed, which is
+ * the add form and nothing else. On an existing asset, changing the occupant
+ * has to close the outgoing occupancy row in the same transaction, so it
+ * belongs to the control on the asset's own page — a field here would be the
+ * one way to move an occupant without recording it.
  */
 export function AssetForm({
 	initialValues = emptyAssetValues,
 	pending = false,
 	errorMessage,
 	binErrorMessage,
+	customerOptions,
+	customersPending = false,
 	submitLabel,
 	pendingLabel,
 	onSubmit,
@@ -154,9 +196,12 @@ export function AssetForm({
 	errorMessage?: string;
 	/** A server refusal about the BIN — shown under that input, not above the form. */
 	binErrorMessage?: string;
+	/** Present on the add form only; its absence is what hides the picker. */
+	customerOptions?: AssetCustomerOption[];
+	customersPending?: boolean;
 	submitLabel: string;
 	pendingLabel: string;
-	onSubmit: (payload: AssetPayload) => void;
+	onSubmit: (values: AssetFormValues) => void;
 	onCancel: () => void;
 }) {
 	const binId = useId();
@@ -170,6 +215,7 @@ export function AssetForm({
 	const sizeId = useId();
 	const annualTestDateId = useId();
 	const annualTestDateHintId = useId();
+	const currentCustomerId = useId();
 
 	const [values, setValues] = useState<AssetFormValues>(initialValues);
 	// Which BIN the rejected request carried. The server's "already in use"
@@ -190,7 +236,7 @@ export function AssetForm({
 		if (!isAssetFormValid(values)) return;
 
 		setRejectedBin(values.bin.trim());
-		onSubmit(buildAssetPayload(values));
+		onSubmit(values);
 	}
 
 	const problems = assetFormProblems(values);
@@ -204,6 +250,9 @@ export function AssetForm({
 	// can still take back.
 	const binChanged =
 		initialValues.bin !== "" && values.bin.trim() !== initialValues.bin;
+	const chosenCustomer = customerOptions?.find(
+		(customer) => customer.id === values.currentCustomerId,
+	);
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
@@ -387,6 +436,68 @@ export function AssetForm({
 				</p>
 			</div>
 
+			{/* Add form only. Registering an asset and knowing who occupies it are
+			    usually the same moment, and making that a second trip to the asset's
+			    own page would leave new assets with nowhere to send their email. */}
+			{customerOptions ? (
+				<div className="flex flex-col gap-1.5">
+					<Label htmlFor={currentCustomerId}>Customer</Label>
+					<Select
+						items={{
+							[NO_CUSTOMER]: "No customer yet",
+							...Object.fromEntries(
+								customerOptions.map((customer) => [customer.id, customer.name]),
+							),
+						}}
+						value={values.currentCustomerId ?? NO_CUSTOMER}
+						onValueChange={(value) =>
+							update("currentCustomerId", (value as string) || null)
+						}
+						disabled={pending || customersPending}
+					>
+						<SelectTrigger id={currentCustomerId} name="currentCustomerId">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectGroup>
+								<SelectItem value={NO_CUSTOMER}>No customer yet</SelectItem>
+								{customerOptions.map((customer) => (
+									<SelectItem key={customer.id} value={customer.id}>
+										{customer.name}
+										{customer.status === "suspended" ? " — suspended" : ""}
+									</SelectItem>
+								))}
+							</SelectGroup>
+						</SelectContent>
+					</Select>
+
+					{/* Choosing a suspended customer means the asset starts with its
+					    email already paused. Said here, before saving, rather than
+					    discovered later as a notice that never went out. */}
+					{chosenCustomer?.status === "suspended" ? (
+						<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[12px] text-warning">
+							<TriangleAlert
+								className="mt-px size-3.5 shrink-0"
+								aria-hidden="true"
+							/>
+							{chosenCustomer.name} is suspended, so this asset&rsquo;s
+							automated email starts out paused.
+						</p>
+					) : customerOptions.length === 0 && !customersPending ? (
+						<p className="text-[12px] text-muted-foreground">
+							No customers yet. Register the asset anyway and attach one later
+							from its own page.
+						</p>
+					) : (
+						<p className="text-[12px] text-muted-foreground">
+							Optional. Leave it empty and attach one later from the
+							asset&rsquo;s own page — either way the assignment is recorded
+							with its start date.
+						</p>
+					)}
+				</div>
+			) : null}
+
 			{errorMessage ? (
 				<p
 					role="alert"
@@ -432,28 +543,60 @@ type BoundFormProps = {
 	pending?: boolean;
 	errorMessage?: string;
 	binErrorMessage?: string;
-	onSubmit: (payload: AssetPayload) => void;
 	onCancel: () => void;
 };
 
-/** Registering a valve the WP owns, with no certifier submission behind it. */
-export function AddAssetForm(props: BoundFormProps) {
+/**
+ * Registering a valve the WP owns, with no certifier submission behind it.
+ *
+ * Takes the customer list because this is the one form that may name an
+ * occupant: a new asset has no occupancy to close, so attaching one opens the
+ * first assignment rather than replacing an existing one.
+ */
+export function AddAssetForm({
+	customerOptions = [],
+	customersPending,
+	onSubmit,
+	...props
+}: BoundFormProps & {
+	customerOptions?: AssetCustomerOption[];
+	customersPending?: boolean;
+	onSubmit: (payload: CreateAssetPayload) => void;
+}) {
 	return (
-		<AssetForm {...props} submitLabel="Add asset" pendingLabel="Adding…" />
+		<AssetForm
+			{...props}
+			customerOptions={customerOptions}
+			customersPending={customersPending}
+			submitLabel="Add asset"
+			pendingLabel="Adding…"
+			onSubmit={(values) => onSubmit(buildCreateAssetPayload(values))}
+		/>
 	);
 }
 
-/** Correcting an existing record, the BIN included. */
+/**
+ * Correcting an existing record, the BIN included.
+ *
+ * No customer control and no customer in the payload: on an asset that already
+ * has an occupant, moving the pointer has to close the outgoing assignment in
+ * the same transaction, and that is `assignCustomer`'s job.
+ */
 export function EditAssetForm({
 	asset,
+	onSubmit,
 	...props
-}: BoundFormProps & { asset: Asset }) {
+}: BoundFormProps & {
+	asset: Asset;
+	onSubmit: (payload: AssetPayload) => void;
+}) {
 	return (
 		<AssetForm
 			{...props}
 			initialValues={assetToFormValues(asset)}
 			submitLabel="Save changes"
 			pendingLabel="Saving…"
+			onSubmit={(values) => onSubmit(buildAssetPayload(values))}
 		/>
 	);
 }

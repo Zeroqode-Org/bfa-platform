@@ -9,6 +9,7 @@ import {
 	assetFormProblems,
 	assetToFormValues,
 	buildAssetPayload,
+	buildCreateAssetPayload,
 	EditAssetForm,
 	emptyAssetValues,
 	isCalendarDate,
@@ -82,6 +83,26 @@ describe("buildAssetPayload", () => {
 	});
 });
 
+describe("buildCreateAssetPayload", () => {
+	it("carries the chosen first occupant", () => {
+		expect(
+			buildCreateAssetPayload({
+				...emptyAssetValues,
+				bin: "BIN-10041",
+				serviceAddress: "18 Canal Road",
+				annualTestDate: "2027-04-01",
+				currentCustomerId: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
+			}).currentCustomerId,
+		).toBe("8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607");
+	});
+
+	it("sends null when the picker was left alone", () => {
+		expect(
+			buildCreateAssetPayload(emptyAssetValues).currentCustomerId,
+		).toBeNull();
+	});
+});
+
 describe("assetToFormValues", () => {
 	it("turns null columns into empty fields", () => {
 		expect(
@@ -118,6 +139,9 @@ describe("AddAssetForm", () => {
 			serialNumber: null,
 			size: null,
 			annualTestDate: "2027-04-01",
+			// Untouched picker: registering an asset before its occupant is known
+			// is normal, and `null` is the answer for it.
+			currentCustomerId: null,
 		});
 	});
 
@@ -125,7 +149,35 @@ describe("AddAssetForm", () => {
 		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
 
 		expect(screen.queryByLabelText("Status")).toBeNull();
-		expect(screen.queryByLabelText(/customer/i)).toBeNull();
+	});
+
+	it("offers an optional customer picker", () => {
+		render(
+			<AddAssetForm
+				customerOptions={[
+					{ id: "customer-a", name: "Marta Ellison", status: "active" },
+				]}
+				onSubmit={vi.fn()}
+				onCancel={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByLabelText("Customer")).toBeTruthy();
+		// Optional in the copy as well as in the payload — the person should not
+		// have to guess whether leaving it empty is allowed.
+		expect(screen.getByText(/Optional\. Leave it empty/)).toBeTruthy();
+	});
+
+	it("says so when the purveyor has no customers to pick yet", () => {
+		render(
+			<AddAssetForm
+				customerOptions={[]}
+				onSubmit={vi.fn()}
+				onCancel={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByText(/No customers yet/)).toBeTruthy();
 	});
 
 	it("keeps save disabled until the three required answers are there", () => {
@@ -277,6 +329,37 @@ describe("EditAssetForm", () => {
 			target: { value: "BIN-10041" },
 		});
 		expect(screen.queryByText(/Changing a BIN is recorded/)).toBeNull();
+	});
+
+	it("has no customer control — an existing occupant moves through its own flow", () => {
+		// Changing the occupant of an asset that already has one has to close the
+		// outgoing assignment in the same transaction, so it lives on the asset's
+		// own page rather than in this form.
+		render(
+			<EditAssetForm asset={asset()} onSubmit={vi.fn()} onCancel={vi.fn()} />,
+		);
+
+		expect(screen.queryByLabelText("Customer")).toBeNull();
+	});
+
+	it("never sends a customer, even when the record has one", () => {
+		const onSubmit = vi.fn();
+		render(
+			<EditAssetForm
+				asset={asset({ currentCustomerId: "customer-a" })}
+				onSubmit={onSubmit}
+				onCancel={vi.fn()}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Size"), {
+			target: { value: "3 in" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+		expect(Object.keys(onSubmit.mock.calls[0]?.[0] ?? {})).not.toContain(
+			"currentCustomerId",
+		);
 	});
 
 	it("shows a form-wide server message above the buttons", () => {

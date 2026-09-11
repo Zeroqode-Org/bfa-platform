@@ -104,6 +104,29 @@ describe("createAssetInput", () => {
 		expect(parsed.model).toBeNull();
 	});
 
+	it("treats the first occupant as optional, defaulting to nobody", () => {
+		expect(createAssetInput.parse(asset).currentCustomerId).toBeNull();
+		expect(
+			createAssetInput.parse({ ...asset, currentCustomerId: null })
+				.currentCustomerId,
+		).toBeNull();
+	});
+
+	it("keeps a chosen first occupant", () => {
+		expect(
+			createAssetInput.parse({
+				...asset,
+				currentCustomerId: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
+			}).currentCustomerId,
+		).toBe("8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607");
+	});
+
+	it("refuses a first occupant that is not a uuid", () => {
+		expect(
+			createAssetInput.safeParse({ ...asset, currentCustomerId: "42" }).success,
+		).toBe(false);
+	});
+
 	it("refuses text past the shared field limits, and accepts text at them", () => {
 		// The same numbers the form puts on its `maxLength` attributes, so the
 		// browser stops typing exactly where the server stops accepting.
@@ -202,6 +225,19 @@ describe("updateAssetInput", () => {
 		expect(updateAssetInput.safeParse({ ...asset, id: "42" }).success).toBe(
 			false,
 		);
+	});
+
+	it("does not carry a customer, even when one is sent", () => {
+		// Moving the occupant of an existing asset has to close the outgoing
+		// assignment in the same transaction — `assignCustomer`'s job. A field
+		// here would be the one way to change an occupant without recording it.
+		const parsed = updateAssetInput.parse({
+			...asset,
+			id: "1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9",
+			currentCustomerId: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
+		});
+
+		expect(Object.keys(parsed)).not.toContain("currentCustomerId");
 	});
 });
 
