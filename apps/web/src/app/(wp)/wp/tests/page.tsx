@@ -1,4 +1,6 @@
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { PageTitle } from "@bfa-platform/ui/components/page-title";
+
+import { SubmittedTestsTable } from "@/components/wp/submitted-tests-table";
 import { requireAccount } from "@/lib/auth";
 
 export default async function Page() {
@@ -10,5 +12,18 @@ export default async function Page() {
 	// signed in and part-way through a session.
 	await requireAccount();
 
-	return <PlaceholderPage title="Submitted Tests" route="/wp/tests" />;
+	return (
+		<div className="flex flex-col gap-5">
+			<div className="flex flex-col gap-1.5">
+				<PageTitle>Submitted Tests</PageTitle>
+				<p className="text-[13px] text-muted-foreground">
+					Every test filed against your purveyor, by every certifier who works
+					for you. Open one to read it as a document — and to correct it, which
+					the certifier who filed it can no longer do.
+				</p>
+			</div>
+
+			<SubmittedTestsTable />
+		</div>
+	);
 }

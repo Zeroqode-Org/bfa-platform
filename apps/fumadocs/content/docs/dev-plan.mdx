@@ -40,7 +40,7 @@ Status as of **2026-09-10**. Update this table as work progresses — this is th
 | WP Dashboard — Customers | 6.6.4 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Repair Companies | 6.6.5 | Daniil | 09/07 | 09/11 | done |
 | Certifier WP Selector | 6.4 | Lina | 09/07 | 09/11 | planned |
-| WP Dashboard — Submitted Tests | 6.6.6 | Lina | 09/14 | 09/18 | planned |
+| WP Dashboard — Submitted Tests | 6.6.6 | Lina | 09/14 | 09/18 | done |
 | WP Dashboard — Notices & Email Settings | 6.6.7 | Daniil | 09/14 | 09/18 | planned |
 | Workflow 1: Reminder + Late Notices | 6.7 | Daniil | 09/14 | 09/18 | planned |
 | Workflow 2: AG Rate Renewal Notice | 6.9 | Daniil | 09/14 | 09/18 | planned |
@@ -116,6 +116,22 @@ in the client Q&A log, and the narrower per-WP alternative
 (`authorization_status = 'revoked'`) already exists in the schema. Flagged in the
 PRD rather than decided quietly. Full writeup:
 [WP Certifiers](/docs/wp-certifiers).
+
+**WP Dashboard — Submitted Tests (6.6.6)**: shipped ahead of its week, against
+the seeded submissions — the wizard that produces real ones is 6.5. `/wp/tests`
+lists every test filed against the purveyor across certifiers, opens one as a
+document with every field editable in place, flags whatever the certifier typed
+over a prefilled value, and links a submission that never found its assembly to
+one of the purveyor's own assets. `0008_test_submission_policies` gives
+`test_submissions` its first row policies; drafts are invisible to a WP by
+predicate on every read and write path, not by filtering.
+
+**Carries a decided answer to a standing open question, scoped to one screen.**
+All three WP roles read submitted tests; only Admin and SubAdmin correct one.
+PRD § 10 leaves the SubAdmin/Employee split open in general and this does not
+close it — the check is local to the submitted-tests router, as 6.6.3's is to
+the certifiers router. Full writeup:
+[WP Submitted Tests](/docs/wp-submitted-tests).
 
 **Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
 

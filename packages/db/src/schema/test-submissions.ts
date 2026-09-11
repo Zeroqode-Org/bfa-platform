@@ -71,5 +71,15 @@ export const testSubmissions = pgTable(
 			table.certifierId,
 			table.status,
 		),
+		// The WP submitted-tests list. Its two equality predicates first, then
+		// the sort column in the order the screen reads it, so Postgres can walk
+		// the index and skip the sort rather than reading every submitted row for
+		// the tenant. The `water_purveyor_id` index above narrows but cannot sort.
+		index("test_submissions_wp_status_test_date_idx").on(
+			table.waterPurveyorId,
+			table.status,
+			table.testDate.desc().nullsLast(),
+			table.createdAt.desc(),
+		),
 	],
 ).enableRLS();

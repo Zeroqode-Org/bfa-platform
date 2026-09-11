@@ -57,6 +57,20 @@
 			"when": 1790430000000,
 			"tag": "0007_certifier_column_permissions",
 			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "7",
+			"when": 1790700000000,
+			"tag": "0008_test_submission_policies",
+			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "7",
+			"when": 1790800000000,
+			"tag": "0009_test_submission_asset_tenancy",
+			"breakpoints": true
 		}
 	]
 }
