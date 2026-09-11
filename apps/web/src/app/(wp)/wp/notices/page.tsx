@@ -1,4 +1,8 @@
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { PageTitle } from "@bfa-platform/ui/components/page-title";
+
+import { GeneralInfoBroadcast } from "@/components/wp/general-info-broadcast";
+import { NoticeRepairCompanies } from "@/components/wp/notice-repair-companies";
+import { NoticeTemplatesEditor } from "@/components/wp/notice-templates-editor";
 import { requireAccount } from "@/lib/auth";
 
 export default async function Page() {
@@ -8,7 +12,28 @@ export default async function Page() {
 	// the layout ran would sail straight through. `certifiers.status` is
 	// exactly that case: a purveyor can block a certifier who is already
 	// signed in and part-way through a session.
-	await requireAccount();
+	const account = await requireAccount();
 
-	return <PlaceholderPage title="Notices & Email" route="/wp/notices" />;
+	// What the screen renders, not what it is allowed to do. Every procedure
+	// behind these components checks the role again for itself — a hidden button
+	// is not a permission — and this is what keeps a SubAdmin or an Employee from
+	// being shown controls that would only refuse them.
+	const canEdit = account.globalRole === "wp_admin";
+
+	return (
+		<div className="flex flex-col gap-5">
+			<div className="flex flex-col gap-1.5">
+				<PageTitle>Notices &amp; Email</PageTitle>
+				<p className="max-w-[70ch] text-[13px] text-muted-foreground">
+					The words your customers read. Edit the subject and message for each
+					automated notice, send a one-off message to a group of customers, and
+					check who a failure notice will tell them to call.
+				</p>
+			</div>
+
+			<NoticeTemplatesEditor canEdit={canEdit} />
+			<GeneralInfoBroadcast canSend={canEdit} />
+			<NoticeRepairCompanies />
+		</div>
+	);
 }

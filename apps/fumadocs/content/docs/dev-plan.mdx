@@ -164,6 +164,27 @@ close it — the check is local to the submitted-tests router, as 6.6.3's is to
 the certifiers router. Full writeup:
 [WP Submitted Tests](/docs/wp-submitted-tests).
 
+**WP Dashboard — Notices & Email (6.6.7)**: shipped. `/wp/notices` edits the
+subject and message for all four automated notice types, composes and sends a
+one-off general-info broadcast to a filtered set of customers, and shows the
+approved repair companies read-only. `0010_notice_template_policies` gives
+`notice_templates` its first row policies. `listNoticeTemplates` always returns
+four entries and fills a missing row with the platform default, so an untouched
+type never sends blank and the screen has no "not set" branch. The four stored
+templates are not sent by anything yet — the reminder workflow that sends them
+is Workflow 1.
+
+**Carries two product decisions and one open question.** The broadcast ships
+*with* personalisation, limited to `{{customer_name}}` and `{{wp_name}}`,
+because a customer may own several assemblies and the four asset-scoped
+variables have no single value for a recipient; and suspended customers are
+excluded from every audience, following the confirmed § 9 rule that suspension
+holds a customer's whole notice pipeline. Still open, and blocking a production
+release of this section: the client has not supplied customer-facing text for
+the four platform defaults, so `notice-defaults.ts` carries plain provisional
+copy that makes no compliance claim. Full writeup:
+[WP Notices & Email](/docs/wp-notices).
+
 **Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
 
 **Transactional Email Integration (6.14)** stays *in-progress* on purpose. Its first step — the send helper and `consoleDriver` — shipped with onboarding, and every mail path in the app already runs through it. What remains is the provider account, the sender domain and DKIM record, and `providerDriver` itself, which needs credentials that do not exist yet. See [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer).
@@ -178,7 +199,7 @@ Carried from [PRD § 10](/docs/prd#10-open-questions-for-the-client) — resolve
 
 - **Phase 2:** WPAdmin/WPsubAdmin/WPEmployee permission differences — all three currently share identical invitation policies; second-WP-invite notification behavior.
 - **Phase 3:** signature vs. certify-checkbox; legacy PDF/results-document layout match (reference wizard: [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard)).
-- **Phase 5:** dynamic variables for notice text; AG Renewal Date auto-update behavior; monthly CSV export field list.
+- **Phase 5:** the full list of dynamic variables for notice text (six shipped, and the substitution layer takes a seventh as a list edit); **approved customer-facing copy for the four platform default notices**, which 6.6.7 ships as provisional placeholder text; AG Renewal Date auto-update behavior; monthly CSV export field list.
 
 Resolved since the last pass (no longer blocking): mid-wizard pass/fail handling, scope of "edit submitted test data" for a WP, asset↔customer cardinality, email routing for suspended customers, and BIN reassignment on an existing asset — allowed, and logged with both values, which is what 6.6.2 shipped. See [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log).
 

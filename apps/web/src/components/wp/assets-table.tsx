@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@bfa-platform/ui/components/badge";
-import { Button } from "@bfa-platform/ui/components/button";
+import { Button, buttonVariants } from "@bfa-platform/ui/components/button";
 import {
 	Dialog,
 	DialogContent,
@@ -353,18 +353,25 @@ export function AssetsTable() {
 											>
 												Edit
 											</Button>
-											{/* A link wearing a button's styling, so it keeps
-											    link semantics — middle-click, open in a new tab.
-											    `nativeButton={false}` is how Base UI is told the
-											    rendered element is not a <button>. */}
-											<Button
-												variant="ghost"
-												size="sm"
-												nativeButton={false}
-												render={<Link href={`/wp/assets/${asset.id}`} />}
+											{/* A link wearing a button's styling — the class
+											    names are borrowed and the element is left alone.
+
+											    Not `<Button render={<Link/>}>`: Base UI's Button
+											    assumes it renders a native <button>, and the
+											    `nativeButton={false}` escape hatch silences its
+											    warning by shimming the anchor *into* a button —
+											    it stamps `role="button"` on it. This control
+											    navigates, so it should announce as a link and
+											    keep middle-click and open-in-new-tab. */}
+											<Link
+												href={`/wp/assets/${asset.id}`}
+												className={buttonVariants({
+													variant: "ghost",
+													size: "sm",
+												})}
 											>
 												View
-											</Button>
+											</Link>
 										</div>
 									</TableCell>
 								</TableRow>

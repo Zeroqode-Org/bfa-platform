@@ -4,6 +4,7 @@ import { certifiersRouter } from "./certifiers";
 import { customersRouter } from "./customers";
 import { dashboardRouter } from "./dashboard";
 import { invitationsRouter } from "./invitations";
+import { noticesRouter } from "./notices";
 import { repairCompaniesRouter } from "./repair-companies";
 import { submittedTestsRouter } from "./submitted-tests";
 import { superAdminRouter } from "./super-admin";
@@ -16,6 +17,7 @@ export const appRouter = router({
 	dashboard: dashboardRouter,
 	certifiers: certifiersRouter,
 	repairCompanies: repairCompaniesRouter,
+	notices: noticesRouter,
 	submittedTests: submittedTestsRouter,
 	healthCheck: publicProcedure.query(() => {
 		return "OK";

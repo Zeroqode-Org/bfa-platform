@@ -2,7 +2,8 @@ import {
 	inspectInvitation,
 	redemptionMessage,
 } from "@bfa-platform/api/lib/invitation-redemption";
-import { Button } from "@bfa-platform/ui/components/button";
+import { buttonVariants } from "@bfa-platform/ui/components/button";
+import { cn } from "@bfa-platform/ui/lib/utils";
 import { TriangleAlert } from "lucide-react";
 import Link from "next/link";
 
@@ -43,11 +44,22 @@ export default async function InvitePage({
 					{redemptionMessage(inspection.state)}
 				</p>
 
-				<Button
-					render={<Link href="/login">Go to sign in</Link>}
-					variant="secondary"
-					className="mt-5 w-full"
-				/>
+				{/* A link wearing a button's styling. Not
+				    `<Button render={<Link/>}>`: Base UI's Button assumes it
+				    renders a native <button>, and the `nativeButton={false}`
+				    escape hatch silences its warning by shimming the anchor
+				    into a button — it stamps `role="button"` on it. This is
+				    the only way off a dead-end screen, so it has to announce
+				    as the navigation it is. */}
+				<Link
+					href="/login"
+					className={cn(
+						buttonVariants({ variant: "secondary" }),
+						"mt-5 w-full",
+					)}
+				>
+					Go to sign in
+				</Link>
 			</InviteShell>
 		);
 	}

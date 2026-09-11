@@ -185,6 +185,26 @@ describe("AssetsTable", () => {
 		);
 	});
 
+	it("keeps link semantics on the row's View control", async () => {
+		// It is a link wearing a button's styling, and it has to stay a link.
+		// Rendering the anchor through Base UI's `Button` warns that it expected a
+		// native <button>, and the `nativeButton={false}` escape hatch answers that
+		// by shimming the anchor into one — `role="button"`, which announces the
+		// wrong thing for a control that navigates and costs a pointer user
+		// middle-click and open-in-new-tab. `buttonVariants` borrows the class
+		// names and leaves the element alone.
+		renderTable();
+
+		const view = await screen.findByRole("link", { name: "View" });
+
+		expect(view.tagName).toBe("A");
+		expect(view.getAttribute("href")).toBe(
+			"/wp/assets/8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
+		);
+		expect(view.getAttribute("role")).toBeNull();
+		expect(screen.queryByRole("button", { name: "View" })).toBeNull();
+	});
+
 	it("offers the Add button when the purveyor has no assets at all", async () => {
 		listFn.mockResolvedValue(page([]));
 
