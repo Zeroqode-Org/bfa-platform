@@ -4,6 +4,7 @@ import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogHeader,
@@ -488,7 +489,12 @@ function SubmissionDialog({
 
 	return (
 		<Dialog open={Boolean(submissionId)} onOpenChange={onOpenChange}>
-			<DialogContent className="max-h-[86vh] w-[min(920px,94vw)] max-w-[920px] overflow-y-auto">
+			{/* Height comes from `DialogContent` itself, which bounds every dialog
+			    to the viewport in `svh`. The width this document needs, and the
+			    `overflow-hidden` that hands the scrolling to `DialogBody` below, are
+			    what stays here: the record is longer than a screen, and a popup that
+			    scrolled as a whole would take its title and close button with it. */}
+			<DialogContent className="w-[min(920px,94vw)] max-w-[920px] overflow-hidden">
 				<DialogHeader>
 					<DialogTitle>Submitted test</DialogTitle>
 					<DialogDescription>
@@ -498,23 +504,25 @@ function SubmissionDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				{detail.isPending || canEdit === undefined ? (
-					<SubmissionDocumentSkeleton />
-				) : detail.isError ? (
-					<SubmissionDocumentError
-						message={detail.error.message}
-						onRetry={() => detail.refetch()}
-					/>
-				) : (
-					<SubmissionDocument
-						// Remounts on target change so the fields start from the record
-						// being opened rather than from whatever was open before.
-						key={detail.data.id}
-						submission={detail.data}
-						canEdit={canEdit}
-						onChanged={onChanged}
-					/>
-				)}
+				<DialogBody>
+					{detail.isPending || canEdit === undefined ? (
+						<SubmissionDocumentSkeleton />
+					) : detail.isError ? (
+						<SubmissionDocumentError
+							message={detail.error.message}
+							onRetry={() => detail.refetch()}
+						/>
+					) : (
+						<SubmissionDocument
+							// Remounts on target change so the fields start from the record
+							// being opened rather than from whatever was open before.
+							key={detail.data.id}
+							submission={detail.data}
+							canEdit={canEdit}
+							onChanged={onChanged}
+						/>
+					)}
+				</DialogBody>
 			</DialogContent>
 		</Dialog>
 	);

@@ -424,7 +424,10 @@ export function AssetsTable() {
 			</div>
 
 			<Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
-				<DialogContent className="max-w-[560px]">
+				{/* overflow-hidden: the form inside pins its own footer and scrolls
+				    its fields, so the popup must clip rather than scroll — two scroll
+				    containers would put the footer back out of reach. */}
+				<DialogContent className="max-w-[560px] overflow-hidden">
 					<DialogHeader>
 						<DialogTitle>{isEditing ? "Edit asset" : "Add asset"}</DialogTitle>
 						<DialogDescription>

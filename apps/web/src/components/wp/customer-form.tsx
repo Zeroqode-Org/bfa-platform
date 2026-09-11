@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@bfa-platform/ui/components/button";
-import { DialogFooter } from "@bfa-platform/ui/components/dialog";
+import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
@@ -146,152 +146,167 @@ export function CustomerForm({
 	}
 
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={nameId}>Name</Label>
-				<Input
-					id={nameId}
-					name="name"
-					value={values.name}
-					onChange={(event) => update("name", event.target.value)}
-					placeholder="Marta Ellison"
-					autoComplete="off"
-					disabled={pending}
-					required
-				/>
-			</div>
-
-			<div className="grid gap-4 sm:grid-cols-2">
+		<form
+			onSubmit={handleSubmit}
+			// A column that takes exactly the height its dialog hands it. Only
+			// `DialogBody` scrolls, so the footer stays on screen on a short
+			// viewport instead of being pushed off the bottom of it.
+			className="flex min-h-0 flex-1 flex-col gap-4"
+		>
+			<DialogBody>
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={accountNumberId}>Account number</Label>
+					<Label htmlFor={nameId}>Name</Label>
 					<Input
-						id={accountNumberId}
-						name="accountNumber"
-						value={values.accountNumber}
-						onChange={(event) => update("accountNumber", event.target.value)}
+						id={nameId}
+						name="name"
+						value={values.name}
+						onChange={(event) => update("name", event.target.value)}
+						placeholder="Marta Ellison"
+						autoComplete="off"
+						disabled={pending}
+						required
+					/>
+				</div>
+
+				<div className="grid gap-4 sm:grid-cols-2">
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={accountNumberId}>Account number</Label>
+						<Input
+							id={accountNumberId}
+							name="accountNumber"
+							value={values.accountNumber}
+							onChange={(event) => update("accountNumber", event.target.value)}
+							placeholder="Optional"
+							autoComplete="off"
+							disabled={pending}
+						/>
+					</div>
+
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={emailId}>Email</Label>
+						<Input
+							id={emailId}
+							name="email"
+							type="email"
+							value={values.email}
+							onChange={(event) => update("email", event.target.value)}
+							placeholder="marta@example.com"
+							autoComplete="off"
+							disabled={pending}
+							required
+						/>
+					</div>
+				</div>
+
+				<div className="flex flex-col gap-1.5">
+					<Label htmlFor={addressId}>Address</Label>
+					<Input
+						id={addressId}
+						name="address"
+						value={values.address}
+						onChange={(event) => update("address", event.target.value)}
 						placeholder="Optional"
 						autoComplete="off"
 						disabled={pending}
 					/>
 				</div>
 
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={emailId}>Email</Label>
-					<Input
-						id={emailId}
-						name="email"
-						type="email"
-						value={values.email}
-						onChange={(event) => update("email", event.target.value)}
-						placeholder="marta@example.com"
-						autoComplete="off"
-						disabled={pending}
-						required
-					/>
+				<div className="grid gap-4 sm:grid-cols-2">
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={rateCategoryId}>Rate category</Label>
+						<Select
+							items={RATE_CATEGORY_LABELS}
+							value={values.rateCategory}
+							onValueChange={(value) =>
+								update("rateCategory", value as Customer["rateCategory"])
+							}
+							disabled={pending}
+						>
+							<SelectTrigger id={rateCategoryId} name="rateCategory">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectGroup>
+									<SelectItem value="standard">
+										{RATE_CATEGORY_LABELS.standard}
+									</SelectItem>
+									<SelectItem value="agricultural">
+										{RATE_CATEGORY_LABELS.agricultural}
+									</SelectItem>
+								</SelectGroup>
+							</SelectContent>
+						</Select>
+					</div>
+
+					{/* Only the agricultural rate has a renewal to notice, so the field
+					    appears with the rate rather than sitting greyed out beside it. */}
+					{isAgricultural ? (
+						<div className="flex flex-col gap-1.5">
+							<Label htmlFor={agRenewalDateId}>AG renewal date</Label>
+							<Input
+								id={agRenewalDateId}
+								name="agRenewalDate"
+								type="date"
+								value={values.agRenewalDate}
+								onChange={(event) =>
+									update("agRenewalDate", event.target.value)
+								}
+								disabled={pending}
+								required
+							/>
+						</div>
+					) : null}
 				</div>
-			</div>
 
-			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={addressId}>Address</Label>
-				<Input
-					id={addressId}
-					name="address"
-					value={values.address}
-					onChange={(event) => update("address", event.target.value)}
-					placeholder="Optional"
-					autoComplete="off"
-					disabled={pending}
-				/>
-			</div>
-
-			<div className="grid gap-4 sm:grid-cols-2">
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={rateCategoryId}>Rate category</Label>
+					<Label htmlFor={statusId}>Status</Label>
 					<Select
-						items={RATE_CATEGORY_LABELS}
-						value={values.rateCategory}
+						items={STATUS_LABELS}
+						value={values.status}
 						onValueChange={(value) =>
-							update("rateCategory", value as Customer["rateCategory"])
+							update("status", value as Customer["status"])
 						}
 						disabled={pending}
 					>
-						<SelectTrigger id={rateCategoryId} name="rateCategory">
+						<SelectTrigger id={statusId} name="status">
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
 							<SelectGroup>
-								<SelectItem value="standard">
-									{RATE_CATEGORY_LABELS.standard}
-								</SelectItem>
-								<SelectItem value="agricultural">
-									{RATE_CATEGORY_LABELS.agricultural}
+								<SelectItem value="active">{STATUS_LABELS.active}</SelectItem>
+								<SelectItem value="suspended">
+									{STATUS_LABELS.suspended}
 								</SelectItem>
 							</SelectGroup>
 						</SelectContent>
 					</Select>
 				</div>
 
-				{/* Only the agricultural rate has a renewal to notice, so the field
-				    appears with the rate rather than sitting greyed out beside it. */}
-				{isAgricultural ? (
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={agRenewalDateId}>AG renewal date</Label>
-						<Input
-							id={agRenewalDateId}
-							name="agRenewalDate"
-							type="date"
-							value={values.agRenewalDate}
-							onChange={(event) => update("agRenewalDate", event.target.value)}
-							disabled={pending}
-							required
+				{/* Suspension is the one field here with a consequence outside this
+				    form, so it says so at the moment it is chosen — not after saving. */}
+				{values.status === "suspended" ? (
+					<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[13px] text-warning">
+						<TriangleAlert
+							className="mt-px size-4 shrink-0"
+							aria-hidden="true"
 						/>
-					</div>
+						{SUSPENSION_WARNING}
+					</p>
 				) : null}
-			</div>
 
-			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={statusId}>Status</Label>
-				<Select
-					items={STATUS_LABELS}
-					value={values.status}
-					onValueChange={(value) =>
-						update("status", value as Customer["status"])
-					}
-					disabled={pending}
-				>
-					<SelectTrigger id={statusId} name="status">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectGroup>
-							<SelectItem value="active">{STATUS_LABELS.active}</SelectItem>
-							<SelectItem value="suspended">
-								{STATUS_LABELS.suspended}
-							</SelectItem>
-						</SelectGroup>
-					</SelectContent>
-				</Select>
-			</div>
-
-			{/* Suspension is the one field here with a consequence outside this
-			    form, so it says so at the moment it is chosen — not after saving. */}
-			{values.status === "suspended" ? (
-				<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[13px] text-warning">
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{SUSPENSION_WARNING}
-				</p>
-			) : null}
-
-			{errorMessage ? (
-				<p
-					role="alert"
-					className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-				>
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{errorMessage}
-				</p>
-			) : null}
-
+				{errorMessage ? (
+					<p
+						role="alert"
+						className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
+					>
+						<TriangleAlert
+							className="mt-px size-4 shrink-0"
+							aria-hidden="true"
+						/>
+						{errorMessage}
+					</p>
+				) : null}
+			</DialogBody>
 			<DialogFooter>
 				<Button
 					type="button"

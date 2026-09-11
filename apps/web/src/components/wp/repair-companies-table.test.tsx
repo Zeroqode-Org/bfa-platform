@@ -235,6 +235,101 @@ describe("RepairCompaniesTable", () => {
 		});
 	});
 
+	it("bounds the add repair company dialog and scrolls its fields, not itself", async () => {
+		// The form is taller than a short laptop screen, and the dialog is
+		// vertically centred: without a height bound its footer sat below the
+		// bottom of the window, so Cancel and Add company could not be clicked at
+		// all. The classes below are the fix, and they only work together — the
+		// popup is capped and clips, and a single region inside it scrolls.
+		//
+		// jsdom lays nothing out, so this asserts the contract rather than the
+		// pixels; the rendered result is checked by hand in a short viewport.
+		renderTable();
+
+		fireEvent.click(
+			await screen.findByRole("button", { name: /add repair company/i }),
+		);
+
+		await screen.findByLabelText("Company name");
+
+		const dialog = await screen.findByRole("dialog");
+
+		// `svh`, not `vh`: on a phone `vh` measures the viewport as though the
+		// browser chrome were not there, which is how a dialog "inside the
+		// viewport" still ends up under the address bar.
+		expect(dialog.className).toContain("max-h-[calc(100svh-2rem)]");
+		// The popup clips. Were it to scroll as well, the footer would ride down
+		// with the fields and be back off the screen.
+		expect(dialog.className).toContain("overflow-hidden");
+		expect(dialog.className).not.toContain("overflow-y-auto");
+
+		const body = dialog.querySelector('[data-slot="dialog-body"]');
+		const header = dialog.querySelector('[data-slot="dialog-header"]');
+		const footer = dialog.querySelector('[data-slot="dialog-footer"]');
+
+		expect(body).not.toBeNull();
+		// `min-h-0` is the whole trick: a flex child will not shrink below its
+		// content without it, so the fields would push the footer out however the
+		// popup were capped.
+		expect(body?.className).toContain("min-h-0");
+		expect(body?.className).toContain("overflow-y-auto");
+		expect(header?.className).toContain("shrink-0");
+		expect(footer?.className).toContain("shrink-0");
+
+		// The footer is inside the popup but outside the region that moves.
+		expect(body?.contains(footer)).toBe(false);
+	});
+
+	it("keeps every control of the add repair company dialog inside the dialog element", async () => {
+		// Reachability is what the height bound is for. Base UI traps focus in the
+		// popup, so a control that is not a descendant of it is a control Tab can
+		// never get to — which is what the clipped footer amounted to.
+		renderTable();
+
+		fireEvent.click(
+			await screen.findByRole("button", { name: /add repair company/i }),
+		);
+
+		await screen.findByLabelText("Company name");
+
+		const dialog = await screen.findByRole("dialog");
+
+		for (const name of ["Cancel", "Add company", "Close"]) {
+			expect(dialog.contains(screen.getByRole("button", { name }))).toBe(true);
+		}
+
+		expect(dialog.textContent).toContain("Add repair company");
+	});
+
+	it("gives the edit repair company dialog the same pinned structure", async () => {
+		// Add and edit share one dialog and one form, so the bound has to hold for
+		// the record that is longer — an existing row arrives with every optional
+		// field filled in.
+		renderTable();
+
+		fireEvent.click(
+			(await screen.findAllByRole("button", { name: "Edit" }))[0],
+		);
+
+		const dialog = await screen.findByRole("dialog");
+
+		expect(dialog.className).toContain("max-h-[calc(100svh-2rem)]");
+		expect(dialog.className).toContain("overflow-hidden");
+
+		const body = dialog.querySelector('[data-slot="dialog-body"]');
+		const footer = dialog.querySelector('[data-slot="dialog-footer"]');
+
+		expect(body?.className).toContain("min-h-0");
+		expect(body?.className).toContain("overflow-y-auto");
+		expect(body?.contains(footer)).toBe(false);
+
+		for (const name of ["Cancel", "Save changes", "Close"]) {
+			expect(dialog.contains(screen.getByRole("button", { name }))).toBe(true);
+		}
+
+		expect(dialog.textContent).toContain("Edit repair company");
+	});
+
 	it("creates a company without naming a tenant", async () => {
 		renderTable();
 

@@ -382,6 +382,36 @@ describe("SubmittedTestsTable — the list", () => {
 });
 
 describe("SubmittedTestsTable — the document view", () => {
+	it("pins the document's title and close button while the record scrolls", async () => {
+		// The record is longer than a screen. It is bounded to the viewport so it
+		// cannot run off the bottom, and only the body inside it moves — a popup
+		// that scrolled as a whole would carry the title and the close button away
+		// with it, which on a short viewport leaves nothing to shut it with but
+		// the Escape key.
+		//
+		// jsdom lays nothing out, so this asserts the contract rather than the
+		// pixels.
+		await openDocument();
+
+		const dialog = await screen.findByRole("dialog");
+
+		expect(dialog.className).toContain("max-h-[calc(100svh-2rem)]");
+		expect(dialog.className).toContain("overflow-hidden");
+
+		const body = dialog.querySelector('[data-slot="dialog-body"]');
+		const header = dialog.querySelector('[data-slot="dialog-header"]');
+		const close = screen.getByRole("button", { name: "Close" });
+
+		expect(body?.className).toContain("min-h-0");
+		expect(body?.className).toContain("overflow-y-auto");
+		expect(header?.className).toContain("shrink-0");
+
+		// Both sit in the popup but outside the region that moves.
+		expect(body?.contains(header)).toBe(false);
+		expect(body?.contains(close)).toBe(false);
+		expect(dialog.contains(close)).toBe(true);
+	});
+
 	it("opens the stored record rather than the list row", async () => {
 		const dialog = await openDocument();
 

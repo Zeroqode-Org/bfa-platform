@@ -283,6 +283,74 @@ describe("AssetsTable", () => {
 		);
 	});
 
+	it("bounds the add dialog to the viewport and scrolls its fields, not itself", async () => {
+		// The form is taller than a short laptop screen, and the dialog is
+		// vertically centred: without a height bound its footer sat below the
+		// bottom of the window, so Cancel and Add asset could not be clicked at
+		// all. The three classes below are the fix, and they only work together —
+		// the popup is capped and clips, and a single region inside it scrolls.
+		//
+		// jsdom lays nothing out, so this asserts the contract rather than the
+		// pixels; the rendered result is checked by hand in a short viewport.
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(screen.getByRole("button", { name: /Add asset/ }));
+
+		const dialog = await screen.findByRole("dialog");
+
+		// `svh`, not `vh`: on a phone `vh` measures the viewport as though the
+		// browser chrome were not there, which is how a dialog "inside the
+		// viewport" still ends up under the address bar.
+		expect(dialog.className).toContain("max-h-[calc(100svh-2rem)]");
+		// The popup clips. Were it to scroll as well, the footer would ride down
+		// with the fields and be back off the screen.
+		expect(dialog.className).toContain("overflow-hidden");
+		expect(dialog.className).not.toContain("overflow-y-auto");
+
+		const body = dialog.querySelector('[data-slot="dialog-body"]');
+		const footer = dialog.querySelector('[data-slot="dialog-footer"]');
+		const header = dialog.querySelector('[data-slot="dialog-header"]');
+
+		expect(body).not.toBeNull();
+		// `min-h-0` is the whole trick: a flex child will not shrink below its
+		// content without it, so the fields would push the footer out however the
+		// popup were capped.
+		expect(body?.className).toContain("min-h-0");
+		expect(body?.className).toContain("overflow-y-auto");
+		expect(header?.className).toContain("shrink-0");
+		expect(footer?.className).toContain("shrink-0");
+
+		// The footer is inside the popup but outside the scrolling region.
+		expect(body?.contains(footer)).toBe(false);
+	});
+
+	it("keeps every control of the add dialog inside the dialog element", async () => {
+		// Reachability is what the height bound is for. Base UI traps focus in the
+		// popup, so a control that is not a descendant of it is a control Tab can
+		// never get to — which is what the clipped footer amounted to.
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(screen.getByRole("button", { name: /Add asset/ }));
+
+		const dialog = await screen.findByRole("dialog");
+
+		expect(await screen.findByLabelText("Customer")).toBeTruthy();
+
+		for (const name of ["Cancel", "Add asset", "Close"] as const) {
+			const control = screen.getByRole("button", { name });
+			expect(dialog.contains(control)).toBe(true);
+		}
+
+		// The title and description are inside it too, so the dialog keeps its
+		// accessible name and description while the body scrolls.
+		expect(dialog.textContent).toContain("Add asset");
+		expect(dialog.textContent).toContain(
+			"Registering an assembly here needs no certifier submission.",
+		);
+	});
+
 	it("fetches the customer list only once the add dialog is opened", async () => {
 		listCustomersFn.mockResolvedValue([
 			{ id: "customer-a", name: "Marta Ellison", status: "active" },
