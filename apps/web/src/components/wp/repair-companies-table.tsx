@@ -328,7 +328,10 @@ export function RepairCompaniesTable() {
 			</div>
 
 			<Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
-				<DialogContent className="max-w-[520px]">
+				{/* overflow-hidden: the form inside pins its own footer and scrolls
+				    its fields, so the popup must clip rather than scroll — two scroll
+				    containers would put the footer back out of reach. */}
+				<DialogContent className="max-w-[520px] overflow-hidden">
 					<DialogHeader>
 						<DialogTitle>
 							{isEditing ? "Edit repair company" : "Add repair company"}

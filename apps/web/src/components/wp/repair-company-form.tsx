@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@bfa-platform/ui/components/button";
-import { DialogFooter } from "@bfa-platform/ui/components/dialog";
+import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
@@ -123,99 +123,114 @@ export function RepairCompanyForm({
 	}
 
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={companyNameId}>Company name</Label>
-				<Input
-					id={companyNameId}
-					name="companyName"
-					value={values.companyName}
-					onChange={(event) => update("companyName", event.target.value)}
-					placeholder="Ridgeline Backflow Repair"
-					autoComplete="off"
-					disabled={pending}
-					required
-				/>
-			</div>
-
-			<div className="grid gap-4 sm:grid-cols-2">
+		<form
+			onSubmit={handleSubmit}
+			// A column that takes exactly the height its dialog hands it. Only
+			// `DialogBody` scrolls, so the footer stays on screen on a short
+			// viewport instead of being pushed off the bottom of it.
+			className="flex min-h-0 flex-1 flex-col gap-4"
+		>
+			<DialogBody>
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={phoneId}>Phone</Label>
+					<Label htmlFor={companyNameId}>Company name</Label>
 					<Input
-						id={phoneId}
-						name="phone"
-						type="tel"
-						value={values.phone}
-						onChange={(event) => update("phone", event.target.value)}
-						placeholder="Optional"
+						id={companyNameId}
+						name="companyName"
+						value={values.companyName}
+						onChange={(event) => update("companyName", event.target.value)}
+						placeholder="Ridgeline Backflow Repair"
 						autoComplete="off"
 						disabled={pending}
+						required
 					/>
 				</div>
 
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={emailId}>Email</Label>
-					<Input
-						id={emailId}
-						name="email"
-						type="email"
-						value={values.email}
-						onChange={(event) => update("email", event.target.value)}
-						placeholder="Optional"
-						autoComplete="off"
-						disabled={pending}
-					/>
+				<div className="grid gap-4 sm:grid-cols-2">
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={phoneId}>Phone</Label>
+						<Input
+							id={phoneId}
+							name="phone"
+							type="tel"
+							value={values.phone}
+							onChange={(event) => update("phone", event.target.value)}
+							placeholder="Optional"
+							autoComplete="off"
+							disabled={pending}
+						/>
+					</div>
+
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={emailId}>Email</Label>
+						<Input
+							id={emailId}
+							name="email"
+							type="email"
+							value={values.email}
+							onChange={(event) => update("email", event.target.value)}
+							placeholder="Optional"
+							autoComplete="off"
+							disabled={pending}
+						/>
+					</div>
 				</div>
-			</div>
 
-			{/* Neither contact field is required on its own, but a company the
-			    customer cannot reach is not much use in a failure notice. */}
-			<p className="text-[12px] text-muted-foreground">
-				Phone and email are optional — whichever you fill in is what the failure
-				notice shows.
-			</p>
-
-			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={statusId}>Status</Label>
-				<Select
-					items={STATUS_LABELS}
-					value={values.status}
-					onValueChange={(value) =>
-						update("status", value as RepairCompany["status"])
-					}
-					disabled={pending}
-				>
-					<SelectTrigger id={statusId} name="status">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectGroup>
-							<SelectItem value="active">{STATUS_LABELS.active}</SelectItem>
-							<SelectItem value="inactive">{STATUS_LABELS.inactive}</SelectItem>
-						</SelectGroup>
-					</SelectContent>
-				</Select>
-			</div>
-
-			{/* Status is the one field here with a consequence outside this form, so
-			    it says so at the moment it is chosen — not after saving. */}
-			{values.status === "inactive" ? (
-				<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[13px] text-warning">
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{DEACTIVATION_WARNING}
+				{/* Neither contact field is required on its own, but a company the
+				    customer cannot reach is not much use in a failure notice. */}
+				<p className="text-[12px] text-muted-foreground">
+					Phone and email are optional — whichever you fill in is what the
+					failure notice shows.
 				</p>
-			) : null}
 
-			{errorMessage ? (
-				<p
-					role="alert"
-					className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-				>
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{errorMessage}
-				</p>
-			) : null}
+				<div className="flex flex-col gap-1.5">
+					<Label htmlFor={statusId}>Status</Label>
+					<Select
+						items={STATUS_LABELS}
+						value={values.status}
+						onValueChange={(value) =>
+							update("status", value as RepairCompany["status"])
+						}
+						disabled={pending}
+					>
+						<SelectTrigger id={statusId} name="status">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectGroup>
+								<SelectItem value="active">{STATUS_LABELS.active}</SelectItem>
+								<SelectItem value="inactive">
+									{STATUS_LABELS.inactive}
+								</SelectItem>
+							</SelectGroup>
+						</SelectContent>
+					</Select>
+				</div>
 
+				{/* Status is the one field here with a consequence outside this form, so
+				    it says so at the moment it is chosen — not after saving. */}
+				{values.status === "inactive" ? (
+					<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[13px] text-warning">
+						<TriangleAlert
+							className="mt-px size-4 shrink-0"
+							aria-hidden="true"
+						/>
+						{DEACTIVATION_WARNING}
+					</p>
+				) : null}
+
+				{errorMessage ? (
+					<p
+						role="alert"
+						className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
+					>
+						<TriangleAlert
+							className="mt-px size-4 shrink-0"
+							aria-hidden="true"
+						/>
+						{errorMessage}
+					</p>
+				) : null}
+			</DialogBody>
 			<DialogFooter>
 				<Button
 					type="button"

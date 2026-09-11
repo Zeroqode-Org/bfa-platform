@@ -2,7 +2,7 @@
 
 import { ASSET_FIELD_LIMITS } from "@bfa-platform/api/lib/asset-field-limits";
 import { Button } from "@bfa-platform/ui/components/button";
-import { DialogFooter } from "@bfa-platform/ui/components/dialog";
+import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
@@ -255,259 +255,276 @@ export function AssetForm({
 	);
 
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-			<div className="grid gap-4 sm:grid-cols-2">
+		<form
+			onSubmit={handleSubmit}
+			// A column that takes exactly the height its dialog hands it. Only
+			// `DialogBody` scrolls, so the footer stays on screen on a short
+			// viewport instead of being pushed off the bottom of it.
+			className="flex min-h-0 flex-1 flex-col gap-4"
+			noValidate
+		>
+			<DialogBody>
+				<div className="grid gap-4 sm:grid-cols-2">
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={binId}>BIN</Label>
+						<Input
+							id={binId}
+							name="bin"
+							value={values.bin}
+							onChange={(event) => update("bin", event.target.value)}
+							placeholder="BIN-10041"
+							autoComplete="off"
+							maxLength={ASSET_FIELD_LIMITS.bin}
+							disabled={pending}
+							required
+							aria-invalid={binTaken ? true : undefined}
+							aria-describedby={binTaken ? binMessageId : undefined}
+						/>
+						{binTaken ? (
+							<p
+								id={binMessageId}
+								role="alert"
+								className="flex items-start gap-1.5 text-[12px] text-danger"
+							>
+								<TriangleAlert
+									className="mt-px size-3.5 shrink-0"
+									aria-hidden="true"
+								/>
+								{binTaken}
+							</p>
+						) : null}
+					</div>
+
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={bfaTypeId}>BFA type</Label>
+						<Select
+							items={BFA_TYPE_LABELS}
+							value={values.bfaType}
+							onValueChange={(value) =>
+								update("bfaType", value as AssetPayload["bfaType"])
+							}
+							disabled={pending}
+						>
+							<SelectTrigger id={bfaTypeId} name="bfaType">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectGroup>
+									{Object.entries(BFA_TYPE_LABELS).map(([value, label]) => (
+										<SelectItem key={value} value={value}>
+											{label}
+										</SelectItem>
+									))}
+								</SelectGroup>
+							</SelectContent>
+						</Select>
+					</div>
+				</div>
+
+				{binChanged ? (
+					<p
+						role="status"
+						className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[13px] text-warning"
+					>
+						<TriangleAlert
+							className="mt-px size-4 shrink-0"
+							aria-hidden="true"
+						/>
+						Changing a BIN is recorded: this save is logged with{" "}
+						<strong className="font-semibold">{initialValues.bin}</strong> and
+						the new value. Every test, notice and prefill for this assembly is
+						keyed on it.
+					</p>
+				) : null}
+
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={binId}>BIN</Label>
+					<Label htmlFor={serviceAddressId}>Service address</Label>
 					<Input
-						id={binId}
-						name="bin"
-						value={values.bin}
-						onChange={(event) => update("bin", event.target.value)}
-						placeholder="BIN-10041"
+						id={serviceAddressId}
+						name="serviceAddress"
+						value={values.serviceAddress}
+						onChange={(event) => update("serviceAddress", event.target.value)}
+						placeholder="18 Canal Road"
 						autoComplete="off"
-						maxLength={ASSET_FIELD_LIMITS.bin}
+						maxLength={ASSET_FIELD_LIMITS.serviceAddress}
 						disabled={pending}
 						required
-						aria-invalid={binTaken ? true : undefined}
-						aria-describedby={binTaken ? binMessageId : undefined}
 					/>
-					{binTaken ? (
-						<p
-							id={binMessageId}
-							role="alert"
-							className="flex items-start gap-1.5 text-[12px] text-danger"
+				</div>
+
+				<div className="flex flex-col gap-1.5">
+					<Label htmlFor={assemblyLocationId}>Assembly location</Label>
+					<Input
+						id={assemblyLocationId}
+						name="assemblyLocation"
+						value={values.assemblyLocation}
+						onChange={(event) => update("assemblyLocation", event.target.value)}
+						placeholder="Optional — where on the property the assembly sits"
+						autoComplete="off"
+						maxLength={ASSET_FIELD_LIMITS.assemblyLocation}
+						disabled={pending}
+					/>
+				</div>
+
+				<div className="grid gap-4 sm:grid-cols-2">
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={makeId}>Make</Label>
+						<Input
+							id={makeId}
+							name="make"
+							value={values.make}
+							onChange={(event) => update("make", event.target.value)}
+							placeholder="Optional"
+							autoComplete="off"
+							maxLength={ASSET_FIELD_LIMITS.make}
+							disabled={pending}
+						/>
+					</div>
+
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={modelId}>Model</Label>
+						<Input
+							id={modelId}
+							name="model"
+							value={values.model}
+							onChange={(event) => update("model", event.target.value)}
+							placeholder="Optional"
+							autoComplete="off"
+							maxLength={ASSET_FIELD_LIMITS.model}
+							disabled={pending}
+						/>
+					</div>
+
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={serialNumberId}>Serial number</Label>
+						<Input
+							id={serialNumberId}
+							name="serialNumber"
+							value={values.serialNumber}
+							onChange={(event) => update("serialNumber", event.target.value)}
+							placeholder="Optional"
+							autoComplete="off"
+							maxLength={ASSET_FIELD_LIMITS.serialNumber}
+							disabled={pending}
+						/>
+					</div>
+
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={sizeId}>Size</Label>
+						<Input
+							id={sizeId}
+							name="size"
+							value={values.size}
+							onChange={(event) => update("size", event.target.value)}
+							placeholder="Optional"
+							autoComplete="off"
+							maxLength={ASSET_FIELD_LIMITS.size}
+							disabled={pending}
+						/>
+					</div>
+				</div>
+
+				<div className="flex flex-col gap-1.5">
+					<Label htmlFor={annualTestDateId}>Annual test date</Label>
+					<Input
+						id={annualTestDateId}
+						name="annualTestDate"
+						type="date"
+						value={values.annualTestDate}
+						onChange={(event) => update("annualTestDate", event.target.value)}
+						disabled={pending}
+						required
+						aria-describedby={annualTestDateHintId}
+					/>
+					{/* The date is not a note on the record — it is what the reminder
+					    schedule is built from, so the form says so where it is entered. */}
+					<p
+						id={annualTestDateHintId}
+						className="text-[12px] text-muted-foreground"
+					>
+						Required. The reminder goes out about two months before this date,
+						with the late notices following from it.
+					</p>
+				</div>
+
+				{/* Add form only. Registering an asset and knowing who occupies it are
+				    usually the same moment, and making that a second trip to the asset's
+				    own page would leave new assets with nowhere to send their email. */}
+				{customerOptions ? (
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor={currentCustomerId}>Customer</Label>
+						<Select
+							items={{
+								[NO_CUSTOMER]: "No customer yet",
+								...Object.fromEntries(
+									customerOptions.map((customer) => [
+										customer.id,
+										customer.name,
+									]),
+								),
+							}}
+							value={values.currentCustomerId ?? NO_CUSTOMER}
+							onValueChange={(value) =>
+								update("currentCustomerId", (value as string) || null)
+							}
+							disabled={pending || customersPending}
 						>
-							<TriangleAlert
-								className="mt-px size-3.5 shrink-0"
-								aria-hidden="true"
-							/>
-							{binTaken}
-						</p>
-					) : null}
-				</div>
+							<SelectTrigger id={currentCustomerId} name="currentCustomerId">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectGroup>
+									<SelectItem value={NO_CUSTOMER}>No customer yet</SelectItem>
+									{customerOptions.map((customer) => (
+										<SelectItem key={customer.id} value={customer.id}>
+											{customer.name}
+											{customer.status === "suspended" ? " — suspended" : ""}
+										</SelectItem>
+									))}
+								</SelectGroup>
+							</SelectContent>
+						</Select>
 
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={bfaTypeId}>BFA type</Label>
-					<Select
-						items={BFA_TYPE_LABELS}
-						value={values.bfaType}
-						onValueChange={(value) =>
-							update("bfaType", value as AssetPayload["bfaType"])
-						}
-						disabled={pending}
+						{/* Choosing a suspended customer means the asset starts with its
+						    email already paused. Said here, before saving, rather than
+						    discovered later as a notice that never went out. */}
+						{chosenCustomer?.status === "suspended" ? (
+							<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[12px] text-warning">
+								<TriangleAlert
+									className="mt-px size-3.5 shrink-0"
+									aria-hidden="true"
+								/>
+								{chosenCustomer.name} is suspended, so this asset&rsquo;s
+								automated email starts out paused.
+							</p>
+						) : customerOptions.length === 0 && !customersPending ? (
+							<p className="text-[12px] text-muted-foreground">
+								No customers yet. Register the asset anyway and attach one later
+								from its own page.
+							</p>
+						) : (
+							<p className="text-[12px] text-muted-foreground">
+								Optional. Leave it empty and attach one later from the
+								asset&rsquo;s own page — either way the assignment is recorded
+								with its start date.
+							</p>
+						)}
+					</div>
+				) : null}
+
+				{errorMessage ? (
+					<p
+						role="alert"
+						className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
 					>
-						<SelectTrigger id={bfaTypeId} name="bfaType">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectGroup>
-								{Object.entries(BFA_TYPE_LABELS).map(([value, label]) => (
-									<SelectItem key={value} value={value}>
-										{label}
-									</SelectItem>
-								))}
-							</SelectGroup>
-						</SelectContent>
-					</Select>
-				</div>
-			</div>
-
-			{binChanged ? (
-				<p
-					role="status"
-					className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[13px] text-warning"
-				>
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					Changing a BIN is recorded: this save is logged with{" "}
-					<strong className="font-semibold">{initialValues.bin}</strong> and the
-					new value. Every test, notice and prefill for this assembly is keyed
-					on it.
-				</p>
-			) : null}
-
-			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={serviceAddressId}>Service address</Label>
-				<Input
-					id={serviceAddressId}
-					name="serviceAddress"
-					value={values.serviceAddress}
-					onChange={(event) => update("serviceAddress", event.target.value)}
-					placeholder="18 Canal Road"
-					autoComplete="off"
-					maxLength={ASSET_FIELD_LIMITS.serviceAddress}
-					disabled={pending}
-					required
-				/>
-			</div>
-
-			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={assemblyLocationId}>Assembly location</Label>
-				<Input
-					id={assemblyLocationId}
-					name="assemblyLocation"
-					value={values.assemblyLocation}
-					onChange={(event) => update("assemblyLocation", event.target.value)}
-					placeholder="Optional — where on the property the assembly sits"
-					autoComplete="off"
-					maxLength={ASSET_FIELD_LIMITS.assemblyLocation}
-					disabled={pending}
-				/>
-			</div>
-
-			<div className="grid gap-4 sm:grid-cols-2">
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={makeId}>Make</Label>
-					<Input
-						id={makeId}
-						name="make"
-						value={values.make}
-						onChange={(event) => update("make", event.target.value)}
-						placeholder="Optional"
-						autoComplete="off"
-						maxLength={ASSET_FIELD_LIMITS.make}
-						disabled={pending}
-					/>
-				</div>
-
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={modelId}>Model</Label>
-					<Input
-						id={modelId}
-						name="model"
-						value={values.model}
-						onChange={(event) => update("model", event.target.value)}
-						placeholder="Optional"
-						autoComplete="off"
-						maxLength={ASSET_FIELD_LIMITS.model}
-						disabled={pending}
-					/>
-				</div>
-
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={serialNumberId}>Serial number</Label>
-					<Input
-						id={serialNumberId}
-						name="serialNumber"
-						value={values.serialNumber}
-						onChange={(event) => update("serialNumber", event.target.value)}
-						placeholder="Optional"
-						autoComplete="off"
-						maxLength={ASSET_FIELD_LIMITS.serialNumber}
-						disabled={pending}
-					/>
-				</div>
-
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={sizeId}>Size</Label>
-					<Input
-						id={sizeId}
-						name="size"
-						value={values.size}
-						onChange={(event) => update("size", event.target.value)}
-						placeholder="Optional"
-						autoComplete="off"
-						maxLength={ASSET_FIELD_LIMITS.size}
-						disabled={pending}
-					/>
-				</div>
-			</div>
-
-			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={annualTestDateId}>Annual test date</Label>
-				<Input
-					id={annualTestDateId}
-					name="annualTestDate"
-					type="date"
-					value={values.annualTestDate}
-					onChange={(event) => update("annualTestDate", event.target.value)}
-					disabled={pending}
-					required
-					aria-describedby={annualTestDateHintId}
-				/>
-				{/* The date is not a note on the record — it is what the reminder
-				    schedule is built from, so the form says so where it is entered. */}
-				<p
-					id={annualTestDateHintId}
-					className="text-[12px] text-muted-foreground"
-				>
-					Required. The reminder goes out about two months before this date,
-					with the late notices following from it.
-				</p>
-			</div>
-
-			{/* Add form only. Registering an asset and knowing who occupies it are
-			    usually the same moment, and making that a second trip to the asset's
-			    own page would leave new assets with nowhere to send their email. */}
-			{customerOptions ? (
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={currentCustomerId}>Customer</Label>
-					<Select
-						items={{
-							[NO_CUSTOMER]: "No customer yet",
-							...Object.fromEntries(
-								customerOptions.map((customer) => [customer.id, customer.name]),
-							),
-						}}
-						value={values.currentCustomerId ?? NO_CUSTOMER}
-						onValueChange={(value) =>
-							update("currentCustomerId", (value as string) || null)
-						}
-						disabled={pending || customersPending}
-					>
-						<SelectTrigger id={currentCustomerId} name="currentCustomerId">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectGroup>
-								<SelectItem value={NO_CUSTOMER}>No customer yet</SelectItem>
-								{customerOptions.map((customer) => (
-									<SelectItem key={customer.id} value={customer.id}>
-										{customer.name}
-										{customer.status === "suspended" ? " — suspended" : ""}
-									</SelectItem>
-								))}
-							</SelectGroup>
-						</SelectContent>
-					</Select>
-
-					{/* Choosing a suspended customer means the asset starts with its
-					    email already paused. Said here, before saving, rather than
-					    discovered later as a notice that never went out. */}
-					{chosenCustomer?.status === "suspended" ? (
-						<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[12px] text-warning">
-							<TriangleAlert
-								className="mt-px size-3.5 shrink-0"
-								aria-hidden="true"
-							/>
-							{chosenCustomer.name} is suspended, so this asset&rsquo;s
-							automated email starts out paused.
-						</p>
-					) : customerOptions.length === 0 && !customersPending ? (
-						<p className="text-[12px] text-muted-foreground">
-							No customers yet. Register the asset anyway and attach one later
-							from its own page.
-						</p>
-					) : (
-						<p className="text-[12px] text-muted-foreground">
-							Optional. Leave it empty and attach one later from the
-							asset&rsquo;s own page — either way the assignment is recorded
-							with its start date.
-						</p>
-					)}
-				</div>
-			) : null}
-
-			{errorMessage ? (
-				<p
-					role="alert"
-					className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-				>
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{errorMessage}
-				</p>
-			) : null}
-
+						<TriangleAlert
+							className="mt-px size-4 shrink-0"
+							aria-hidden="true"
+						/>
+						{errorMessage}
+					</p>
+				) : null}
+			</DialogBody>
 			<DialogFooter>
 				<Button
 					type="button"

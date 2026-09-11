@@ -189,7 +189,9 @@ function LoadedAsset({
 			<AssignmentHistory assignments={assignments} />
 
 			<Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-				<DialogContent className="max-w-[560px]">
+				{/* overflow-hidden: `EditAssetForm` pins its own footer and scrolls
+				    its fields, so the popup clips instead of scrolling too. */}
+				<DialogContent className="max-w-[560px] overflow-hidden">
 					<DialogHeader>
 						<DialogTitle>Edit asset</DialogTitle>
 						<DialogDescription>
