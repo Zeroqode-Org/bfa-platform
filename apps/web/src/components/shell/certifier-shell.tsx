@@ -1,9 +1,12 @@
 import { LogOut } from "lucide-react";
 
+import type { Account } from "@/lib/auth";
+
 import { BottomTabBar } from "./bottom-tab-bar";
 import { LogoutButton } from "./logout-button";
 import { PageTransition } from "./page-transition";
 import { SidebarNav } from "./sidebar-nav";
+import { SidebarUser } from "./sidebar-user";
 import { WpSwitcher } from "./wp-switcher";
 
 /**
@@ -12,11 +15,19 @@ import { WpSwitcher } from "./wp-switcher";
  * - >= 780px: the same 216px sidebar as WP/Admin (Log out in its footer) plus a
  *   header row carrying the active-WP switcher.
  * Both nav surfaces are always in the DOM; only their visibility flips, so
- * there is no JS layout swap and no hydration mismatch. The content region is
+ * there is no JS layout swap and no hydration mismatch. The sidebar footer
+ * names the signed-in certifier — the header's switcher says which purveyor
+ * they are working for, which is a different question. The content region is
  * full-width like the WP/Admin shell — a form page caps its own width (480px
  * centered per the design system); tables use the full width.
  */
-export function CertifierShell({ children }: { children: React.ReactNode }) {
+export function CertifierShell({
+	account,
+	children,
+}: {
+	account: Account;
+	children: React.ReactNode;
+}) {
 	const logOut = (
 		<LogoutButton className="shrink-0 font-medium text-[13px] text-muted-foreground transition-colors hover:text-foreground">
 			Log out
@@ -36,10 +47,13 @@ export function CertifierShell({ children }: { children: React.ReactNode }) {
 				variant="certifier"
 				className="hidden min-[780px]:flex"
 				footer={
-					<LogoutButton className="flex w-full items-center gap-2.5 rounded-[5px] border-l-[3px] border-l-transparent py-2.5 pr-2 pl-3 font-medium text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-						<LogOut className="size-[18px] shrink-0" strokeWidth={1.75} />
-						Log out
-					</LogoutButton>
+					<>
+						<SidebarUser account={account} />
+						<LogoutButton className="flex w-full items-center gap-2.5 rounded-[5px] border-l-[3px] border-l-transparent py-2.5 pr-2 pl-3 font-medium text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+							<LogOut className="size-[18px] shrink-0" strokeWidth={1.75} />
+							Log out
+						</LogoutButton>
+					</>
 				}
 			/>
 

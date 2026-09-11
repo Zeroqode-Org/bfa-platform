@@ -1,6 +1,8 @@
 import type { Route } from "next";
 
 import { LoginForm } from "@/components/auth/login-form";
+import { SignInNotice } from "@/components/auth/sign-in-notice";
+import { SIGN_IN_NOTICE_PARAM, signInNoticeFor } from "@/lib/sign-in-notice";
 
 /**
  * Sign-in screen. Deliberately minimal: no sign-up and no password reset —
@@ -11,14 +13,25 @@ import { LoginForm } from "@/components/auth/login-form";
  * It is validated here rather than in the client component, so a crafted link
  * cannot turn the sign-in screen into an open redirect. Without it people land
  * on `/`, which forwards them by role.
+ *
+ * `?notice=` is how a route gate explains itself. Signing in with a blocked
+ * account succeeds at the Auth server and then fails at the profile gate, which
+ * used to send people back here to a form that looked like it had simply
+ * cleared itself. The gate now names the reason and this screen renders it.
  */
 export default async function LoginPage({
 	searchParams,
 }: {
-	searchParams: Promise<{ redirect?: string | string[] }>;
+	searchParams: Promise<{
+		redirect?: string | string[];
+		[SIGN_IN_NOTICE_PARAM]?: string | string[];
+	}>;
 }) {
-	const { redirect } = await searchParams;
-	const requested = Array.isArray(redirect) ? redirect[0] : redirect;
+	const params = await searchParams;
+	const requested = Array.isArray(params.redirect)
+		? params.redirect[0]
+		: params.redirect;
+	const notice = signInNoticeFor(params[SIGN_IN_NOTICE_PARAM]);
 
 	return (
 		<main className="flex min-h-svh items-center justify-center bg-background px-4 py-12">
@@ -51,6 +64,8 @@ export default async function LoginPage({
 					<p className="mt-1.5 text-[13px] text-muted-foreground">
 						Use the email and password for your account.
 					</p>
+
+					{notice ? <SignInNotice notice={notice} /> : null}
 
 					<LoginForm redirectTo={safeRedirect(requested)} />
 				</div>

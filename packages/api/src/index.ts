@@ -1,9 +1,24 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 
+import { refusalErrorData } from "./caller-refusal";
 import type { Caller, Context } from "./context";
 import { resolveCaller } from "./context";
 
-export const t = initTRPC.context<Context>().create();
+/**
+ * A refused caller carries its reason onto the wire.
+ *
+ * Without this the browser sees a `FORBIDDEN` and a sentence. It cannot tell a
+ * blocked account — which should take the person to the sign-in screen with an
+ * explanation — from an ordinary permission error, which should not. The
+ * message is copy and will be rewritten; the value will not.
+ */
+export const t = initTRPC.context<Context>().create({
+	errorFormatter({ shape, error }) {
+		const refusal = refusalErrorData(error);
+
+		return refusal ? { ...shape, data: { ...shape.data, ...refusal } } : shape;
+	},
+});
 
 export const router = t.router;
 export const middleware = t.middleware;

@@ -539,6 +539,65 @@ describeDb("WP certifier procedures", () => {
 			).resolves.toMatchObject({ globalRole: "certifier" });
 		});
 
+		it("denies the very next request on a session that was already working", async () => {
+			// The sequence the product cares about, in order and on one caller: the
+			// certifier is signed in and working, a purveyor blocks them mid-session,
+			// and the next protected call is refused. Nothing revokes the Supabase
+			// session — blocking writes `certifiers.status` and touches nothing in
+			// `auth.users` — so the only reason this fails is that every request
+			// re-resolves the profile instead of trusting what it resolved before.
+			//
+			// A single `session` object rather than a fresh caller per step: a new
+			// caller each time would prove the lookup works, not that a *held*
+			// session stops working.
+			const session = callerFor(ids.certifierAProfile);
+
+			await expect(session.whoami()).resolves.toMatchObject({
+				globalRole: "certifier",
+			});
+
+			await callerFor(ids.adminA).certifiers.setCertifierStatus({
+				id: certifierA,
+				status: "blocked",
+			});
+
+			const refused = await session.whoami().catch((error: unknown) => error);
+
+			const { callerRefusal } = await import("../context");
+			expect(callerRefusal(refused)).toBe("blocked");
+
+			// And it stays refused rather than being a one-off.
+			await expect(session.whoami()).rejects.toThrow(/account blocked/i);
+		});
+
+		it("carries the reason as a value, so the sign-in screen can explain it", async () => {
+			// The refusal has to survive the trip through tRPC as something the
+			// route gate can branch on. Matching on the message would put the
+			// sign-in screen's behaviour at the mercy of a copy edit — and the
+			// screen has two refusals to tell apart, because a blocked account and
+			// an unfinished one need different advice.
+			const { callerRefusal } = await import("../context");
+
+			await callerFor(ids.adminA).certifiers.setCertifierStatus({
+				id: certifierA,
+				status: "blocked",
+			});
+
+			const blocked = await callerFor(ids.certifierAProfile)
+				.whoami()
+				.catch((error: unknown) => error);
+
+			expect(callerRefusal(blocked)).toBe("blocked");
+
+			// An account with credentials but no profile is the other one, and it
+			// must not be reported as a block.
+			const stranger = await callerFor(randomUUID())
+				.whoami()
+				.catch((error: unknown) => error);
+
+			expect(callerRefusal(stranger)).toBe("no_profile");
+		});
+
 		it("does not block anybody else", async () => {
 			// The certifier check is keyed on the caller's own profile. A blocked
 			// row belonging to somebody else must never reach this decision.

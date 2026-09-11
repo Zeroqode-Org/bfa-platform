@@ -11,6 +11,17 @@ import { TRPCError } from "@trpc/server";
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import { eq } from "drizzle-orm";
 
+import { CallerRefusedError } from "./caller-refusal";
+
+// Re-exported so the refusal vocabulary stays reachable from the module that
+// produces it, while the definitions live somewhere a route gate can import
+// without pulling in a database handle.
+export {
+	type CallerRefusal,
+	CallerRefusedError,
+	callerRefusal,
+} from "./caller-refusal";
+
 /**
  * Per-request tRPC context. Builds a cookie-backed Supabase client from the raw
  * request and validates the session against the Auth server (`getUser`, not
@@ -55,6 +66,7 @@ export type Context = Awaited<ReturnType<typeof createContext>>;
 
 export type Caller = {
 	profileId: string;
+	fullName: string | null;
 	globalRole: (typeof profiles.$inferSelect)["globalRole"];
 	waterPurveyorId: string | null;
 };
@@ -89,6 +101,7 @@ export async function resolveCaller(
 	const [row] = await db
 		.select({
 			id: profiles.id,
+			fullName: profiles.fullName,
 			globalRole: profiles.globalRole,
 			waterPurveyorId: profiles.waterPurveyorId,
 			status: profiles.status,
@@ -100,23 +113,21 @@ export async function resolveCaller(
 		.limit(1);
 
 	if (!row) {
-		throw new TRPCError({
-			code: "FORBIDDEN",
-			message: "No profile for this account",
-		});
+		throw new CallerRefusedError("no_profile", "No profile for this account");
 	}
 
-	// One message for both switches. Which flag is set is the purveyor's or the
+	// One refusal for both switches. Which flag is set is the purveyor's or the
 	// Super-Admin's business, not something to be read off a sign-in screen.
 	if (
 		row.status === "blocked" ||
 		(row.globalRole === "certifier" && row.certifierStatus === "blocked")
 	) {
-		throw new TRPCError({ code: "FORBIDDEN", message: "Account blocked" });
+		throw new CallerRefusedError("blocked", "Account blocked");
 	}
 
 	return {
 		profileId: row.id,
+		fullName: row.fullName,
 		globalRole: row.globalRole,
 		waterPurveyorId: row.waterPurveyorId,
 	};

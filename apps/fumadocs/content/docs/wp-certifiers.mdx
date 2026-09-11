@@ -272,7 +272,7 @@ connection:
 
 - **`resolveCaller`** (`packages/api/src/context.ts`) refuses a certifier whose
   `certifiers.status` is `blocked`, exactly as it already refuses any profile
-  whose `profiles.status` is `blocked` — same `FORBIDDEN`, same message. Every
+  whose `profiles.status` is `blocked` — same `FORBIDDEN`, same refusal. Every
   protected procedure and every server-rendered route goes through it, including
   `/` and the certifier shell's layout, so a blocked certifier who signs in is
   bounced straight back to `/login`.
@@ -283,10 +283,93 @@ connection:
   certifier keeps only the `id = auth.uid()` paths, which is precisely what a
   blocked *profile* already gets.
 
-The certifier route group's layout was changed from `requireUser` to
-`requireCaller` for this. A valid session is not enough to be inside that shell;
-without the change a blocked certifier would land on their dashboard and watch
-every query behind it fail.
+### Where the gate has to sit
+
+An open session is not closed when a purveyor blocks somebody, and it does not
+need to be — but the *next* protected thing they do has to be refused. There are
+three ways to reach one, and they do not share a gate:
+
+| Path | What runs on the server | Gate |
+|---|---|---|
+| Full load, or a refresh | The group's `layout.tsx` **and** the page | Both |
+| Client-side navigation (`<Link>`) | **Only the changed page** | The page |
+| A tRPC query or mutation | `protectedProcedure` → `resolveCaller` | The procedure |
+
+The middle row is the one worth stating plainly, because the obvious place to
+put the gate is wrong. A layout renders once and is then reused: on a
+client-side navigation Next re-renders only the changed segment on the server,
+so a `requireAccount()` in `layout.tsx` never runs again for the rest of the
+session. `template.tsx` behaves the same way. This was verified against a
+running dev server with a probe layout, a probe template and two probe pages —
+a `<Link>` navigation logged the page and neither of the other two — rather
+than inferred from the docs.
+
+So every page under a signed-in route group calls the gate itself, and
+`apps/web/src/app/protected-pages.test.ts` asserts it over the file tree rather
+than over the pages that exist today: the failure mode is a *new* page added
+without one, which is silent.
+
+The layouts keep their gate too. It is not redundant — it is the only one that
+runs before the shell is drawn, so a blocked person never sees a sidebar at all.
+
+### A refused request in an open screen
+
+The gates cover arriving somewhere. The other half is a certifier already
+sitting on a screen when the block lands: their next query or mutation comes
+back `FORBIDDEN`, and a toast reading "Account blocked" on a page that still
+looks signed in explains nothing.
+
+The API's error formatter puts the refusal on the wire as
+`data.refusal`, and the React Query cache in `apps/web/src/utils/trpc.ts` turns
+that into a full navigation to the same `/login?notice=…`. Two details matter:
+
+- It branches on `data.refusal`, **not** on the `FORBIDDEN` code. Every ordinary
+  role check raises `FORBIDDEN` too — a WP Employee pressing Block, a certifier
+  reaching a WP list — and throwing those callers out to a sign-in screen would
+  be worse than the toast they get now. A test pins that down.
+- A full navigation rather than the router: it runs the server gate, discards a
+  React Query cache holding data the person may no longer be entitled to, and
+  clears the router cache that would otherwise keep serving already-rendered
+  segments. Several refusals arriving in one batch start one navigation, not
+  several.
+
+Nothing here revokes the Supabase session itself. The session stays valid and
+useless — every gate and every procedure re-resolves the profile on each
+request, which is what makes the block take effect without any realtime
+signalling.
+
+### The sign-in screen says so
+
+Being bounced is not the same as being told. Blocking writes `certifiers.status`
+and nothing in `auth.users`, so a blocked certifier's password is still correct:
+they sign in successfully, the profile gate refuses, and they arrive back at a
+sign-in form that appears to have cleared itself. That reads as a typo, and the
+obvious response is to retype a password that was right the first time.
+
+So the refusal carries a reason. `resolveCaller` throws a `CallerRefusedError`
+whose `refusal` is `blocked` or `no_profile`
+(`packages/api/src/caller-refusal.ts` — its own module precisely so a route gate
+can read the vocabulary without pulling in a database handle). `requireAccount`
+turns that into `/login?notice=…`, and the sign-in screen renders fixed copy for
+it:
+
+| Refusal | The screen says |
+|---|---|
+| `blocked` | The password is correct and the account has been switched off; a water purveyor you work with, or the platform administrator, can lift it |
+| `no_profile` | Sign-in works but the setup never completed — ask for a new invitation link |
+
+Two things the copy deliberately does **not** do. It does not name *which*
+purveyor blocked them — a certifier can be authorized by several, and naming the
+one that acted would disclose a tenant relationship — and it does not say which
+of the two switches was thrown, since `profiles.status` is the platform
+administrator's and `certifiers.status` is a purveyor's. "Whoever you work with"
+covers both without disclosing either.
+
+An unrecognised value in the query string renders no banner at all, and nothing
+from the URL is ever displayed: the value only selects between the fixed copy
+above. The branch is on the refusal value rather than the message, because the
+wording is copy and matching on it would move the screen's behaviour the day
+somebody edits a sentence.
 
 Their data is untouched. Submitted tests stay submitted, drafts stay drafts, and
 unblocking from the same button gives the access back — which is why unblocking
@@ -415,6 +498,9 @@ and the line says which one did it.
 | Suite | Runs | Covers |
 |---|---|---|
 | `apps/web/src/components/wp/certifiers-table.test.tsx` | `npm test` | Loading, error and retry, empty and populated states; the block confirmation; the immediate unblock; per-row pending state; the absence of delete and edit controls |
+| `apps/web/src/lib/auth.test.ts`, `apps/web/src/lib/sign-in-notice.test.ts`, `apps/web/src/components/auth/sign-in-notice.test.tsx` | `npm test` | The blocked-sign-in explanation: the gate naming the reason, the copy for each refusal, and that it discloses neither the purveyor nor the switch |
+| `apps/web/src/app/protected-pages.test.ts` | `npm test` | That every page behind a sign-in resolves the caller itself, so a client-side navigation cannot slip past a layout that already ran |
+| `packages/api/src/caller-refusal.test.ts` | `npm test` | The refusal on the wire, and that an ordinary `FORBIDDEN` is not mistaken for one |
 | `apps/web/src/components/wp/invite-certifier-dialog.test.tsx` | `npm test` | The exact mutation payload — `{ email, role }` and no tenant field; validation; the in-flight, success and refusal states; that the toast does not claim an email was sent |
 | `packages/api/src/routers/certifiers.test.ts` | `npm run test:db` | Who may call each procedure, cross-tenant list and mutation isolation, the shared-certifier case, strict status-only input, the no-op request, the audit line, and a blocked certifier's own access |
 | `packages/db/src/certifiers-rls.test.ts` | `npm run test:db` | The row policies as the `authenticated` role: read isolation through the join, the Employee read/write split, the full three-actor column model from `0007`, and a blocked certifier resolving to no role at all |
