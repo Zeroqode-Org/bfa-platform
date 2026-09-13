@@ -5,14 +5,16 @@
  * provider SDK, and it never writes its own send log. Both live here so that
  * swapping the driver is a change to this file and to no calling site.
  *
- * Two drivers are planned. `consoleDriver` writes the whole payload — invite
- * link included — to a structured JSON log line and reports success, which is
- * what makes every mail path testable before a domain, a DNS record or an API
- * key exists. `providerDriver` lands with the transactional-email work item and
- * implements the same {@link EmailDriver} interface against a real provider; it
- * is registered in {@link drivers} and selected by `EMAIL_DRIVER`. No feature
- * code changes when it does.
+ * Two drivers exist. `consoleDriver` writes the whole payload — invite link
+ * included — to a structured JSON log line and reports success, which is what
+ * makes every mail path testable without a provider account. `providerDriver`
+ * delivers through Resend. Both implement the same {@link EmailDriver}
+ * interface, are registered in {@link drivers}, and are selected by
+ * `EMAIL_DRIVER`; `console` is the default, so real delivery happens only where
+ * `EMAIL_DRIVER=provider` is set.
  */
+
+import { Resend } from "resend";
 
 /** Provider-agnostic label attached to a send, for filtering delivery logs. */
 export type EmailTag = { name: string; value: string };
@@ -58,8 +60,9 @@ export type EmailContext = {
  * rendered HTML, which is where the invite link is — as one JSON line, then
  * reports success.
  *
- * The HTML is logged in full and on purpose: with no provider wired up, this
- * output is the only copy of the link a developer or a tester can follow.
+ * The HTML is logged in full and on purpose: wherever the provider is not
+ * switched on, this output is the only copy of the link a developer or a tester
+ * can follow.
  */
 export const consoleDriver: EmailDriver = {
 	name: "console",
@@ -84,26 +87,84 @@ export const consoleDriver: EmailDriver = {
 };
 
 /**
- * Driver registry. Adding the provider is one entry here plus its module — the
- * selector, the logging and every call site stay as they are.
+ * Provider driver — delivers through Resend.
+ *
+ * Resend reports API failures as an `error` value rather than by throwing, so
+ * both that and a response without an id are turned into thrown errors here:
+ * {@link sendEmail} only logs a failure it can catch, and a caller must never be
+ * handed a success for a message nobody accepted.
+ *
+ * The validated server env is loaded here, on first send, rather than at the top
+ * of the module: importing it validates every server variable, and this module
+ * must stay importable by unit suites that have none. Loading it fails a
+ * misconfigured `EMAIL_DRIVER=provider` before any request is made. The
+ * credentials are checked once more because `SKIP_ENV_VALIDATION` turns that
+ * validation off, and a missing key should fail as a clear message rather than
+ * as a request.
+ *
+ * `replyTo` is provider configuration, not part of {@link EmailMessage}: every
+ * transactional email routes replies to the same mailbox, so no call site
+ * chooses it.
+ */
+export const providerDriver: EmailDriver = {
+	name: "provider",
+	async send(message) {
+		const { env } = await import("@bfa-platform/env/server");
+		const apiKey = env.RESEND_API_KEY;
+		const from = env.RESEND_FROM_EMAIL;
+		const replyTo = env.RESEND_REPLY_TO;
+
+		if (!apiKey || !from || !replyTo) {
+			throw new Error(
+				"EMAIL_DRIVER=provider requires RESEND_API_KEY, RESEND_FROM_EMAIL and RESEND_REPLY_TO to be set.",
+			);
+		}
+
+		const { data, error } = await new Resend(apiKey).emails.send({
+			from,
+			replyTo,
+			to: message.to,
+			subject: message.subject,
+			html: message.html,
+			tags: message.tags,
+		});
+
+		if (error) {
+			const status = error.statusCode ? ` ${error.statusCode}` : "";
+			throw new Error(
+				`Resend refused the send (${error.name}${status}): ${error.message}`,
+			);
+		}
+
+		if (typeof data?.id !== "string" || data.id.length === 0) {
+			throw new Error("Resend accepted the send but returned no email id.");
+		}
+
+		return { id: data.id, driver: "provider" };
+	},
+};
+
+/**
+ * Driver registry. The selector, the logging and every call site read from
+ * here, so a driver is one entry plus its implementation.
  */
 const drivers: Partial<Record<EmailDriverName, EmailDriver>> = {
 	console: consoleDriver,
+	provider: providerDriver,
 };
 
 /**
  * Selects the driver from `EMAIL_DRIVER`, defaulting to the console driver.
  *
- * Read straight off `process.env` rather than through the validated env schema:
- * the variable is optional and has a safe default until the provider exists,
- * and adding it to validation would make every environment — including CI —
- * declare a value for a switch with one position. It moves into
- * `packages/env/src/server.ts` alongside the provider's API key.
+ * Read off `process.env` so that selecting the default console driver never
+ * loads the server env. The variable is still declared and validated in
+ * `packages/env/src/server.ts`, which the app loads at startup; an empty value
+ * counts as unset there, and does here.
  */
 export function resolveEmailDriver(
 	name: string | undefined = process.env.EMAIL_DRIVER,
 ): EmailDriver {
-	const requested = (name ?? "console") as EmailDriverName;
+	const requested = (name || "console") as EmailDriverName;
 	const driver = drivers[requested];
 
 	if (!driver) {

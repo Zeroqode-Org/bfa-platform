@@ -1,6 +1,6 @@
 ---
 title: Invitations and Onboarding
-description: How accounts are created on the platform — invite tokens, RLS policies, redemption, and the console email driver
+description: How accounts are created on the platform — invite tokens, RLS policies, redemption, and the email layer
 ---
 
 There is no sign-up form. Every account on this platform exists because somebody
@@ -9,8 +9,8 @@ role and the water purveyor are decided by the inviter, server-side, before the
 invitee ever types anything.
 
 This page describes the flow as built. It covers *Invitations and onboarding* in
-the [build plan](/docs/build-plan) and step 1 of *Transactional email
-integration*.
+the [build plan](/docs/build-plan) and the send helper and drivers of
+*Transactional email integration*.
 
 ## The flow end to end
 
@@ -20,9 +20,9 @@ integration*.
    own profile — never from the request body.
 2. A 256-bit secret is generated. Its SHA-256 digest is stored in
    `invitations.token`; the secret itself only ever appears in the email.
-3. The email goes out through the shared send helper. With no provider
-   configured, the console driver prints the whole message — invite link
-   included — as one JSON log line.
+3. The email goes out through the shared send helper. Under the default
+   console driver it prints the whole message — invite link included — as one
+   JSON log line; with `EMAIL_DRIVER=provider` it is delivered through Resend.
 4. The invitee opens `/invite/<secret>`. The page resolves the token
    server-side and renders the right form for the invitation.
 5. Submitting the form runs the `redeemInvitation` server action: it creates the
@@ -125,9 +125,11 @@ Three layers keep this to the Super-Admin, and they are independent:
    the two do not agree: a name is present exactly on a `wp_admin` invitation
    with no purveyor, and absent on every other kind.
 
-Until the email provider lands, the confirmation says what actually happened —
-the invitation exists and its link is in the server log. It does not say an
-email was sent, because none was.
+The confirmation reports the actual user-facing delivery outcome without
+exposing a driver name: after Resend accepts a message it says an invitation
+email was sent; under the console driver it says email delivery is not enabled
+and the invite link is in the server log. The response exposes only `sent` or
+`logged`, never the server configuration or credentials.
 
 ### Tokens
 
@@ -156,13 +158,16 @@ type EmailMessage = { to: string; subject: string; html: string; tags: EmailTag[
 type EmailDriver = { name: EmailDriverName; send(message: EmailMessage): Promise<EmailSendResult> };
 ```
 
-**`consoleDriver`** — the only driver registered today. It logs the complete
-payload, including the rendered HTML, and reports success. The HTML is logged in
-full deliberately: with no provider wired up, that log line is the only copy of
-the invite link a developer or tester has.
+Two drivers are registered, and `EMAIL_DRIVER` picks one. Nothing else in the
+application knows which is running.
+
+**`consoleDriver`** — the default. It logs the complete payload, including the
+rendered HTML, and reports success. The HTML is logged in full deliberately:
+wherever the provider is not switched on, that log line is the only copy of the
+invite link a developer or tester has.
 
 ```json
-{"event":"email_console_delivery","driver":"console","email_id":"console_…","to":"certifier@example.com","subject":"You have been invited to the Backflow Assembly platform","tags":[{"name":"type","value":"invitation"}],"html":"…<a href=\"http://localhost:3001/invite/HqA…\">Set up your account</a>…","timestamp":"2026-09-09T09:35:45.931Z"}
+{"event":"email_console_delivery","driver":"console","email_id":"console_…","to":"certifier@example.com","subject":"You have been invited to the Backflow Assembly platform","tags":[{"name":"type","value":"invitation"}],"html":"<!DOCTYPE html>…<a href=\"http://localhost:3001/invite/HqA…\" style=\"…\">Set up your account</a>…","timestamp":"2026-09-09T09:35:45.931Z"}
 ```
 
 **Every send attempt** also emits one `email_send_attempted` line, whichever
@@ -173,24 +178,126 @@ recipient, a timestamp, and whichever context identifiers the caller knew:
 {"event":"email_send_attempted","email_event":"invitation_created","driver":"console","status":"sent","email_id":"console_…","error":null,"recipient":"certifier@example.com","subject":"…","actor_id":"…","recipient_id":null,"wp_id":"…","asset_id":null,"invitation_id":"…","timestamp":"…"}
 ```
 
-**`providerDriver`** is not built yet — the domain, DNS records and API key do
-not exist. The architecture for it does: adding the provider is one entry in the
-`drivers` registry in `email.ts` plus its module. The selector, the logging and
-every call site stay exactly as they are, which is what the build plan means by
-"no code edit outside `email.ts`".
+**`providerDriver`** — delivers through [Resend](https://resend.com), using the
+official `resend` SDK from inside `email.ts` and nowhere else. The account
+exists and the sender domain `backflowreporter.io` is verified. Each send maps
+the message straight across:
+
+| Resend field | Comes from |
+|---|---|
+| `from` | `RESEND_FROM_EMAIL` |
+| `replyTo` | `RESEND_REPLY_TO` |
+| `to`, `subject`, `html`, `tags` | the `EmailMessage` fields of the same name |
+
+**Reply-To.** Every message sent through Resend carries `Reply-To:` set to
+`RESEND_REPLY_TO` — in production, `info@backflowreporter.io`. The sending
+address is not a mailbox anyone reads, so without it a recipient who answers an
+invitation or a notice would be writing to nobody. With it, the reply goes
+straight to the existing monitored inbox; the platform receives nothing.
+Resend inbound receiving and webhooks are **not** used. The address is provider
+configuration, not message data: `EmailMessage` has no reply field and no call
+site chooses one, so every transactional email replies to the same place.
+
+Resend's email id is returned as the send's `id`, so it is the `email_id` in the
+`email_send_attempted` line. The provider driver writes no payload log of its
+own — the message is in Resend, not in the server console.
+
+Resend reports a refused send as an error value rather than by throwing. The
+driver turns that, and a response with no id, into a thrown error, so
+`sendEmail` logs `status: "failed"` with the message and the caller's
+behaviour is unchanged: an invitation whose email was refused fails instead of
+reporting a success nobody received.
+
+Adding the provider changed no call site: it is one entry in the `drivers`
+registry in `email.ts`, which is what the build plan means by "no code edit
+outside `email.ts`".
 
 ### Configuration
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `EMAIL_DRIVER` | no | `console` | Which driver `sendEmail` uses |
+| `EMAIL_DRIVER` | no | `console` | Which driver `sendEmail` uses: `console` or `provider` |
+| `RESEND_API_KEY` | when `EMAIL_DRIVER=provider` | — | Resend API key (`re_…`). Server-only secret |
+| `RESEND_FROM_EMAIL` | when `EMAIL_DRIVER=provider` | — | Sender, as `address@domain` or `Display Name <address@domain>` on a verified domain |
+| `RESEND_REPLY_TO` | when `EMAIL_DRIVER=provider` | — | Plain email address replies are sent to — `info@backflowreporter.io` in production |
 | `APP_URL` / `NEXT_PUBLIC_APP_URL` | no | `http://localhost:3001` | Base URL for links in outbound mail |
 
-Neither is in `packages/env`'s validated schema yet, and that is deliberate:
-both are optional with safe defaults, and requiring every environment — CI
-included — to declare a switch with one position buys nothing. `EMAIL_DRIVER`
-moves into `packages/env/src/server.ts` alongside the provider's API key when
-the provider lands.
+The four email variables are validated in `packages/env/src/server.ts`.
+**Console remains the default**, and it needs neither Resend variable, so CI, a
+fresh clone and every environment that has not opted in keep working with none
+of them set. Real delivery happens **only** where `EMAIL_DRIVER=provider` is set
+explicitly.
+
+When it is, all three Resend variables become required: a missing key, a key
+without the `re_` prefix, a malformed sender, or a reply-to that is not a plain
+email address fails env validation at startup, before any request is made. The
+driver checks for all three again before building the client, so a run with
+`SKIP_ENV_VALIDATION` still fails with a clear message rather than a request.
+
+The Resend variables never take a `NEXT_PUBLIC_` prefix — they are read only by
+server code and must not reach a browser bundle. Locally they live in
+`apps/web/.env.local`; in a deployment they are set as environment variables.
+`EMAIL_DRIVER=provider` is not set in any deployment yet.
+
+### The shared email layout
+
+Every message the application sends is a complete HTML document rendered by
+`packages/api/src/lib/email-layout.ts`. Feature code builds a **safe body
+fragment**, the layout wraps it, and the finished string goes into
+`EmailMessage.html`. `email.ts` is untouched by any of this: it still delivers
+`{ to, subject, html, tags }` and does not know how the HTML was made, so the
+console driver logs, and Resend receives, exactly the same document.
+
+The shell is one layout for every message:
+
+| Part | What it is |
+|---|---|
+| Header | The wordmark **Backflow Assembly Platform**, as text |
+| Body | A white card, 600px wide at most and fluid below that, with a thin blue top bar; the message's `<h1>` when it has one, then the body fragment |
+| Footer | One line: *Sent through Backflow Assembly Platform.* |
+
+It is written for email clients rather than browsers:
+
+- **Table-based outer layout with inline styles** on every element that carries
+  a visual rule. A small `<style>` block adds narrow-screen padding and paragraph
+  spacing for clients that honour it; nothing depends on it. Outlook gets a
+  fixed 600px conditional table.
+- **Nothing remote.** No images, no web fonts, no stylesheets, no tracking pixels
+  and no rewritten links — a system font stack and literal design-system
+  colours. The layout adds no tracking of its own; open and click tracking must
+  also stay **off** in the Resend domain settings, which this code cannot see.
+- **Text-only branding, deliberately.** There is no logo in the message and none
+  was invented: the brand is the words "Backflow Assembly Platform" until the client
+  supplies a logo asset they own. Nothing in any message is carried by an image.
+- **Accessible.** `lang="en"`, the subject as the document title and the
+  message's accessible name, at most one `<h1>`, and a CTA whose link text says
+  what it does. The button fill is the primary hover shade `#11719E` rather than
+  `#1588C1`, because white on the brighter blue is roughly 3.9:1 and fails WCAG
+  AA for body-size text; `#11719E` is roughly 5.4:1. Footer and helper text use
+  a darkened secondary for the same reason.
+
+**Escaping.** `renderEmailLayout` escapes the title and heading itself and
+inserts `bodyHtml` as given, so a body fragment must already be safe — the
+output of `templateToHtml`, or markup built from `escapeHtml` and the layout's
+helpers. Link targets go through `emailHref`, which accepts only absolute
+`http:` / `https:` URLs and escapes them for the attribute; anything else throws
+before a send is attempted.
+
+**The invitation email** is `renderInvitationEmail` in
+`packages/api/src/lib/invitations.ts`, a pure function `sendInvitationEmail`
+calls before `sendEmail`:
+
+1. `<h1>` *You have been invited*.
+2. Who invited them into what, as which role — the purveyor name escaped.
+3. A button labelled **Set up your account**.
+4. The same invite URL as visible link text, under *If the button does not work,
+   copy and paste this link into your browser:*.
+5. The expiry, written for a reader in UTC — *June 8, 2026 at 3:30 PM UTC*.
+6. A muted line saying an unexpected invitation can be ignored.
+
+The subject is unchanged. Plain-text messages — general-info broadcasts now,
+automated notices once Workflow 1 sends them — use `renderTextEmail` instead;
+see [WP Notices & Email](/docs/wp-notices#the-email-shell).
 
 ## Row-level security
 
@@ -325,7 +432,7 @@ Every event below is one `console.log(JSON.stringify(…))` line.
 |---|---|---|
 | `invitation_created` | `createInvitation` | actor, invitation id, recipient, role, wp id, expiry |
 | `email_send_attempted` | `sendEmail` | event type, driver, status, recipient, actor / wp / asset / invitation ids |
-| `email_console_delivery` | `consoleDriver` | the full payload, including the invite link |
+| `email_console_delivery` | `consoleDriver` only | the full payload, including the invite link |
 | `invitation_redeemed` | `redeemInvitation` | actor, invitation id, mode, role, wp id |
 | `invitation_redemption_failed` | `redeemInvitation` | invitation id, mode, reason |
 | `invitation_redemption_cleanup_failed` | `redeemInvitation` | the orphaned auth user id, if its deletion failed too |
@@ -340,8 +447,9 @@ npm run dev:web
 
 Sign in as a seeded WP Admin, call `invitations.createInvitation`, and take the
 `html` field out of the `email_console_delivery` line in the server console. The
-`/invite/<secret>` URL in it is a working link. Nothing about this changes when
-the provider lands — the same call, the same log line, a real message as well.
+`/invite/<secret>` URL in it is a working link. Leave `EMAIL_DRIVER` unset for
+this: local development uses the console driver even when Resend credentials
+are present in `.env.local`, so nothing is emailed by accident.
 
 ## Tests
 
@@ -373,8 +481,10 @@ every statement it makes, so nothing it does survives itself.
 | `packages/db/src/rls.test.ts` | yes | the policies as the `authenticated` role, with `request.jwt.claims` set — cross-tenant reads and writes on both tables, certifier exclusion, blocked profiles, the column-grant limit on `profiles` |
 | `packages/api/src/routers/invitations.test.ts` | yes | `createInvitation` end to end — Zod validation, role permissions, the stored digest, the printed link |
 | `packages/api/src/lib/invitation-redemption.test.ts` | yes | invalid / expired / redeemed tokens, successful redemption for each mode, the existing-certifier second-WP path, rollback, and two concurrent redemptions |
-| `packages/api/src/lib/email.test.ts` | no | the console driver's payload and the send-attempt log line |
-| `packages/api/src/lib/invitations.test.ts` | no | the tenant-authorization matrix and the invitation state machine |
+| `packages/api/src/lib/email.test.ts` | no | the console driver's payload; the provider driver against a mocked Resend — payload mapping, returned id, refused sends and missing ids thrown, missing credentials refused before a request; driver selection; the send-attempt log line for sent and failed attempts |
+| `packages/env/src/server.test.ts` | no | email env validation — `console` default with no credentials, and `provider` refused without, or with malformed, Resend variables |
+| `packages/api/src/lib/email-layout.test.ts` | no | the shared email shell — header, body and footer, one `<h1>`, no remote resources or tracking, escaped title and heading, the CTA and its visible fallback URL, refused non-http(s) links |
+| `packages/api/src/lib/invitations.test.ts` | no | the tenant-authorization matrix, the invitation state machine, and the invite email — sent inside the shared layout, heading → CTA → fallback URL → expiry in order, a readable UTC expiry, and escaped purveyor names and links |
 | `packages/api/src/lib/invitation-token.test.ts` | no | digest, entropy, uniqueness, link shape |
 | `apps/web/src/components/admin/invite-wp-dialog.test.tsx` | no | the invite-new-WP form — what it sends, its pending state, the honest success message, and a refused call leaving the dialog open |
 
@@ -384,7 +494,11 @@ would notice the policies break, so they need a test of their own.
 
 ## Not built here
 
-- **`providerDriver`.** Week 5, with the provider account and DNS.
+- **Live delivery.** `providerDriver` is built and unit-tested, but
+  `EMAIL_DRIVER=provider` is not enabled in any deployment and no live test send
+  has been made. That happens after review.
+- **A logo in email.** Branding is the text wordmark until the client supplies a
+  logo asset they own.
 - **A general invite UI.** The Super-Admin's invite-new-WP dialog is wired.
   There is still no screen for inviting a certifier or a colleague into an
   existing purveyor — `createInvitation` is the API for that, and its screen

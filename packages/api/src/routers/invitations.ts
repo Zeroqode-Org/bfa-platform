@@ -119,8 +119,10 @@ export const invitationsRouter = router({
 				}),
 			);
 
+			let emailDelivery: "sent" | "logged";
+
 			try {
-				await sendInvitationEmail({
+				const delivery = await sendInvitationEmail({
 					invitationId: invitation.id,
 					email: invitation.email,
 					role: invitation.role,
@@ -130,6 +132,10 @@ export const invitationsRouter = router({
 					associatedWpId: invitation.associatedWpId,
 					invitedByProfileId: ctx.caller.profileId,
 				});
+				// The browser needs the user-facing outcome, not the configured driver
+				// name. A provider accepted the message for delivery; console has the
+				// link only in its structured server log.
+				emailDelivery = delivery.driver === "provider" ? "sent" : "logged";
 			} catch (error) {
 				await db
 					.delete(invitations)
@@ -152,6 +158,7 @@ export const invitationsRouter = router({
 				expiresAt: invitation.expiresAt,
 				waterPurveyorId: invitation.associatedWpId,
 				proposedWaterPurveyorName: invitation.proposedWaterPurveyorName,
+				emailDelivery,
 			};
 		}),
 });

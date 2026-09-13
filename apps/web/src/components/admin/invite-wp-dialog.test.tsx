@@ -86,6 +86,7 @@ describe("InviteWpForm", () => {
 			expiresAt: new Date(),
 			waterPurveyorId: null,
 			proposedWaterPurveyorName: "Riverside Water District",
+			emailDelivery: "sent",
 		});
 
 		renderForm();
@@ -100,7 +101,7 @@ describe("InviteWpForm", () => {
 		});
 	});
 
-	it("closes and confirms that the link is in the server log, not in an email", async () => {
+	it("closes with confirmation that Resend accepted the invitation", async () => {
 		mutationFn.mockResolvedValue({
 			id: "invitation-1",
 			email: "admin@riversidewater.gov",
@@ -108,6 +109,7 @@ describe("InviteWpForm", () => {
 			expiresAt: new Date(),
 			waterPurveyorId: null,
 			proposedWaterPurveyorName: "Riverside Water District",
+			emailDelivery: "sent",
 		});
 
 		const { onClose } = renderForm();
@@ -119,14 +121,33 @@ describe("InviteWpForm", () => {
 			"Invitation created for admin@riversidewater.gov",
 			expect.objectContaining({
 				description: expect.stringContaining(
-					"invite link is in the server log",
+					"An invitation email has been sent.",
 				),
 			}),
 		);
-		// It must not claim an email went out — none did.
 		const description = String(toastSuccess.mock.calls[0]?.[1]?.description);
-		expect(description).not.toMatch(/email (has been |was )?sent/i);
+		expect(description).not.toContain("server log");
 		expect(description).toContain("Riverside Water District");
+	});
+
+	it("points to the server log when the console driver handled the invitation", async () => {
+		mutationFn.mockResolvedValue({
+			id: "invitation-1",
+			email: "admin@riversidewater.gov",
+			role: "wp_admin",
+			expiresAt: new Date(),
+			waterPurveyorId: null,
+			proposedWaterPurveyorName: "Riverside Water District",
+			emailDelivery: "logged",
+		});
+
+		renderForm();
+		fillAndSubmit();
+
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(String(toastSuccess.mock.calls[0]?.[1]?.description)).toContain(
+			"Email delivery is not enabled; the invite link is available in the server log.",
+		);
 	});
 
 	it("disables the controls and relabels the button while the request is in flight", async () => {
@@ -162,6 +183,7 @@ describe("InviteWpForm", () => {
 				expiresAt: new Date(),
 				waterPurveyorId: null,
 				proposedWaterPurveyorName: "Riverside Water District",
+				emailDelivery: "sent",
 			});
 		});
 	});

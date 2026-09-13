@@ -2,6 +2,12 @@ import type { globalRole, invitationRole } from "@bfa-platform/db/schema";
 import { TRPCError } from "@trpc/server";
 
 import { type EmailSendResult, sendEmail } from "./email";
+import {
+	escapeHtml,
+	renderCallToAction,
+	renderEmailLayout,
+	renderEmailParagraph,
+} from "./email-layout";
 import { buildInviteLink } from "./invitation-token";
 
 export type GlobalRole = (typeof globalRole.enumValues)[number];
@@ -222,34 +228,91 @@ export type InvitationEmailInput = {
 	invitedByProfileId: string;
 };
 
+export const INVITATION_EMAIL_SUBJECT =
+	"You have been invited to the Backflow Assembly platform";
+
+/**
+ * The expiry as a reader would say it, pinned to UTC so every recipient and
+ * every test sees the same instant written the same way.
+ */
+export function formatInvitationExpiry(expiresAt: Date): string {
+	const formatted = new Intl.DateTimeFormat("en-US", {
+		dateStyle: "long",
+		timeStyle: "short",
+		timeZone: "UTC",
+	}).format(expiresAt);
+
+	return `${formatted} UTC`;
+}
+
+/**
+ * The invite email as a finished document, inside the shared layout.
+ *
+ * Pure, so its markup can be tested without a send. Every dynamic value is
+ * escaped — the purveyor name was typed by a Super-Admin, and the link is
+ * validated as an absolute http(s) URL before it becomes an `href`. The link is
+ * the whole point of the message, so it appears as a button and again as
+ * visible text: the console driver logs this HTML verbatim, and a developer
+ * needs to be able to copy the URL out of that log line.
+ */
+export function renderInvitationEmail(input: {
+	inviteLink: string;
+	role: InvitationRole;
+	waterPurveyorName: string | null;
+	expiresAt: Date;
+}): { subject: string; html: string } {
+	const purveyor = input.waterPurveyorName
+		? `<strong>${escapeHtml(input.waterPurveyorName)}</strong>`
+		: "the Backflow Assembly platform";
+
+	const bodyHtml = [
+		renderEmailParagraph(
+			`You have been invited to join ${purveyor} as a ${escapeHtml(ROLE_LABELS[input.role])}.`,
+		),
+		renderCallToAction({
+			href: input.inviteLink,
+			label: "Set up your account",
+		}),
+		renderEmailParagraph(
+			`This invitation expires on ${escapeHtml(formatInvitationExpiry(input.expiresAt))}.`,
+		),
+		renderEmailParagraph(
+			"If you were not expecting this invitation, you can ignore this email.",
+			{ muted: true },
+		),
+	].join("\n");
+
+	return {
+		subject: INVITATION_EMAIL_SUBJECT,
+		html: renderEmailLayout({
+			title: INVITATION_EMAIL_SUBJECT,
+			heading: "You have been invited",
+			bodyHtml,
+		}),
+	};
+}
+
 /**
  * Renders and sends the invite email through the shared helper.
  *
  * Feature code calls this; it never builds a payload or logs a send of its own.
- * The link is the whole point of the message, so it appears both as an anchor
- * and as plain text — the console driver logs this HTML verbatim, and a
- * developer needs to be able to copy the URL out of that log line.
  */
 export async function sendInvitationEmail(
 	input: InvitationEmailInput,
 ): Promise<EmailSendResult & { inviteLink: string }> {
 	const inviteLink = buildInviteLink(input.secret);
-	const roleLabel = ROLE_LABELS[input.role];
-	const purveyor = input.waterPurveyorName
-		? `<strong>${escapeHtml(input.waterPurveyorName)}</strong>`
-		: "the Backflow Assembly platform";
+	const { subject, html } = renderInvitationEmail({
+		inviteLink,
+		role: input.role,
+		waterPurveyorName: input.waterPurveyorName,
+		expiresAt: input.expiresAt,
+	});
 
 	const result = await sendEmail(
 		{
 			to: input.email,
-			subject: "You have been invited to the Backflow Assembly platform",
-			html: [
-				"<h1>You have been invited</h1>",
-				`<p>You have been invited to join ${purveyor} as a ${escapeHtml(roleLabel)}.</p>`,
-				`<p><a href="${inviteLink}">Set up your account</a></p>`,
-				`<p>If the link does not open, paste this address into your browser:<br />${inviteLink}</p>`,
-				`<p>This invitation expires on ${input.expiresAt.toISOString()}.</p>`,
-			].join("\n"),
+			subject,
+			html,
 			tags: [
 				{ name: "type", value: "invitation" },
 				{ name: "role", value: input.role },
@@ -265,12 +328,4 @@ export async function sendInvitationEmail(
 	);
 
 	return { ...result, inviteLink };
-}
-
-function escapeHtml(value: string): string {
-	return value
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;");
 }

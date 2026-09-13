@@ -10,6 +10,7 @@ import { and, asc, eq, exists, sql } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
 import { sendEmail } from "../lib/email";
+import { renderTextEmail } from "../lib/email-layout";
 import {
 	NOTICE_TYPE_LABELS,
 	type NoticeType,
@@ -26,7 +27,6 @@ import {
 	type NoticeVariableValues,
 	renderTemplate,
 	sampleVariableValues,
-	templateToHtml,
 	variableKeys,
 } from "../lib/notice-variables";
 
@@ -329,7 +329,8 @@ export const noticesRouter = router({
 						{
 							to: recipient.email,
 							subject,
-							html: templateToHtml(body),
+							// Escaped by `templateToHtml`, then wrapped in the shared shell.
+							html: renderTextEmail({ subject, text: body }),
 							tags: [
 								{ name: "type", value: "general_info_broadcast" },
 								{ name: "recipient_filter", value: input.recipientFilter },

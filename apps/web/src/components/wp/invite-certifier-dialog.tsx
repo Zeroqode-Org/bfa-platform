@@ -75,13 +75,13 @@ export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
 	const createInvitation = useMutation(
 		trpc.invitations.createInvitation.mutationOptions({
 			onSuccess: (invitation) => {
-				// Say what actually happened. Until the provider lands the console
-				// driver is the only delivery there is, and telling a clerk an email
-				// went out would have them waiting for one that never arrives — and,
-				// worse, waiting instead of copying the link out of the log.
+				const deliveryMessage =
+					invitation.emailDelivery === "sent"
+						? "An invitation email has been sent."
+						: "Email delivery is not enabled; the invite link is available in the server log.";
+
 				toast.success(`Invitation created for ${invitation.email}`, {
-					description:
-						"They join your water purveyor when the link is redeemed. No email provider is configured yet — the invite link is in the server log.",
+					description: `They join your water purveyor when the link is redeemed. ${deliveryMessage}`,
 				});
 				setEmail("");
 				onClose();

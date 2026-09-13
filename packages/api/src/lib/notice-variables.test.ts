@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { renderTextEmail } from "./email-layout";
 import { NOTICE_TYPES, platformDefaultTemplate } from "./notice-defaults";
 import {
 	NOTICE_FIELD_LIMITS,
@@ -144,6 +145,63 @@ describe("templateToHtml", () => {
 
 	it("turns line breaks into paragraphs", () => {
 		expect(templateToHtml("one\ntwo")).toBe("<p>one</p>\n<p>two</p>");
+	});
+});
+
+describe("notice text inside the shared email layout", () => {
+	const hostileBody = [
+		"Hello {{customer_name}},",
+		'<script>alert("x")</script>',
+		'<img src="https://evil.example/pixel.gif" onerror="alert(1)">',
+		'<a href="https://evil.example">click</a> <b>bold</b> <style>body{}</style>',
+	].join("\n");
+
+	const html = renderTextEmail({
+		subject: "Notice for {{customer_name}}",
+		text: renderTemplate(
+			hostileBody,
+			{ customer_name: '<iframe src="https://evil.example"></iframe>' },
+			allKeys,
+		),
+	});
+
+	it("still escapes a script tag once wrapped", () => {
+		expect(html).not.toMatch(/<script\b/i);
+		expect(html).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
+	});
+
+	it("still escapes arbitrary tags, typed or substituted", () => {
+		expect(html).not.toMatch(/<img\b/i);
+		expect(html).not.toMatch(/<iframe\b/i);
+		expect(html).not.toMatch(/<b>/i);
+		expect(html).not.toContain('href="https://evil.example"');
+		expect(html).not.toContain('evil.example/pixel.gif"');
+		expect(html).toContain(
+			"&lt;img src=&quot;https://evil.example/pixel.gif&quot;",
+		);
+		expect(html).toContain(
+			"&lt;iframe src=&quot;https://evil.example&quot;&gt;",
+		);
+	});
+
+	it("carries the text through templateToHtml byte for byte", () => {
+		const rendered = renderTemplate("Line one\n\nLine three", sample, allKeys);
+
+		expect(renderTextEmail({ subject: "s", text: rendered })).toContain(
+			templateToHtml(rendered),
+		);
+	});
+
+	it("escapes the subject where it becomes the document title", () => {
+		const titled = renderTextEmail({
+			subject: "</title><script>alert(1)</script>",
+			text: "Body",
+		});
+
+		expect(titled).not.toMatch(/<script\b/i);
+		expect(titled).toContain(
+			"<title>&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;</title>",
+		);
 	});
 });
 

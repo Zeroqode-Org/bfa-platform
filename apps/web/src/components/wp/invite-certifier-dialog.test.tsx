@@ -51,6 +51,7 @@ const invitation = {
 	expiresAt: new Date(),
 	waterPurveyorId: "3d5f4a12-9b8c-4d0e-a1f2-3b4c5d6e7f80",
 	proposedWaterPurveyorName: null,
+	emailDelivery: "sent" as const,
 };
 
 function renderForm(onClose = vi.fn()) {
@@ -135,7 +136,7 @@ describe("InviteCertifierForm", () => {
 		expect(mutationFn).not.toHaveBeenCalled();
 	});
 
-	it("closes and confirms that the link is in the server log, not in an email", async () => {
+	it("closes and confirms that Resend accepted the invitation", async () => {
 		mutationFn.mockResolvedValue(invitation);
 
 		const { onClose } = renderForm();
@@ -147,13 +148,24 @@ describe("InviteCertifierForm", () => {
 			"Invitation created for tester@example.com",
 			expect.objectContaining({
 				description: expect.stringContaining(
-					"invite link is in the server log",
+					"An invitation email has been sent.",
 				),
 			}),
 		);
-		// It must not claim an email went out — none did.
 		const description = String(toastSuccess.mock.calls[0]?.[1]?.description);
-		expect(description).not.toMatch(/email (has been |was )?sent/i);
+		expect(description).not.toContain("server log");
+	});
+
+	it("points to the server log when the console driver handled the invitation", async () => {
+		mutationFn.mockResolvedValue({ ...invitation, emailDelivery: "logged" });
+
+		renderForm();
+		fillAndSubmit();
+
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(String(toastSuccess.mock.calls[0]?.[1]?.description)).toContain(
+			"Email delivery is not enabled; the invite link is available in the server log.",
+		);
 	});
 
 	it("says that an existing certifier keeps their profile", async () => {

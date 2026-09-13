@@ -102,7 +102,9 @@ placeholder means.
   conditionals — just named placeholders.
 - **Nothing is rendered as HTML.** `templateToHtml` escapes the whole rendered
   string and turns line breaks into paragraphs. Typed text and substituted
-  values are both escaped, so a `<` in a customer's name is a `<`.
+  values are both escaped, so a `<` in a customer's name is a `<`. The email
+  shell is added *around* that escaped fragment afterwards and never inside it —
+  see [The email shell](#the-email-shell).
 - **An unresolvable placeholder stays visible.** Unknown, not allowed here, or
   allowed with no value for this record — all three come back written exactly as
   they were. Blanking would let a typo vanish into a sentence that still reads.
@@ -285,19 +287,52 @@ One path, and the feature has no second one:
 
 ```
 sendGeneralInfoBroadcast
-  → renderTemplate (per recipient)
-  → templateToHtml (escapes)
+  → renderTemplate (per recipient; plain text)
+  → renderTextEmail (packages/api/src/lib/email-layout.ts)
+      → templateToHtml (escapes, line breaks → paragraphs)
+      → renderEmailLayout (wraps the fragment in the shared shell)
   → sendEmail (packages/api/src/lib/email.ts)
-  → the driver selected by EMAIL_DRIVER (console by default)
+  → the driver selected by EMAIL_DRIVER (console by default, Resend when provider)
 ```
 
 Every attempt emits `email_send_attempted` carrying the event, status, recipient,
 `actor_id` and `wp_id`. Each message is tagged `type=general_info_broadcast` and
-`recipient_filter=<filter>` so delivery logs can be filtered by campaign. When
-the provider driver lands with 6.14, nothing in this feature changes.
+`recipient_filter=<filter>` so delivery logs can be filtered by campaign.
+Switching `EMAIL_DRIVER` changes nothing in this feature.
 
 The four notice templates are **stored** here and not yet sent by anything —
 the reminder workflow that sends them is Workflow 1.
+
+### The email shell
+
+A broadcast is delivered inside the same layout as every other message the
+platform sends — the one described under
+[The shared email layout](/docs/invitations-onboarding#the-shared-email-layout):
+a **Backflow Assembly Platform** text wordmark header, the message in a white card, and a
+one-line footer. It is table-based with inline styles, loads nothing remote and
+carries no tracking.
+
+What the shell does **not** do matters as much:
+
+- **The body stays plain text.** The composer is a textarea, and what a WP Admin
+  types is substituted, escaped by `templateToHtml` and only then wrapped. The
+  layout inserts that fragment as-is and adds nothing inside it, so `<script>`,
+  `<img>`, a link or any other tag typed into a message arrives as visible text,
+  never as markup. There is no rich-text editor and no way to supply HTML.
+- **The words are not changed.** The subject becomes the document title and is
+  not repeated in the body, no greeting or sign-off is added, and paragraphs are
+  exactly the lines that were written.
+- **No logo.** Branding is text-only until the client supplies a logo asset they
+  own; nothing in a message is carried by an image.
+
+`renderTextEmail({ subject, text })` is the function to call, and it is already
+the path for **automated notices**: when Workflow 1 sends a notice template, its
+rendered text goes through the same call, so a notice and a broadcast share one
+shell and one escaping rule. That makes the templates *compatible* with the
+layout — it does not approve their words. The platform-default copy is still
+provisional, as the warning above says.
+
+The on-screen preview shows the substituted text, not the email shell.
 
 ## Audit logging
 
@@ -353,11 +388,12 @@ editor on narrow widths. Colours come from the tokens in
 
 | Suite | Runs | Covers |
 |---|---|---|
-| `packages/api/src/lib/notice-variables.test.ts` | `npm test` | Substitution, escaping, the placeholder rules and both Zod schemas — no database |
+| `packages/api/src/lib/notice-variables.test.ts` | `npm test` | Substitution, escaping, the placeholder rules and both Zod schemas; typed and substituted `<script>`, `<img>`, `<iframe>` and links staying escaped once wrapped in the email shell — no database |
+| `packages/api/src/lib/email-layout.test.ts` | `npm test` | The shared email shell — header, body, footer, no remote resources, escaped title, and `templateToHtml` output carried through unchanged |
 | `apps/web/src/components/wp/notice-templates-editor.test.tsx` | `npm test` | Four types from server data, edit and save, preview substitution, read-only role, absence of any toggle |
 | `apps/web/src/components/wp/general-info-broadcast.test.tsx` | `npm test` | Variable set, audience count, send payload, delivery failure, read-only role |
 | `apps/web/src/components/wp/notice-repair-companies.test.tsx` | `npm test` | The read-only list and the absence of management controls |
-| `packages/api/src/routers/notices.test.ts` | `npm run test:db` | Who may call what, the fallback, upsert create-then-update, the no-op save, tenant isolation, recipient filters, per-recipient rendering, partial failure, audit lines |
+| `packages/api/src/routers/notices.test.ts` | `npm run test:db` | Who may call what, the fallback, upsert create-then-update, the no-op save, tenant isolation, recipient filters, per-recipient rendering inside the email shell, partial failure, audit lines |
 | `packages/db/src/notice-templates-rls.test.ts` | `npm run test:db` | The row policies, as the `authenticated` role |
 
 ```bash
