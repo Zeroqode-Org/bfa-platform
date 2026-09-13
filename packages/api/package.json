@@ -21,6 +21,7 @@
 		"@trpc/server": "^11.18.0",
 		"dotenv": "^17.4.2",
 		"next": "^16.3.0",
+		"resend": "^6.28.0",
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {

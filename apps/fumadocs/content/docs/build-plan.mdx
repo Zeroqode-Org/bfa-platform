@@ -446,7 +446,7 @@ Daniil 21h · Lina has no scheduled row — the natural window to start on the w
 **Blocks:** every role-gated screen — this is the fan-out point of the project.
 
 1. Migration: RLS policies for `invitations` and `profiles` as specified in Part 1. — **done**, `0001_invitation_onboarding_policies`. Caller resolution goes through two `SECURITY DEFINER` helpers in a `private` schema, because a policy on `profiles` that reads `profiles` recurses. `profiles` gets no INSERT policy and no INSERT grant at all — redemption is the only creation path — and `authenticated` holds `UPDATE (full_name)` only, since a row policy cannot stop a user rewriting their own `global_role`.
-2. Build the send helper and its `consoleDriver` — see step 1 of transactional email integration. The provider lands in week 5; until then the console driver prints the invite link so the flow is fully testable. — **done**, `packages/api/src/lib/email.ts`. Driver selected by `EMAIL_DRIVER` (optional, defaults to `console`); adding `providerDriver` is one registry entry and no call-site change.
+2. Build the send helper and its `consoleDriver` — see step 1 of transactional email integration. The provider lands in week 5; until then the console driver prints the invite link so the flow is fully testable. — **done**, `packages/api/src/lib/email.ts`. Driver selected by `EMAIL_DRIVER` (optional, defaults to `console`). `providerDriver` was later added as one registry entry with no call-site change — see transactional email integration.
 3. `createInvitation` procedure — inserts the row with a cryptographically random token (SHA-256 based, not a UUID), an expiry, the target role, and `associated_wp_id`; sends the invite email through the helper. — **done**. The link carries 32 random bytes; `invitations.token` stores only their SHA-256 digest, so the table cannot be dumped for usable links. `resolveInvitationTarget` decides the purveyor from the caller's own profile and rejects — rather than ignores — a `waterPurveyorId` that is not theirs.
 4. `redeemInvitation` server action — looks the token up with the service-role client, not a client-side query. Validates expiry and `is_redeemed`. Creates the `auth.users` record, the `profiles` row, and for a certifier also the `certifiers` row plus a `wp_certifier_authorizations` row. Marks the invitation redeemed. — **done**. The lookup uses the privileged Drizzle connection rather than the anon Supabase client, the same call the `resolveCaller` helper already makes, because the redemption needs a transaction; the service-role Supabase client does the `auth.users` half. Auth user first, then one transaction whose first write is a conditional claim on the invitation, then a compensating `deleteUser` if that transaction rolls back — no partial account survives either failure.
 5. First-login screen: set password, complete profile (full name, and for a certifier: company, ID number, license expiration). — **done**, `/invite/[token]`. Which fields render is decided server-side from the invitation, with distinct copy for invalid, expired, redeemed and already-registered links. A null-`associated_wp_id` invitation creates the `water_purveyors` row and its first admin in the same transaction, using the name the Super-Admin gave at invite time — the screen shows it rather than asking for it.
@@ -770,12 +770,12 @@ A pass/fail answer never ends the wizard early — the remaining fields are stil
 
 ## Week 5 — Email provider and automation
 
-Daniil 18h+ · Lina has no scheduled row. Provider credentials arrive this week, so everything that actually sends mail becomes verifiable here.
+Daniil 18h+ · Lina has no scheduled row. Real delivery is switched on here, so everything that actually sends mail becomes verifiable here.
 
 ### Transactional email integration
 
 **Owner:** Daniil.
-**Week 5** · 2h. Provider credentials do not exist before this week. Everything that sends mail is built earlier against the console driver below and swaps to the real provider here, with no change to any calling code.
+**Week 5** · 2h. Everything that sends mail is built earlier against the console driver below and swaps to the real provider here, with no change to any calling code. The provider is Resend; the account, verified sender domain and credentials now exist, the driver is built, and every message renders in one shared email layout — only the production switch-on and one live test send remain.
 **Prerequisite:** none — safe to run in parallel.
 **Blocks:** all four workflows.
 
@@ -783,12 +783,13 @@ The send helper is written in week 2, as part of onboarding, with a console-logg
 
 1. Build the send helper in `packages/api/src/lib/email.ts` taking `{ to, subject, html, tags }`, behind a driver interface with two implementations: `consoleDriver` (logs the full payload, including any invite link, and returns success) and `providerDriver`. Select by env var. Every feature calls the helper, never a provider SDK directly. **This step happens in week 2 with onboarding, not week 5.**
 2. Emit a structured JSON log line on every send attempt regardless of driver: event type, recipient id, asset id, timestamp.
-3. Week 5 — create the provider account (Resend or Postmark) under the company email.
-4. Configure the sender domain and add the DKIM record.
-5. Add the API key to env validation and to Vercel's environment variables.
-6. Implement `providerDriver` against the helper's existing interface and flip the env var. No calling code changes.
+3. Week 5 — create the provider account (Resend or Postmark) under the company email. — **done**, Resend.
+4. Configure the sender domain and add the DKIM record. — **done**, `backflowreporter.io` is verified in Resend.
+5. Add the API key to env validation and to Vercel's environment variables. — **env validation done**: `EMAIL_DRIVER` (`console` | `provider`, default `console`), `RESEND_API_KEY`, `RESEND_FROM_EMAIL` and `RESEND_REPLY_TO` (`info@backflowreporter.io` in production, so replies reach the existing mailbox — no inbound receiving) in `packages/env/src/server.ts`. The Resend variables are optional under `console` and required, and format-checked, under `provider`, so CI needs none of them. They are in local `.env.local`; deployment variables are not set yet.
+6. Implement `providerDriver` against the helper's existing interface and flip the env var. No calling code changes. — **driver done**, `packages/api/src/lib/email.ts`, using the official `resend` SDK and unit-tested against a mocked client. Resend errors and responses with no id are thrown, so the failed `email_send_attempted` line and caller behaviour are unchanged. **Not yet flipped**: `EMAIL_DRIVER=provider` is enabled after review.
+7. Email template design — one responsive, email-client-safe HTML layout for every message. — **done**, `packages/api/src/lib/email-layout.ts`: text wordmark header, white content card, one-line footer; table-based with inline styles; no images, remote fonts or tracking; branding text-only until the client supplies a logo. Invitations render a **Set up your account** button, the visible fallback URL and a readable UTC expiry. General-info broadcasts — and automated notices once Workflow 1 sends them — go through `renderTextEmail`, which wraps `templateToHtml`'s escaped output without changing the text. `email.ts` is unchanged by it. The notice-template copy itself is still provisional and unapproved.
 
-**Done when:** flipping the env var switches every email path in the app from console output to real delivery, with no code edit outside `email.ts`; a test send arrives and the log line has the expected shape.
+**Done when:** flipping the env var switches every email path in the app from console output to real delivery, with no code edit outside `email.ts`; a test send arrives and the log line has the expected shape. The first half holds in code and tests, and the layout is built; production switch-on and one live test send are still outstanding.
 
 ### Node-native scheduler
 

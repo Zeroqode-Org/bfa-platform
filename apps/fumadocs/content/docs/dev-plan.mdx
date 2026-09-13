@@ -23,7 +23,7 @@ Target delivery: **2026-10-02** (~6 weeks from kickoff on 2026-08-24). Team: **L
 
 ## Task tracker
 
-Status as of **2026-09-11**. Update this table as work progresses — this is the source of truth, not the phase table above.
+Status as of **2026-09-13**. Update this table as work progresses — this is the source of truth, not the phase table above.
 
 | Task | PRD § | Owner | Start | End | Status |
 |---|---|---|---|---|---|
@@ -187,7 +187,7 @@ copy that makes no compliance claim. Full writeup:
 
 **Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
 
-**Transactional Email Integration (6.14)** stays *in-progress* on purpose. Its first step — the send helper and `consoleDriver` — shipped with onboarding, and every mail path in the app already runs through it. What remains is the provider account, the sender domain and DKIM record, and `providerDriver` itself, which needs credentials that do not exist yet. See [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer).
+**Transactional Email Integration (6.14)** stays *in-progress*, now only for its switch-on. The send helper and `consoleDriver` shipped with onboarding, and every mail path in the app runs through them. The Resend account exists, the sender domain `backflowreporter.io` is verified, and `providerDriver` is built and unit-tested, with `EMAIL_DRIVER`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL` and `RESEND_REPLY_TO` in env validation; every Resend send sets `Reply-To` to `info@backflowreporter.io` so replies reach the existing mailbox. The email template design is also done: one shared, responsive layout in `packages/api/src/lib/email-layout.ts` wraps invitations (with a **Set up your account** button, fallback URL and expiry) and general-info broadcasts, and is the path automated notices will use; notice bodies stay escaped plain text, and branding is text-only until the client supplies a logo. What remains: set the variables in the deployment, enable `EMAIL_DRIVER=provider` after review, and confirm one live test send. Console stays the default until then. The automated notice copy is still awaiting client approval; that belongs to the workflows, not to 6.14. See [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer).
 
 ## Known deviation from the kickoff runbook
 

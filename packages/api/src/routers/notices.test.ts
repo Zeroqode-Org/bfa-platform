@@ -813,6 +813,27 @@ describeDb("notices procedures", () => {
 			expect(String(delivery?.html)).toContain("&lt;script&gt;");
 		});
 
+		it("renders the body inside the shared email layout", async () => {
+			const lines = captureLogs();
+
+			await callerFor(ids.adminA).notices.sendGeneralInfoBroadcast({
+				subject: "In the shell",
+				body: "Hello {{customer_name}}.\nSecond line.",
+				recipientFilter: "agricultural_only",
+			});
+
+			const html = String(
+				lines.find((line) => line.event === "email_console_delivery")?.html,
+			);
+
+			expect(html.startsWith("<!DOCTYPE html>")).toBe(true);
+			expect(html).toContain(">Backflow Reporter</td>");
+			expect(html).toContain("Sent through Backflow Reporter.");
+			expect(html).toContain(
+				"<p>Hello Shared Ag Farms.</p>\n<p>Second line.</p>",
+			);
+		});
+
 		it("writes once to a customer with two past-due assemblies", async () => {
 			const lines = captureLogs();
 

@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	evaluateInvitation,
+	formatInvitationExpiry,
 	type GlobalRole,
+	INVITATION_EMAIL_SUBJECT,
 	type InvitingCaller,
 	invitationExpiry,
+	renderInvitationEmail,
 	resolveInvitationTarget,
 	sendInvitationEmail,
 } from "./invitations";
@@ -335,5 +338,122 @@ describe("sendInvitationEmail", () => {
 
 		expect(html).not.toContain("<script>");
 		expect(html).toContain("&lt;script&gt;");
+	});
+
+	it("sends the invitation inside the shared email layout", async () => {
+		const lines: Record<string, unknown>[] = [];
+		vi.spyOn(console, "log").mockImplementation((value: unknown) => {
+			lines.push(JSON.parse(String(value)));
+		});
+
+		await sendInvitationEmail({
+			invitationId: "invite-3",
+			email: "invitee@example.com",
+			role: "wp_admin",
+			secret: "layout-token",
+			expiresAt: new Date("2026-06-08T00:00:00.000Z"),
+			waterPurveyorName: null,
+			associatedWpId: null,
+			invitedByProfileId: "profile-1",
+		});
+
+		const delivery = lines.find(
+			(line) => line.event === "email_console_delivery",
+		);
+		const html = String(delivery?.html);
+
+		expect(delivery?.subject).toBe(INVITATION_EMAIL_SUBJECT);
+		expect(html.startsWith("<!DOCTYPE html>")).toBe(true);
+		expect(html).toContain(">Backflow Assembly Platform</td>");
+		expect(html).toContain("Sent through Backflow Assembly Platform.");
+		expect(html).toContain(">Set up your account</a>");
+	});
+});
+
+describe("renderInvitationEmail", () => {
+	const inviteLink = "https://app.backflowreporter.io/invite/abc_DEF-123";
+	const expiresAt = new Date("2026-06-08T15:30:00.000Z");
+
+	it("heads the message, then the CTA, the visible fallback link and the expiry, in order", () => {
+		const { subject, html } = renderInvitationEmail({
+			inviteLink,
+			role: "certifier",
+			waterPurveyorName: "Harbor Water Works",
+			expiresAt,
+		});
+
+		expect(subject).toBe(INVITATION_EMAIL_SUBJECT);
+		expect(html.match(/<h1\b/g)).toHaveLength(1);
+
+		const heading = html.indexOf(">You have been invited</h1>");
+		const intro = html.indexOf(
+			"join <strong>Harbor Water Works</strong> as a Certifier.",
+		);
+		const button = html.indexOf(`<a href="${inviteLink}"`);
+		const buttonLabel = html.indexOf(">Set up your account</a>");
+		const fallback = html.indexOf(`>${inviteLink}</a>`);
+		const expiry = html.indexOf("This invitation expires on");
+
+		expect(heading).toBeGreaterThan(-1);
+		expect(intro).toBeGreaterThan(heading);
+		expect(button).toBeGreaterThan(intro);
+		expect(buttonLabel).toBeGreaterThan(button);
+		expect(fallback).toBeGreaterThan(buttonLabel);
+		expect(expiry).toBeGreaterThan(fallback);
+	});
+
+	it("writes the expiry as a readable UTC date", () => {
+		const { html } = renderInvitationEmail({
+			inviteLink,
+			role: "certifier",
+			waterPurveyorName: null,
+			expiresAt,
+		});
+		const written = formatInvitationExpiry(expiresAt);
+
+		expect(written).toMatch(/^June 8, 2026\b.*3:30\sPM UTC$/);
+		expect(html).toContain(`This invitation expires on ${written}.`);
+	});
+
+	it("names the platform when there is no purveyor name", () => {
+		const { html } = renderInvitationEmail({
+			inviteLink,
+			role: "wp_admin",
+			waterPurveyorName: null,
+			expiresAt,
+		});
+
+		expect(html).toContain(
+			"join the Backflow Assembly platform as a Water Purveyor Administrator.",
+		);
+	});
+
+	it("escapes the purveyor name and the link wherever they appear", () => {
+		const { html } = renderInvitationEmail({
+			inviteLink: 'https://example.com/invite/x?a=1&b="2"',
+			role: "wp_employee",
+			waterPurveyorName: `Tom & Jerry's <img src=x onerror=alert(1)> "Water"`,
+			expiresAt,
+		});
+
+		expect(html).not.toMatch(/<img\b/i);
+		expect(html).toContain(
+			"<strong>Tom &amp; Jerry&#39;s &lt;img src=x onerror=alert(1)&gt; &quot;Water&quot;</strong>",
+		);
+		expect(html).toContain(
+			'href="https://example.com/invite/x?a=1&amp;b=&quot;2&quot;"',
+		);
+		expect(html).not.toMatch(/b="2"/);
+	});
+
+	it("refuses a link that is not an absolute http(s) URL", () => {
+		expect(() =>
+			renderInvitationEmail({
+				inviteLink: "javascript:alert(1)",
+				role: "certifier",
+				waterPurveyorName: null,
+				expiresAt,
+			}),
+		).toThrow(/absolute http\(s\) URLs/);
 	});
 });

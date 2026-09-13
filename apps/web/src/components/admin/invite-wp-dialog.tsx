@@ -80,11 +80,13 @@ export function InviteWpForm({ onClose }: { onClose: () => void }) {
 	const createInvitation = useMutation(
 		trpc.invitations.createInvitation.mutationOptions({
 			onSuccess: (invitation) => {
-				// Say what actually happened. Until the provider lands the console
-				// driver is the only delivery there is, and telling a Super-Admin an
-				// email was sent would have them waiting for one that never arrives.
+				const deliveryMessage =
+					invitation.emailDelivery === "sent"
+						? "An invitation email has been sent."
+						: "Email delivery is not enabled; the invite link is available in the server log.";
+
 				toast.success(`Invitation created for ${invitation.email}`, {
-					description: `${invitation.proposedWaterPurveyorName ?? "The water purveyor"} is created when the link is redeemed. No email provider is configured yet — the invite link is in the server log.`,
+					description: `${invitation.proposedWaterPurveyorName ?? "The water purveyor"} is created when the link is redeemed. ${deliveryMessage}`,
 				});
 				setCompanyName("");
 				setContactEmail("");

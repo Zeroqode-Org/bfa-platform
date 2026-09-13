@@ -9,13 +9,12 @@ export function WpShell({
 	account: Account;
 	children: React.ReactNode;
 }) {
-	// Placeholder label until the tRPC caller context resolves the WP.
 	return (
 		<DashboardShell
 			variant="wp"
 			account={account}
 			headerKicker="Water Purveyor"
-			headerTitle="Company name"
+			headerTitle={account.waterPurveyorName ?? "Water Purveyor"}
 		>
 			{children}
 		</DashboardShell>

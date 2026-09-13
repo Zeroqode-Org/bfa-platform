@@ -1,5 +1,5 @@
 import { db } from "@bfa-platform/db";
-import { certifiers, profiles } from "@bfa-platform/db/schema";
+import { certifiers, profiles, waterPurveyors } from "@bfa-platform/db/schema";
 import { env } from "@bfa-platform/env/web";
 import {
 	createServerClient,
@@ -69,6 +69,7 @@ export type Caller = {
 	fullName: string | null;
 	globalRole: (typeof profiles.$inferSelect)["globalRole"];
 	waterPurveyorId: string | null;
+	waterPurveyorName: string | null;
 };
 
 /**
@@ -104,11 +105,13 @@ export async function resolveCaller(
 			fullName: profiles.fullName,
 			globalRole: profiles.globalRole,
 			waterPurveyorId: profiles.waterPurveyorId,
+			waterPurveyorName: waterPurveyors.companyName,
 			status: profiles.status,
 			certifierStatus: certifiers.status,
 		})
 		.from(profiles)
 		.leftJoin(certifiers, eq(certifiers.profileId, profiles.id))
+		.leftJoin(waterPurveyors, eq(waterPurveyors.id, profiles.waterPurveyorId))
 		.where(eq(profiles.id, user.id))
 		.limit(1);
 
@@ -130,5 +133,6 @@ export async function resolveCaller(
 		fullName: row.fullName,
 		globalRole: row.globalRole,
 		waterPurveyorId: row.waterPurveyorId,
+		waterPurveyorName: row.waterPurveyorName,
 	};
 }
