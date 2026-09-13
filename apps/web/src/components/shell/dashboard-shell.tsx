@@ -69,7 +69,13 @@ export function DashboardShell({
 							</>
 						}
 					/>
-					<main className="flex-1 overflow-y-auto p-4 min-[780px]:p-7">
+					{/* `relative` makes this scroll container the containing block for
+					    anything absolutely positioned in the page — `sr-only` text above
+					    all. Without it that box is placed against the viewport instead: it
+					    escapes this `overflow-y-auto` and the shell's `overflow-hidden`,
+					    and a label sitting far down a long page extends the document, so
+					    the whole screen scrolls into empty space below the tab bar. */}
+					<main className="relative flex-1 overflow-y-auto p-4 min-[780px]:p-7">
 						<PageTransition>{children}</PageTransition>
 					</main>
 				</div>

@@ -217,6 +217,28 @@ afterEach(() => {
 });
 
 describe("SubmittedTestsTable — the list", () => {
+	it("keeps the table's hidden column label inside its own horizontal scroll", async () => {
+		// Regression: the "Actions" header is an `sr-only` span, which is
+		// absolutely positioned. With no positioned ancestor its containing block
+		// was the viewport, so on a phone it escaped the table's `overflow-x-auto`
+		// and the card's `overflow-hidden`, sat at the far edge of the wide table,
+		// and made the whole Submitted Tests page scroll sideways. The page-enter
+		// animation's transform hid it for 160ms, which is why it looked flaky.
+		//
+		// jsdom lays nothing out, so this asserts the containing block is where
+		// the scrolling happens rather than measuring the page.
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		const label = screen.getByText("Actions");
+		const container = label.closest('[data-slot="table-container"]');
+
+		expect(label.className).toContain("sr-only");
+		expect(container).not.toBeNull();
+		expect(container?.className).toContain("overflow-x-auto");
+		expect(container?.className).toContain("relative");
+	});
+
 	it("shows the five facts every submitted row carries", async () => {
 		renderTable();
 
@@ -410,6 +432,35 @@ describe("SubmittedTestsTable — the document view", () => {
 		expect(body?.contains(header)).toBe(false);
 		expect(body?.contains(close)).toBe(false);
 		expect(dialog.contains(close)).toBe(true);
+	});
+
+	it("keeps Reset and Save corrections outside the scrolling record", async () => {
+		// Regression: the corrections bar used to render at the end of the record,
+		// inside `DialogBody`, so on any record taller than the screen Save
+		// scrolled away with the fields and was clipped at the bottom of the popup.
+		await openDocument();
+
+		const dialog = await screen.findByRole("dialog");
+		const body = dialog.querySelector('[data-slot="dialog-body"]');
+		const footer = dialog.querySelector('[data-slot="dialog-footer"]');
+		const save = within(dialog).getByRole("button", {
+			name: /Save corrections/,
+		});
+		const reset = within(dialog).getByRole("button", { name: "Reset" });
+
+		expect(body).not.toBeNull();
+		expect(footer).not.toBeNull();
+		expect(footer?.className).toContain("shrink-0");
+
+		expect(body?.contains(save)).toBe(false);
+		expect(body?.contains(reset)).toBe(false);
+		expect(footer?.contains(save)).toBe(true);
+		expect(footer?.contains(reset)).toBe(true);
+
+		// And the footer is not a second body: exactly one region scrolls.
+		expect(dialog.querySelectorAll('[data-slot="dialog-body"]')).toHaveLength(
+			1,
+		);
 	});
 
 	it("opens the stored record rather than the list row", async () => {

@@ -3,7 +3,17 @@ import type * as React from "react";
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
 	return (
-		<div data-slot="table-container" className="w-full overflow-x-auto">
+		// `relative` makes the scroll container the containing block for anything
+		// absolutely positioned in the table — the `sr-only` column labels above
+		// all. Without it their containing block is the nearest positioned
+		// ancestor further up, and when there is none it is the viewport: the
+		// label then escapes both this `overflow-x-auto` and any `overflow-hidden`
+		// card around it, lands at the far edge of a table wider than the screen,
+		// and makes the whole page scroll sideways on a phone.
+		<div
+			data-slot="table-container"
+			className="relative w-full overflow-x-auto"
+		>
 			<table
 				data-slot="table"
 				className={cn(

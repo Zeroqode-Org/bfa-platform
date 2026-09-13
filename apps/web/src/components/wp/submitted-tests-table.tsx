@@ -504,25 +504,30 @@ function SubmissionDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<DialogBody>
-					{detail.isPending || canEdit === undefined ? (
+				{detail.isPending || canEdit === undefined ? (
+					<DialogBody>
 						<SubmissionDocumentSkeleton />
-					) : detail.isError ? (
+					</DialogBody>
+				) : detail.isError ? (
+					<DialogBody>
 						<SubmissionDocumentError
 							message={detail.error.message}
 							onRetry={() => detail.refetch()}
 						/>
-					) : (
-						<SubmissionDocument
-							// Remounts on target change so the fields start from the record
-							// being opened rather than from whatever was open before.
-							key={detail.data.id}
-							submission={detail.data}
-							canEdit={canEdit}
-							onChanged={onChanged}
-						/>
-					)}
-				</DialogBody>
+					</DialogBody>
+				) : (
+					// Brings its own `DialogBody` and `DialogFooter`: the corrections
+					// bar has to sit outside the scrolling region, and only the document
+					// knows where its record ends and its actions begin.
+					<SubmissionDocument
+						// Remounts on target change so the fields start from the record
+						// being opened rather than from whatever was open before.
+						key={detail.data.id}
+						submission={detail.data}
+						canEdit={canEdit}
+						onChanged={onChanged}
+					/>
+				)}
 			</DialogContent>
 		</Dialog>
 	);
