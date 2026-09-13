@@ -8,6 +8,7 @@ import {
 import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import { Card } from "@bfa-platform/ui/components/card";
+import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
 import {
 	Empty,
 	EmptyDescription,
@@ -177,254 +178,263 @@ export function SubmissionDocument({
 	}
 
 	return (
-		<div className="flex flex-col gap-4">
-			<DocumentHeader submission={submission} />
+		// A column that takes exactly the height its dialog hands it: the record
+		// scrolls inside `DialogBody`, and the corrections bar sits below it in
+		// `DialogFooter`, so Save stays on screen however long the record is.
+		<div className="flex min-h-0 flex-1 flex-col gap-4">
+			<DialogBody>
+				<DocumentHeader submission={submission} />
 
-			{canEdit ? null : (
-				<p className="rounded-md bg-muted px-3 py-2 text-[12px] text-muted-foreground">
-					{READ_ONLY_NOTE}
-				</p>
-			)}
-
-			{submission.bfaAssetId ? null : (
-				<LinkAssetPanel
-					submission={submission}
-					canEdit={canEdit}
-					onChanged={onChanged}
-				/>
-			)}
-
-			<Section title="Test record">
-				<div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-					<Field
-						label="BFA type"
-						flagged={overridden.has("bfaType")}
-						readOnly={!canEdit}
-						readOnlyValue={form.bfaType}
-					>
-						{(id) => (
-							<Select
-								items={BFA_TYPE_OPTIONS}
-								value={form.bfaType}
-								onValueChange={(value) =>
-									setField("bfaType", value as SubmissionBfaType)
-								}
-							>
-								<SelectTrigger id={id}>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectGroup>
-										{Object.entries(BFA_TYPE_OPTIONS).map(([value, label]) => (
-											<SelectItem key={value} value={value}>
-												{label}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
-						)}
-					</Field>
-
-					<Field
-						label="Test date"
-						flagged={overridden.has("testDate")}
-						readOnly={!canEdit}
-						readOnlyValue={formatSubmissionDate(submission.testDate)}
-					>
-						{(id) => (
-							<Input
-								id={id}
-								type="date"
-								value={form.testDate}
-								onChange={(event) => setField("testDate", event.target.value)}
-							/>
-						)}
-					</Field>
-
-					<Field
-						label="Result"
-						flagged={overridden.has("testResult")}
-						readOnly={!canEdit}
-						readOnlyValue={
-							submission.testResult
-								? TEST_RESULT_LABELS[submission.testResult]
-								: "—"
-						}
-					>
-						{(id) => (
-							<Select
-								items={{
-									[NONE]: "Not recorded",
-									pass: TEST_RESULT_LABELS.pass,
-									fail: TEST_RESULT_LABELS.fail,
-								}}
-								value={form.testResult}
-								onValueChange={(value) =>
-									setField("testResult", value as string)
-								}
-							>
-								<SelectTrigger id={id}>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectGroup>
-										<SelectItem value={NONE}>Not recorded</SelectItem>
-										<SelectItem value="pass">
-											{TEST_RESULT_LABELS.pass}
-										</SelectItem>
-										<SelectItem value="fail">
-											{TEST_RESULT_LABELS.fail}
-										</SelectItem>
-									</SelectGroup>
-								</SelectContent>
-							</Select>
-						)}
-					</Field>
-
-					<Field
-						label={
-							submission.bfaAssetId
-								? "BIN as the certifier typed it"
-								: "BIN the certifier typed"
-						}
-						flagged={overridden.has("submittedBinText")}
-						readOnly={!canEdit}
-						readOnlyValue={form.submittedBinText || "—"}
-						hint={
-							submission.bfaAssetId
-								? `Linked to ${bin.text}. This records what was written on the day.`
-								: undefined
-						}
-					>
-						{(id) => (
-							<Input
-								id={id}
-								value={form.submittedBinText}
-								maxLength={SUBMISSION_FIELD_LIMITS.submittedBinText}
-								onChange={(event) =>
-									setField("submittedBinText", event.target.value)
-								}
-							/>
-						)}
-					</Field>
-				</div>
-			</Section>
-
-			<Section
-				title="Test answers"
-				description="What the certifier recorded, as the wizard stored it."
-			>
-				{answers.length === 0 ? (
-					<p className="text-[13px] text-muted-foreground">
-						This submission carries no recorded answers.
+				{canEdit ? null : (
+					<p className="rounded-md bg-muted px-3 py-2 text-[12px] text-muted-foreground">
+						{READ_ONLY_NOTE}
 					</p>
-				) : (
-					<div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-						{answers.map(([key, value]) => (
-							<Field
-								key={key}
-								label={humanizeFieldName(key)}
-								flagged={overridden.has(key)}
-								readOnly={!canEdit}
-								readOnlyValue={
-									typeof value === "boolean"
-										? value
-											? "Yes"
-											: "No"
-										: wizardValueText(value) || "—"
-								}
-							>
-								{(id) =>
-									typeof value === "boolean" ? (
-										<Select
-											items={{ yes: "Yes", no: "No" }}
-											value={value ? "yes" : "no"}
-											onValueChange={(next) => setAnswer(key, next === "yes")}
-										>
-											<SelectTrigger id={id}>
-												<SelectValue />
-											</SelectTrigger>
-											<SelectContent>
-												<SelectGroup>
-													<SelectItem value="yes">Yes</SelectItem>
-													<SelectItem value="no">No</SelectItem>
-												</SelectGroup>
-											</SelectContent>
-										</Select>
-									) : (
-										<Input
-											id={id}
-											value={wizardValueText(value)}
-											inputMode={typeof value === "number" ? "decimal" : "text"}
-											maxLength={SUBMISSION_FIELD_LIMITS.wizardValueLength}
-											onChange={(event) =>
-												setAnswer(
-													key,
-													parseWizardValue(value, event.target.value),
-												)
-											}
-										/>
-									)
-								}
-							</Field>
-						))}
-					</div>
 				)}
-			</Section>
 
-			<Section title="Sign-off">
-				<div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-					<Field
-						label="How it was signed"
-						flagged={overridden.has("signatureMethod")}
-						readOnly={!canEdit}
-						readOnlyValue={
-							submission.signatureMethod
-								? SIGNATURE_METHOD_LABELS[submission.signatureMethod]
-								: "—"
-						}
-					>
-						{(id) => (
-							<Select
-								items={{
-									[NONE]: "Not recorded",
-									...SIGNATURE_METHOD_LABELS,
-								}}
-								value={form.signatureMethod}
-								onValueChange={(value) =>
-									setField("signatureMethod", value as string)
-								}
-							>
-								<SelectTrigger id={id}>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectGroup>
-										<SelectItem value={NONE}>Not recorded</SelectItem>
-										{Object.entries(SIGNATURE_METHOD_LABELS).map(
-											([value, label]) => (
-												<SelectItem key={value} value={value}>
-													{label}
-												</SelectItem>
-											),
-										)}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
-						)}
-					</Field>
-
-					<Signature
-						value={form.signatureData}
+				{submission.bfaAssetId ? null : (
+					<LinkAssetPanel
+						submission={submission}
 						canEdit={canEdit}
-						onClear={() => setField("signatureData", null)}
+						onChanged={onChanged}
 					/>
-				</div>
-			</Section>
+				)}
+
+				<Section title="Test record">
+					<div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+						<Field
+							label="BFA type"
+							flagged={overridden.has("bfaType")}
+							readOnly={!canEdit}
+							readOnlyValue={form.bfaType}
+						>
+							{(id) => (
+								<Select
+									items={BFA_TYPE_OPTIONS}
+									value={form.bfaType}
+									onValueChange={(value) =>
+										setField("bfaType", value as SubmissionBfaType)
+									}
+								>
+									<SelectTrigger id={id}>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectGroup>
+											{Object.entries(BFA_TYPE_OPTIONS).map(
+												([value, label]) => (
+													<SelectItem key={value} value={value}>
+														{label}
+													</SelectItem>
+												),
+											)}
+										</SelectGroup>
+									</SelectContent>
+								</Select>
+							)}
+						</Field>
+
+						<Field
+							label="Test date"
+							flagged={overridden.has("testDate")}
+							readOnly={!canEdit}
+							readOnlyValue={formatSubmissionDate(submission.testDate)}
+						>
+							{(id) => (
+								<Input
+									id={id}
+									type="date"
+									value={form.testDate}
+									onChange={(event) => setField("testDate", event.target.value)}
+								/>
+							)}
+						</Field>
+
+						<Field
+							label="Result"
+							flagged={overridden.has("testResult")}
+							readOnly={!canEdit}
+							readOnlyValue={
+								submission.testResult
+									? TEST_RESULT_LABELS[submission.testResult]
+									: "—"
+							}
+						>
+							{(id) => (
+								<Select
+									items={{
+										[NONE]: "Not recorded",
+										pass: TEST_RESULT_LABELS.pass,
+										fail: TEST_RESULT_LABELS.fail,
+									}}
+									value={form.testResult}
+									onValueChange={(value) =>
+										setField("testResult", value as string)
+									}
+								>
+									<SelectTrigger id={id}>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectGroup>
+											<SelectItem value={NONE}>Not recorded</SelectItem>
+											<SelectItem value="pass">
+												{TEST_RESULT_LABELS.pass}
+											</SelectItem>
+											<SelectItem value="fail">
+												{TEST_RESULT_LABELS.fail}
+											</SelectItem>
+										</SelectGroup>
+									</SelectContent>
+								</Select>
+							)}
+						</Field>
+
+						<Field
+							label={
+								submission.bfaAssetId
+									? "BIN as the certifier typed it"
+									: "BIN the certifier typed"
+							}
+							flagged={overridden.has("submittedBinText")}
+							readOnly={!canEdit}
+							readOnlyValue={form.submittedBinText || "—"}
+							hint={
+								submission.bfaAssetId
+									? `Linked to ${bin.text}. This records what was written on the day.`
+									: undefined
+							}
+						>
+							{(id) => (
+								<Input
+									id={id}
+									value={form.submittedBinText}
+									maxLength={SUBMISSION_FIELD_LIMITS.submittedBinText}
+									onChange={(event) =>
+										setField("submittedBinText", event.target.value)
+									}
+								/>
+							)}
+						</Field>
+					</div>
+				</Section>
+
+				<Section
+					title="Test answers"
+					description="What the certifier recorded, as the wizard stored it."
+				>
+					{answers.length === 0 ? (
+						<p className="text-[13px] text-muted-foreground">
+							This submission carries no recorded answers.
+						</p>
+					) : (
+						<div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+							{answers.map(([key, value]) => (
+								<Field
+									key={key}
+									label={humanizeFieldName(key)}
+									flagged={overridden.has(key)}
+									readOnly={!canEdit}
+									readOnlyValue={
+										typeof value === "boolean"
+											? value
+												? "Yes"
+												: "No"
+											: wizardValueText(value) || "—"
+									}
+								>
+									{(id) =>
+										typeof value === "boolean" ? (
+											<Select
+												items={{ yes: "Yes", no: "No" }}
+												value={value ? "yes" : "no"}
+												onValueChange={(next) => setAnswer(key, next === "yes")}
+											>
+												<SelectTrigger id={id}>
+													<SelectValue />
+												</SelectTrigger>
+												<SelectContent>
+													<SelectGroup>
+														<SelectItem value="yes">Yes</SelectItem>
+														<SelectItem value="no">No</SelectItem>
+													</SelectGroup>
+												</SelectContent>
+											</Select>
+										) : (
+											<Input
+												id={id}
+												value={wizardValueText(value)}
+												inputMode={
+													typeof value === "number" ? "decimal" : "text"
+												}
+												maxLength={SUBMISSION_FIELD_LIMITS.wizardValueLength}
+												onChange={(event) =>
+													setAnswer(
+														key,
+														parseWizardValue(value, event.target.value),
+													)
+												}
+											/>
+										)
+									}
+								</Field>
+							))}
+						</div>
+					)}
+				</Section>
+
+				<Section title="Sign-off">
+					<div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+						<Field
+							label="How it was signed"
+							flagged={overridden.has("signatureMethod")}
+							readOnly={!canEdit}
+							readOnlyValue={
+								submission.signatureMethod
+									? SIGNATURE_METHOD_LABELS[submission.signatureMethod]
+									: "—"
+							}
+						>
+							{(id) => (
+								<Select
+									items={{
+										[NONE]: "Not recorded",
+										...SIGNATURE_METHOD_LABELS,
+									}}
+									value={form.signatureMethod}
+									onValueChange={(value) =>
+										setField("signatureMethod", value as string)
+									}
+								>
+									<SelectTrigger id={id}>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectGroup>
+											<SelectItem value={NONE}>Not recorded</SelectItem>
+											{Object.entries(SIGNATURE_METHOD_LABELS).map(
+												([value, label]) => (
+													<SelectItem key={value} value={value}>
+														{label}
+													</SelectItem>
+												),
+											)}
+										</SelectGroup>
+									</SelectContent>
+								</Select>
+							)}
+						</Field>
+
+						<Signature
+							value={form.signatureData}
+							canEdit={canEdit}
+							onClear={() => setField("signatureData", null)}
+						/>
+					</div>
+				</Section>
+			</DialogBody>
 
 			{canEdit ? (
-				<div className="flex flex-wrap items-center justify-end gap-2 border-border border-t pt-4">
+				<DialogFooter className="flex-row flex-wrap items-center justify-end border-border border-t pt-4">
 					<p className="mr-auto text-[12px] text-muted-foreground">
 						Saving records you as the last person to correct this test.
 					</p>
@@ -446,7 +456,7 @@ export function SubmissionDocument({
 						<PenLine />
 						{saveSubmission.isPending ? "Saving…" : "Save corrections"}
 					</Button>
-				</div>
+				</DialogFooter>
 			) : null}
 		</div>
 	);
