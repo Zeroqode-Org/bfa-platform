@@ -7,6 +7,11 @@ description: The purveyor home screen — how each card and chart is calculated,
 two charts. Every figure on it is derived from rows belonging to the caller's
 own purveyor, and nothing on it is a placeholder or a sample.
 
+The shared WP shell header also names that same purveyor. `resolveCaller` joins
+the caller's `profiles.water_purveyor_id` to `water_purveyors` server-side and
+passes its `company_name` into `WpShell`, so every `/wp` page displays the
+current tenant's real company name rather than a client-side placeholder.
+
 This page describes the screen as built. It covers *WP dashboard — core and
 analytics* in the [build plan](/docs/build-plan) and PRD § 6.6.1.
 

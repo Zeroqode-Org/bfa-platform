@@ -52,6 +52,7 @@ const caller: Caller = {
 	fullName: "Ada Tester",
 	globalRole: "certifier",
 	waterPurveyorId: null,
+	waterPurveyorName: null,
 };
 
 /** Where `requireAccount` sent the browser, or `null` if it returned normally. */
