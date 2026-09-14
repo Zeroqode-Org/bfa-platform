@@ -1,5 +1,6 @@
 "use client";
 
+import { INVITATION_FIELD_LIMITS } from "@bfa-platform/api/lib/invitation-field-limits";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
 	Dialog,
@@ -10,11 +11,22 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@bfa-platform/ui/components/dialog";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	email,
+	maxLength,
+	required,
+} from "@bfa-platform/ui/lib/validation";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, TriangleAlert } from "lucide-react";
-import { useId, useState } from "react";
+import { Plus } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { trpc } from "@/utils/trpc";
@@ -70,12 +82,22 @@ export function InviteWpDialog() {
  * would tie the form to a dialog context it otherwise does not need.
  */
 export function InviteWpForm({ onClose }: { onClose: () => void }) {
-	const companyNameId = useId();
-	const contactEmailId = useId();
-	const errorId = useId();
+	const [values, setValues] = useState({ companyName: "", contactEmail: "" });
 
-	const [companyName, setCompanyName] = useState("");
-	const [contactEmail, setContactEmail] = useState("");
+	const validation = useFormValidation({
+		values,
+		rules: {
+			companyName: composeRules(
+				required("Company name is required."),
+				maxLength(INVITATION_FIELD_LIMITS.proposedWaterPurveyorName),
+			),
+			contactEmail: composeRules(
+				required("Contact email is required."),
+				email(),
+				maxLength(INVITATION_FIELD_LIMITS.email),
+			),
+		},
+	});
 
 	const createInvitation = useMutation(
 		trpc.invitations.createInvitation.mutationOptions({
@@ -88,68 +110,76 @@ export function InviteWpForm({ onClose }: { onClose: () => void }) {
 				toast.success(`Invitation created for ${invitation.email}`, {
 					description: `${invitation.proposedWaterPurveyorName ?? "The water purveyor"} is created when the link is redeemed. ${deliveryMessage}`,
 				});
-				setCompanyName("");
-				setContactEmail("");
+				setValues({ companyName: "", contactEmail: "" });
 				onClose();
 			},
+			// No toast on failure: the message goes inline, above the buttons.
 		}),
 	);
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (!validation.validate()) return;
 
 		createInvitation.mutate({
-			email: contactEmail,
+			email: values.contactEmail,
 			role: "wp_admin",
 			// Null is what provisions a purveyor rather than joining one, and only
 			// a Super-Admin may send it. The server decides that from the caller's
 			// own profile; this value is a request, not an authorization.
 			waterPurveyorId: null,
-			proposedWaterPurveyorName: companyName,
+			proposedWaterPurveyorName: values.companyName,
 		});
 	}
 
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+		<form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
 			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={companyNameId}>Company name</Label>
+				<Label htmlFor={validation.fieldId("companyName")}>Company name</Label>
 				<Input
-					id={companyNameId}
+					{...validation.controlProps("companyName")}
 					name="companyName"
-					value={companyName}
-					onChange={(event) => setCompanyName(event.target.value)}
+					value={values.companyName}
+					onChange={(event) =>
+						setValues((current) => ({
+							...current,
+							companyName: event.target.value,
+						}))
+					}
 					placeholder="Riverside Water District"
 					autoComplete="organization"
 					disabled={createInvitation.isPending}
-					required
 				/>
+				<FieldError {...validation.errorProps("companyName")} />
 			</div>
 
 			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={contactEmailId}>Contact email</Label>
+				<Label htmlFor={validation.fieldId("contactEmail")}>
+					Contact email
+				</Label>
 				<Input
-					id={contactEmailId}
+					{...validation.controlProps("contactEmail")}
 					name="contactEmail"
 					type="email"
-					value={contactEmail}
-					onChange={(event) => setContactEmail(event.target.value)}
+					value={values.contactEmail}
+					onChange={(event) =>
+						setValues((current) => ({
+							...current,
+							contactEmail: event.target.value,
+						}))
+					}
 					placeholder="admin@riversidewater.gov"
 					autoComplete="email"
 					disabled={createInvitation.isPending}
-					required
 				/>
+				<FieldError {...validation.errorProps("contactEmail")} />
 			</div>
 
-			{createInvitation.isError ? (
-				<p
-					id={errorId}
-					role="alert"
-					className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-				>
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{createInvitation.error.message}
-				</p>
-			) : null}
+			<FormError
+				message={
+					createInvitation.isError ? createInvitation.error.message : null
+				}
+			/>
 
 			<DialogFooter>
 				<Button

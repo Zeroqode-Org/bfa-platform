@@ -15,6 +15,7 @@ import {
 	vi,
 } from "vitest";
 
+import { EMAIL_BRAND_NAME } from "../lib/email-layout";
 import { PLATFORM_DEFAULT_NOTICE_TEMPLATES } from "../lib/notice-defaults";
 
 /**
@@ -827,8 +828,10 @@ describeDb("notices procedures", () => {
 			);
 
 			expect(html.startsWith("<!DOCTYPE html>")).toBe(true);
-			expect(html).toContain(">Backflow Reporter</td>");
-			expect(html).toContain("Sent through Backflow Reporter.");
+			// The layout's own brand constant, so the assertion follows the brand
+			// rather than restating a spelling that can drift from it.
+			expect(html).toContain(`>${EMAIL_BRAND_NAME}</td>`);
+			expect(html).toContain(`Sent through ${EMAIL_BRAND_NAME}.`);
 			expect(html).toContain(
 				"<p>Hello Shared Ag Farms.</p>\n<p>Second line.</p>",
 			);

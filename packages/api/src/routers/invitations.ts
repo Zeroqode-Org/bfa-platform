@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { protectedProcedure, router, TRPCError } from "../index";
+import { INVITATION_FIELD_LIMITS } from "../lib/invitation-field-limits";
 import {
 	createInvitationToken,
 	hashInvitationSecret,
@@ -19,7 +20,11 @@ const createInvitationInput = z.object({
 	// Normalised before validation so a pasted address with a stray space or a
 	// capitalised domain is accepted, and so the stored address matches the one
 	// redemption later looks up.
-	email: z.string().trim().toLowerCase().pipe(z.email().max(254)),
+	email: z
+		.string()
+		.trim()
+		.toLowerCase()
+		.pipe(z.email().max(INVITATION_FIELD_LIMITS.email)),
 	role: z.enum(["wp_admin", "wp_sub_admin", "wp_employee", "certifier"]),
 	/**
 	 * Super-Admin only, and never an authorization input: a WP role's tenant is
@@ -33,7 +38,12 @@ const createInvitationInput = z.object({
 	 * `resolveInvitationTarget` decides which, and a check constraint on the
 	 * table refuses any row that got past it.
 	 */
-	proposedWaterPurveyorName: z.string().trim().min(1).max(200).optional(),
+	proposedWaterPurveyorName: z
+		.string()
+		.trim()
+		.min(1)
+		.max(INVITATION_FIELD_LIMITS.proposedWaterPurveyorName)
+		.optional(),
 	expiresInDays: z.int().min(1).max(30).default(DEFAULT_INVITATION_TTL_DAYS),
 });
 

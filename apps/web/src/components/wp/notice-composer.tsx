@@ -8,6 +8,7 @@ import {
 	variableKeys,
 } from "@bfa-platform/api/lib/notice-variables";
 import { Button } from "@bfa-platform/ui/components/button";
+import { FormError } from "@bfa-platform/ui/components/field-message";
 import { TriangleAlert } from "lucide-react";
 import { useCallback, useRef } from "react";
 
@@ -213,17 +214,12 @@ export function TemplatePreview({
 	);
 }
 
-/** The inline error strip both composers use for a refused save or send. */
+/**
+ * The inline error strip both composers use for a refused save or send — the
+ * shared form-level pattern, never a toast.
+ */
 export function ComposerError({ message }: { message: string }) {
-	return (
-		<p
-			role="alert"
-			className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-		>
-			<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-			{message}
-		</p>
-	);
+	return <FormError message={message} />;
 }
 
 /**

@@ -2,7 +2,12 @@
 
 import { ASSET_FIELD_LIMITS } from "@bfa-platform/api/lib/asset-field-limits";
 import { Button } from "@bfa-platform/ui/components/button";
+import { DateInput } from "@bfa-platform/ui/components/date-input";
 import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
@@ -13,6 +18,15 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@bfa-platform/ui/components/select";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	isoToUsDate,
+	maxLength,
+	required,
+	usDate,
+	usDateToIso,
+} from "@bfa-platform/ui/lib/validation";
 import { TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 
@@ -29,6 +43,9 @@ import { BFA_TYPE_LABELS } from "./asset-types";
  * including the type enum and the date, because that is what an input hands
  * back — the conversion to the procedure's shape happens once, in
  * `buildAssetPayload`.
+ *
+ * `annualTestDate` is the date as displayed, `MM/DD/YYYY`; the API's
+ * `YYYY-MM-DD` exists only on the way in and out.
  */
 export type AssetFormValues = {
 	bin: string;
@@ -75,7 +92,7 @@ export function assetToFormValues(asset: Asset): AssetFormValues {
 		model: asset.model ?? "",
 		serialNumber: asset.serialNumber ?? "",
 		size: asset.size ?? "",
-		annualTestDate: asset.annualTestDate ?? "",
+		annualTestDate: isoToUsDate(asset.annualTestDate),
 		// Carried so the values are a complete record, not because the edit form
 		// renders it — that form has no customer control, and `buildAssetPayload`
 		// does not send one.
@@ -87,6 +104,10 @@ export function assetToFormValues(asset: Asset): AssetFormValues {
  * Form values as the procedure's input. Blank optional fields become `null`, so
  * clearing one on the form is the same request as never having filled it in —
  * the server stores NULL either way rather than two spellings of empty.
+ *
+ * The annual test date goes out as the API's `YYYY-MM-DD`. One that is not a
+ * real day is sent as typed rather than blanked: the form does not submit it,
+ * and if something else does, the server's refusal is the honest answer.
  */
 export function buildAssetPayload(values: AssetFormValues): AssetPayload {
 	return {
@@ -98,7 +119,7 @@ export function buildAssetPayload(values: AssetFormValues): AssetPayload {
 		model: values.model.trim() || null,
 		serialNumber: values.serialNumber.trim() || null,
 		size: values.size.trim() || null,
-		annualTestDate: values.annualTestDate,
+		annualTestDate: usDateToIso(values.annualTestDate) ?? values.annualTestDate,
 	};
 }
 
@@ -120,45 +141,31 @@ export function buildCreateAssetPayload(
 }
 
 /**
- * Whether `value` is a real calendar day, not merely `NNNN-NN-NN`.
- *
- * A native date input will not usually hand back anything else, but the field
- * is a plain string in a form that can be filled programmatically, and
- * "2027-02-31" parsing into 3 March is the kind of wrong that only shows up
- * months later as a reminder that fired on the wrong day. Round-tripping
- * through `Date` is what catches it: the parsed day has to spell itself the
- * same way back.
- */
-export function isCalendarDate(value: string) {
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-
-	const parsed = new Date(`${value}T00:00:00Z`);
-
-	return (
-		!Number.isNaN(parsed.getTime()) &&
-		parsed.toISOString().slice(0, 10) === value
-	);
-}
-
-/**
- * Which required fields are not yet answered.
- *
- * The same three rules the server enforces, applied to the trimmed values so a
+ * The server's rules for the asset fields, checked on the trimmed values so a
  * BIN of spaces reads as empty here exactly as it does in `createAssetInput`.
- * This is a convenience — it stops a request that would be refused — and never
- * the boundary: everything below is checked again in the procedure.
+ * This is a convenience — it stops a request that would be refused and says
+ * why at the field — and never the boundary: all of it is checked again in the
+ * procedure. `serialNumber` stays free text; only its length is checked.
  */
-export function assetFormProblems(values: AssetFormValues) {
-	return {
-		bin: values.bin.trim().length === 0,
-		serviceAddress: values.serviceAddress.trim().length === 0,
-		annualTestDate: !isCalendarDate(values.annualTestDate),
-	};
-}
-
-export function isAssetFormValid(values: AssetFormValues) {
-	return !Object.values(assetFormProblems(values)).some(Boolean);
-}
+export const assetFormRules = {
+	bin: composeRules(
+		required("A BIN is required."),
+		maxLength(ASSET_FIELD_LIMITS.bin),
+	),
+	serviceAddress: composeRules(
+		required("A service address is required."),
+		maxLength(ASSET_FIELD_LIMITS.serviceAddress),
+	),
+	assemblyLocation: maxLength(ASSET_FIELD_LIMITS.assemblyLocation),
+	make: maxLength(ASSET_FIELD_LIMITS.make),
+	model: maxLength(ASSET_FIELD_LIMITS.model),
+	serialNumber: maxLength(ASSET_FIELD_LIMITS.serialNumber),
+	size: maxLength(ASSET_FIELD_LIMITS.size),
+	annualTestDate: composeRules(
+		required("An annual test date is required."),
+		usDate(),
+	),
+};
 
 /**
  * The asset field set. `AddAssetForm` and `EditAssetForm` below are this form
@@ -204,16 +211,7 @@ export function AssetForm({
 	onSubmit: (values: AssetFormValues) => void;
 	onCancel: () => void;
 }) {
-	const binId = useId();
-	const binMessageId = useId();
 	const bfaTypeId = useId();
-	const serviceAddressId = useId();
-	const assemblyLocationId = useId();
-	const makeId = useId();
-	const modelId = useId();
-	const serialNumberId = useId();
-	const sizeId = useId();
-	const annualTestDateId = useId();
 	const annualTestDateHintId = useId();
 	const currentCustomerId = useId();
 
@@ -224,6 +222,17 @@ export function AssetForm({
 	// already fixed look like it is still refused.
 	const [rejectedBin, setRejectedBin] = useState<string | null>(null);
 
+	const binTaken =
+		binErrorMessage && rejectedBin === values.bin.trim()
+			? binErrorMessage
+			: undefined;
+
+	const validation = useFormValidation({
+		values,
+		rules: assetFormRules,
+		externalErrors: { bin: binTaken },
+	});
+
 	function update<Field extends keyof AssetFormValues>(
 		field: Field,
 		value: AssetFormValues[Field],
@@ -233,17 +242,12 @@ export function AssetForm({
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!isAssetFormValid(values)) return;
+		if (!validation.validate()) return;
 
 		setRejectedBin(values.bin.trim());
 		onSubmit(values);
 	}
 
-	const problems = assetFormProblems(values);
-	const binTaken =
-		binErrorMessage && rejectedBin === values.bin.trim()
-			? binErrorMessage
-			: undefined;
 	// The BIN is the key every notice, submission and wizard prefill hangs off,
 	// and changing one is an audited act. The form says so at the moment it
 	// changes rather than after the save, so the warning is a decision the person
@@ -253,6 +257,28 @@ export function AssetForm({
 	const chosenCustomer = customerOptions?.find(
 		(customer) => customer.id === values.currentCustomerId,
 	);
+
+	/** One optional free-text field, with its limit reported inline. */
+	function optionalTextField(
+		field: "make" | "model" | "serialNumber" | "size",
+		label: string,
+	) {
+		return (
+			<div className="flex flex-col gap-1.5">
+				<Label htmlFor={validation.fieldId(field)}>{label}</Label>
+				<Input
+					{...validation.controlProps(field)}
+					name={field}
+					value={values[field]}
+					onChange={(event) => update(field, event.target.value)}
+					placeholder="Optional"
+					autoComplete="off"
+					disabled={pending}
+				/>
+				<FieldError {...validation.errorProps(field)} />
+			</div>
+		);
+	}
 
 	return (
 		<form
@@ -266,33 +292,17 @@ export function AssetForm({
 			<DialogBody>
 				<div className="grid gap-4 sm:grid-cols-2">
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={binId}>BIN</Label>
+						<Label htmlFor={validation.fieldId("bin")}>BIN</Label>
 						<Input
-							id={binId}
+							{...validation.controlProps("bin")}
 							name="bin"
 							value={values.bin}
 							onChange={(event) => update("bin", event.target.value)}
 							placeholder="BIN-10041"
 							autoComplete="off"
-							maxLength={ASSET_FIELD_LIMITS.bin}
 							disabled={pending}
-							required
-							aria-invalid={binTaken ? true : undefined}
-							aria-describedby={binTaken ? binMessageId : undefined}
 						/>
-						{binTaken ? (
-							<p
-								id={binMessageId}
-								role="alert"
-								className="flex items-start gap-1.5 text-[12px] text-danger"
-							>
-								<TriangleAlert
-									className="mt-px size-3.5 shrink-0"
-									aria-hidden="true"
-								/>
-								{binTaken}
-							</p>
-						) : null}
+						<FieldError {...validation.errorProps("bin")} />
 					</div>
 
 					<div className="flex flex-col gap-1.5">
@@ -338,104 +348,60 @@ export function AssetForm({
 				) : null}
 
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={serviceAddressId}>Service address</Label>
+					<Label htmlFor={validation.fieldId("serviceAddress")}>
+						Service address
+					</Label>
 					<Input
-						id={serviceAddressId}
+						{...validation.controlProps("serviceAddress")}
 						name="serviceAddress"
 						value={values.serviceAddress}
 						onChange={(event) => update("serviceAddress", event.target.value)}
 						placeholder="18 Canal Road"
 						autoComplete="off"
-						maxLength={ASSET_FIELD_LIMITS.serviceAddress}
 						disabled={pending}
-						required
 					/>
+					<FieldError {...validation.errorProps("serviceAddress")} />
 				</div>
 
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={assemblyLocationId}>Assembly location</Label>
+					<Label htmlFor={validation.fieldId("assemblyLocation")}>
+						Assembly location
+					</Label>
 					<Input
-						id={assemblyLocationId}
+						{...validation.controlProps("assemblyLocation")}
 						name="assemblyLocation"
 						value={values.assemblyLocation}
 						onChange={(event) => update("assemblyLocation", event.target.value)}
 						placeholder="Optional — where on the property the assembly sits"
 						autoComplete="off"
-						maxLength={ASSET_FIELD_LIMITS.assemblyLocation}
 						disabled={pending}
 					/>
+					<FieldError {...validation.errorProps("assemblyLocation")} />
 				</div>
 
 				<div className="grid gap-4 sm:grid-cols-2">
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={makeId}>Make</Label>
-						<Input
-							id={makeId}
-							name="make"
-							value={values.make}
-							onChange={(event) => update("make", event.target.value)}
-							placeholder="Optional"
-							autoComplete="off"
-							maxLength={ASSET_FIELD_LIMITS.make}
-							disabled={pending}
-						/>
-					</div>
-
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={modelId}>Model</Label>
-						<Input
-							id={modelId}
-							name="model"
-							value={values.model}
-							onChange={(event) => update("model", event.target.value)}
-							placeholder="Optional"
-							autoComplete="off"
-							maxLength={ASSET_FIELD_LIMITS.model}
-							disabled={pending}
-						/>
-					</div>
-
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={serialNumberId}>Serial number</Label>
-						<Input
-							id={serialNumberId}
-							name="serialNumber"
-							value={values.serialNumber}
-							onChange={(event) => update("serialNumber", event.target.value)}
-							placeholder="Optional"
-							autoComplete="off"
-							maxLength={ASSET_FIELD_LIMITS.serialNumber}
-							disabled={pending}
-						/>
-					</div>
-
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={sizeId}>Size</Label>
-						<Input
-							id={sizeId}
-							name="size"
-							value={values.size}
-							onChange={(event) => update("size", event.target.value)}
-							placeholder="Optional"
-							autoComplete="off"
-							maxLength={ASSET_FIELD_LIMITS.size}
-							disabled={pending}
-						/>
-					</div>
+					{optionalTextField("make", "Make")}
+					{optionalTextField("model", "Model")}
+					{optionalTextField("serialNumber", "Serial number")}
+					{optionalTextField("size", "Size")}
 				</div>
 
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={annualTestDateId}>Annual test date</Label>
-					<Input
-						id={annualTestDateId}
+					<Label htmlFor={validation.fieldId("annualTestDate")}>
+						Annual test date
+					</Label>
+					<DateInput
+						pickerLabel="Choose annual test date"
+						{...validation.controlProps("annualTestDate", {
+							describedBy: annualTestDateHintId,
+						})}
 						name="annualTestDate"
-						type="date"
 						value={values.annualTestDate}
-						onChange={(event) => update("annualTestDate", event.target.value)}
+						onValueChange={(value) => update("annualTestDate", value)}
 						disabled={pending}
-						required
-						aria-describedby={annualTestDateHintId}
+						aria-required="true"
 					/>
+					<FieldError {...validation.errorProps("annualTestDate")} />
 					{/* The date is not a note on the record — it is what the reminder
 					    schedule is built from, so the form says so where it is entered. */}
 					<p
@@ -512,18 +478,7 @@ export function AssetForm({
 					</div>
 				) : null}
 
-				{errorMessage ? (
-					<p
-						role="alert"
-						className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-					>
-						<TriangleAlert
-							className="mt-px size-4 shrink-0"
-							aria-hidden="true"
-						/>
-						{errorMessage}
-					</p>
-				) : null}
+				<FormError message={errorMessage} />
 			</DialogBody>
 			<DialogFooter>
 				<Button
@@ -534,21 +489,7 @@ export function AssetForm({
 				>
 					Cancel
 				</Button>
-				<Button
-					type="submit"
-					disabled={pending || !isAssetFormValid(values)}
-					// Says which answer is still missing, rather than leaving a dead
-					// button to be interpreted.
-					title={
-						problems.bin
-							? "A BIN is required"
-							: problems.serviceAddress
-								? "A service address is required"
-								: problems.annualTestDate
-									? "A valid annual test date is required"
-									: undefined
-					}
-				>
+				<Button type="submit" disabled={pending}>
 					{pending ? pendingLabel : submitLabel}
 				</Button>
 			</DialogFooter>

@@ -1,12 +1,17 @@
 "use client";
 
+import { NOTICE_FIELD_LIMITS } from "@bfa-platform/api/lib/notice-field-limits";
 import {
 	BROADCAST_FILTER_DESCRIPTIONS,
 	BROADCAST_FILTER_LABELS,
 	BROADCAST_RECIPIENT_FILTERS,
 	type BroadcastRecipientFilter,
 } from "@bfa-platform/api/lib/notice-recipients";
-import { BROADCAST_VARIABLES } from "@bfa-platform/api/lib/notice-variables";
+import {
+	BROADCAST_VARIABLES,
+	templateTextError,
+	variableKeys,
+} from "@bfa-platform/api/lib/notice-variables";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
 	Card,
@@ -15,6 +20,10 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@bfa-platform/ui/components/card";
+import {
+	FieldCounter,
+	FieldError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
@@ -26,6 +35,12 @@ import {
 	SelectValue,
 } from "@bfa-platform/ui/components/select";
 import { Textarea } from "@bfa-platform/ui/components/textarea";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	maxLength,
+	required,
+} from "@bfa-platform/ui/lib/validation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Users } from "lucide-react";
 import { useId, useState } from "react";
@@ -45,6 +60,25 @@ const PENDING_SAMPLE: NoticeSampleValues = Object.fromEntries(
 	BROADCAST_VARIABLES.map((variable) => [variable.key, variable.sample]),
 ) as NoticeSampleValues;
 
+const BROADCAST_KEYS = variableKeys(BROADCAST_VARIABLES);
+
+/**
+ * The server's broadcast `templateText` rule, checked at the field: present,
+ * within the limit, and using only the two recipient-scoped placeholders.
+ */
+function broadcastRule(label: string, max: number) {
+	return composeRules(
+		required(`${label} is required.`),
+		maxLength(max),
+		(value) => templateTextError(value, BROADCAST_KEYS) ?? undefined,
+	);
+}
+
+const BROADCAST_RULES = {
+	subject: broadcastRule("Subject", NOTICE_FIELD_LIMITS.subject),
+	body: broadcastRule("Message", NOTICE_FIELD_LIMITS.body),
+};
+
 /**
  * The general-info broadcast: one message, composed now, sent now, to a named
  * audience.
@@ -62,14 +96,18 @@ const PENDING_SAMPLE: NoticeSampleValues = Object.fromEntries(
  * will receive this.
  */
 export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
-	const subjectId = useId();
-	const bodyId = useId();
 	const filterId = useId();
 
 	const [recipientFilter, setRecipientFilter] =
 		useState<BroadcastRecipientFilter>("all_customers");
 	const [draft, setDraft] = useState({ subject: "", body: "" });
 	const [sentSummary, setSentSummary] = useState<string | null>(null);
+
+	const validation = useFormValidation({
+		values: draft,
+		rules: BROADCAST_RULES,
+	});
+	const bodyCounterId = `${validation.fieldId("body")}-count`;
 
 	const audience = useQuery(
 		trpc.notices.getBroadcastAudience.queryOptions({ recipientFilter }),
@@ -84,6 +122,8 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 				// The composer clears: this is a one-off send, and leaving the text in
 				// place invites the same message being sent twice.
 				setDraft({ subject: "", body: "" });
+				// A cleared composer is a fresh one, not a message missing its text.
+				validation.reset();
 			},
 			// No toast: the result and any failure are reported inline, where the
 			// person is looking.
@@ -99,13 +139,10 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 	const sending = sendBroadcast.isPending;
 	const values = audience.data?.sampleValues ?? PENDING_SAMPLE;
 	const recipientCount = audience.data?.recipientCount ?? 0;
+	// Missing or invalid text does not disable the button: pressing it says what
+	// is wrong at the field. Only an audience that cannot receive anything does.
 	const canSubmit =
-		canSend &&
-		!sending &&
-		draft.subject.trim() !== "" &&
-		draft.body.trim() !== "" &&
-		audience.isSuccess &&
-		recipientCount > 0;
+		canSend && !sending && audience.isSuccess && recipientCount > 0;
 
 	return (
 		<Card>
@@ -163,9 +200,9 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 					</p>
 
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={subjectId}>Subject</Label>
+						<Label htmlFor={validation.fieldId("subject")}>Subject</Label>
 						<Input
-							id={subjectId}
+							{...validation.controlProps("subject")}
 							ref={insertion.subjectRef}
 							name="subject"
 							value={draft.subject}
@@ -176,12 +213,15 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 								setDraft({ ...draft, subject: event.target.value })
 							}
 						/>
+						<FieldError {...validation.errorProps("subject")} />
 					</div>
 
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={bodyId}>Message</Label>
+						<Label htmlFor={validation.fieldId("body")}>Message</Label>
 						<Textarea
-							id={bodyId}
+							{...validation.controlProps("body", {
+								describedBy: bodyCounterId,
+							})}
 							ref={insertion.bodyRef}
 							name="body"
 							rows={10}
@@ -193,6 +233,12 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 							onChange={(event) =>
 								setDraft({ ...draft, body: event.target.value })
 							}
+						/>
+						<FieldError {...validation.errorProps("body")} />
+						<FieldCounter
+							id={bodyCounterId}
+							length={draft.body.trim().length}
+							max={NOTICE_FIELD_LIMITS.body}
 						/>
 					</div>
 
@@ -227,6 +273,8 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 								disabled={!canSubmit}
 								onClick={() => {
 									setSentSummary(null);
+									if (!validation.validate()) return;
+
 									sendBroadcast.mutate({ ...draft, recipientFilter });
 								}}
 							>

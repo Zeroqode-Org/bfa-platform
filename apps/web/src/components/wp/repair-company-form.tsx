@@ -1,9 +1,15 @@
 "use client";
 
+import { REPAIR_COMPANY_FIELD_LIMITS } from "@bfa-platform/api/lib/repair-company-field-limits";
 import { Button } from "@bfa-platform/ui/components/button";
 import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
+import { PhoneInput } from "@bfa-platform/ui/components/phone-input";
 import {
 	Select,
 	SelectContent,
@@ -12,6 +18,15 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@bfa-platform/ui/components/select";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	email,
+	formatUsPhone,
+	maxLength,
+	required,
+	usPhone,
+} from "@bfa-platform/ui/lib/validation";
 import { TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 
@@ -66,13 +81,18 @@ export function repairCompanyToFormValues(
  * the request says "no phone" rather than "a phone that is the empty string" —
  * and there is no `waterPurveyorId` to send, because the tenant is the server's
  * to decide from the caller's own profile.
+ *
+ * A valid phone number is sent in its one display spelling, `(XXX) XXX-XXXX`,
+ * whether or not the field was blurred first. Anything else is sent as typed:
+ * the form refuses to submit it, and nothing here is allowed to quietly rewrite
+ * a number that is not one.
  */
 export function buildRepairCompanyPayload(
 	values: RepairCompanyFormValues,
 ): RepairCompanyPayload {
 	return {
 		companyName: values.companyName.trim(),
-		phone: values.phone.trim() || null,
+		phone: formatUsPhone(values.phone) ?? (values.phone.trim() || null),
 		email: values.email.trim() || null,
 		status: values.status,
 	};
@@ -103,12 +123,27 @@ export function RepairCompanyForm({
 	onSubmit: (payload: RepairCompanyPayload) => void;
 	onCancel: () => void;
 }) {
-	const companyNameId = useId();
-	const phoneId = useId();
-	const emailId = useId();
 	const statusId = useId();
 
 	const [values, setValues] = useState<RepairCompanyFormValues>(initialValues);
+
+	// The server's rules, checked here first so the person hears about them at
+	// the field. Phone and email stay independently optional: a blank one passes
+	// its rule, and only a filled-in one has to be a real number or address.
+	const validation = useFormValidation({
+		values,
+		rules: {
+			companyName: composeRules(
+				required("Company name is required."),
+				maxLength(REPAIR_COMPANY_FIELD_LIMITS.companyName),
+			),
+			phone: usPhone(),
+			email: composeRules(
+				email(),
+				maxLength(REPAIR_COMPANY_FIELD_LIMITS.email),
+			),
+		},
+	});
 
 	function update<Field extends keyof RepairCompanyFormValues>(
 		field: Field,
@@ -119,6 +154,8 @@ export function RepairCompanyForm({
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (!validation.validate()) return;
+
 		onSubmit(buildRepairCompanyPayload(values));
 	}
 
@@ -129,41 +166,44 @@ export function RepairCompanyForm({
 			// `DialogBody` scrolls, so the footer stays on screen on a short
 			// viewport instead of being pushed off the bottom of it.
 			className="flex min-h-0 flex-1 flex-col gap-4"
+			noValidate
 		>
 			<DialogBody>
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={companyNameId}>Company name</Label>
+					<Label htmlFor={validation.fieldId("companyName")}>
+						Company name
+					</Label>
 					<Input
-						id={companyNameId}
+						{...validation.controlProps("companyName")}
 						name="companyName"
 						value={values.companyName}
 						onChange={(event) => update("companyName", event.target.value)}
 						placeholder="Ridgeline Backflow Repair"
 						autoComplete="off"
 						disabled={pending}
-						required
 					/>
+					<FieldError {...validation.errorProps("companyName")} />
 				</div>
 
 				<div className="grid gap-4 sm:grid-cols-2">
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={phoneId}>Phone</Label>
-						<Input
-							id={phoneId}
+						<Label htmlFor={validation.fieldId("phone")}>Phone</Label>
+						<PhoneInput
+							{...validation.controlProps("phone")}
 							name="phone"
-							type="tel"
 							value={values.phone}
-							onChange={(event) => update("phone", event.target.value)}
-							placeholder="Optional"
+							onValueChange={(value) => update("phone", value)}
+							placeholder="Optional — (555) 123-4567"
 							autoComplete="off"
 							disabled={pending}
 						/>
+						<FieldError {...validation.errorProps("phone")} />
 					</div>
 
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={emailId}>Email</Label>
+						<Label htmlFor={validation.fieldId("email")}>Email</Label>
 						<Input
-							id={emailId}
+							{...validation.controlProps("email")}
 							name="email"
 							type="email"
 							value={values.email}
@@ -172,6 +212,7 @@ export function RepairCompanyForm({
 							autoComplete="off"
 							disabled={pending}
 						/>
+						<FieldError {...validation.errorProps("email")} />
 					</div>
 				</div>
 
@@ -218,18 +259,7 @@ export function RepairCompanyForm({
 					</p>
 				) : null}
 
-				{errorMessage ? (
-					<p
-						role="alert"
-						className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-					>
-						<TriangleAlert
-							className="mt-px size-4 shrink-0"
-							aria-hidden="true"
-						/>
-						{errorMessage}
-					</p>
-				) : null}
+				<FormError message={errorMessage} />
 			</DialogBody>
 			<DialogFooter>
 				<Button

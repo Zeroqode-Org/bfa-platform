@@ -1,7 +1,13 @@
 "use client";
 
+import { CUSTOMER_FIELD_LIMITS } from "@bfa-platform/api/lib/customer-field-limits";
 import { Button } from "@bfa-platform/ui/components/button";
+import { DateInput } from "@bfa-platform/ui/components/date-input";
 import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
@@ -12,6 +18,16 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@bfa-platform/ui/components/select";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	email,
+	isoToUsDate,
+	maxLength,
+	required,
+	usDate,
+	usDateToIso,
+} from "@bfa-platform/ui/lib/validation";
 import { TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 
@@ -33,6 +49,9 @@ export const STATUS_LABELS = {
  * including the two enums and the date, because that is what an input hands
  * back — the conversion to the procedure's shape happens once, in
  * `buildCustomerPayload`.
+ *
+ * `agRenewalDate` is the date as displayed, `MM/DD/YYYY`; the API's
+ * `YYYY-MM-DD` exists only on the way in and out.
  */
 export type CustomerFormValues = {
 	name: string;
@@ -62,7 +81,7 @@ export function customerToFormValues(customer: Customer): CustomerFormValues {
 		email: customer.email,
 		address: customer.address ?? "",
 		rateCategory: customer.rateCategory,
-		agRenewalDate: customer.agRenewalDate ?? "",
+		agRenewalDate: isoToUsDate(customer.agRenewalDate),
 		status: customer.status,
 	};
 }
@@ -75,6 +94,10 @@ export function customerToFormValues(customer: Customer): CustomerFormValues {
  * agricultural rate clears the date instead of leaving a stale one behind. The
  * server refuses a date on a standard customer outright, so sending the typed
  * value "just in case" would turn an edit into a validation error.
+ *
+ * An agricultural date goes out as the API's `YYYY-MM-DD`. One that is not a
+ * real day is sent as typed rather than blanked — the form does not submit it,
+ * and if something else does, the server's refusal is the honest answer.
  */
 export function buildCustomerPayload(
 	values: CustomerFormValues,
@@ -91,10 +114,16 @@ export function buildCustomerPayload(
 		? {
 				...shared,
 				rateCategory: "agricultural",
-				agRenewalDate: values.agRenewalDate,
+				agRenewalDate:
+					usDateToIso(values.agRenewalDate) ?? values.agRenewalDate,
 			}
 		: { ...shared, rateCategory: "standard", agRenewalDate: null };
 }
+
+const agRenewalDateRule = composeRules(
+	required("AG renewal date is required."),
+	usDate(),
+);
 
 /**
  * Create and edit are the same form — the only differences are the starting
@@ -121,15 +150,33 @@ export function CustomerForm({
 	onSubmit: (payload: CustomerPayload) => void;
 	onCancel: () => void;
 }) {
-	const nameId = useId();
-	const accountNumberId = useId();
-	const emailId = useId();
-	const addressId = useId();
 	const rateCategoryId = useId();
-	const agRenewalDateId = useId();
 	const statusId = useId();
 
 	const [values, setValues] = useState<CustomerFormValues>(initialValues);
+
+	const validation = useFormValidation({
+		values,
+		rules: {
+			name: composeRules(
+				required("Name is required."),
+				maxLength(CUSTOMER_FIELD_LIMITS.name),
+			),
+			email: composeRules(
+				required("Email is required."),
+				email(),
+				maxLength(CUSTOMER_FIELD_LIMITS.email),
+			),
+			accountNumber: maxLength(CUSTOMER_FIELD_LIMITS.accountNumber),
+			address: maxLength(CUSTOMER_FIELD_LIMITS.address),
+			// Only the agricultural rate carries a renewal date, so only that rate
+			// asks for one — the same condition the field's visibility uses.
+			agRenewalDate: (value, current) =>
+				current.rateCategory === "agricultural"
+					? agRenewalDateRule(value)
+					: undefined,
+		},
+	});
 
 	function update<Field extends keyof CustomerFormValues>(
 		field: Field,
@@ -142,6 +189,8 @@ export function CustomerForm({
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (!validation.validate()) return;
+
 		onSubmit(buildCustomerPayload(values));
 	}
 
@@ -152,27 +201,30 @@ export function CustomerForm({
 			// `DialogBody` scrolls, so the footer stays on screen on a short
 			// viewport instead of being pushed off the bottom of it.
 			className="flex min-h-0 flex-1 flex-col gap-4"
+			noValidate
 		>
 			<DialogBody>
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={nameId}>Name</Label>
+					<Label htmlFor={validation.fieldId("name")}>Name</Label>
 					<Input
-						id={nameId}
+						{...validation.controlProps("name")}
 						name="name"
 						value={values.name}
 						onChange={(event) => update("name", event.target.value)}
 						placeholder="Marta Ellison"
 						autoComplete="off"
 						disabled={pending}
-						required
 					/>
+					<FieldError {...validation.errorProps("name")} />
 				</div>
 
 				<div className="grid gap-4 sm:grid-cols-2">
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={accountNumberId}>Account number</Label>
+						<Label htmlFor={validation.fieldId("accountNumber")}>
+							Account number
+						</Label>
 						<Input
-							id={accountNumberId}
+							{...validation.controlProps("accountNumber")}
 							name="accountNumber"
 							value={values.accountNumber}
 							onChange={(event) => update("accountNumber", event.target.value)}
@@ -180,12 +232,13 @@ export function CustomerForm({
 							autoComplete="off"
 							disabled={pending}
 						/>
+						<FieldError {...validation.errorProps("accountNumber")} />
 					</div>
 
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={emailId}>Email</Label>
+						<Label htmlFor={validation.fieldId("email")}>Email</Label>
 						<Input
-							id={emailId}
+							{...validation.controlProps("email")}
 							name="email"
 							type="email"
 							value={values.email}
@@ -193,15 +246,15 @@ export function CustomerForm({
 							placeholder="marta@example.com"
 							autoComplete="off"
 							disabled={pending}
-							required
 						/>
+						<FieldError {...validation.errorProps("email")} />
 					</div>
 				</div>
 
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={addressId}>Address</Label>
+					<Label htmlFor={validation.fieldId("address")}>Address</Label>
 					<Input
-						id={addressId}
+						{...validation.controlProps("address")}
 						name="address"
 						value={values.address}
 						onChange={(event) => update("address", event.target.value)}
@@ -209,6 +262,7 @@ export function CustomerForm({
 						autoComplete="off"
 						disabled={pending}
 					/>
+					<FieldError {...validation.errorProps("address")} />
 				</div>
 
 				<div className="grid gap-4 sm:grid-cols-2">
@@ -242,18 +296,19 @@ export function CustomerForm({
 					    appears with the rate rather than sitting greyed out beside it. */}
 					{isAgricultural ? (
 						<div className="flex flex-col gap-1.5">
-							<Label htmlFor={agRenewalDateId}>AG renewal date</Label>
-							<Input
-								id={agRenewalDateId}
+							<Label htmlFor={validation.fieldId("agRenewalDate")}>
+								AG renewal date
+							</Label>
+							<DateInput
+								pickerLabel="Choose AG renewal date"
+								{...validation.controlProps("agRenewalDate")}
 								name="agRenewalDate"
-								type="date"
 								value={values.agRenewalDate}
-								onChange={(event) =>
-									update("agRenewalDate", event.target.value)
-								}
+								onValueChange={(value) => update("agRenewalDate", value)}
 								disabled={pending}
-								required
+								aria-required="true"
 							/>
+							<FieldError {...validation.errorProps("agRenewalDate")} />
 						</div>
 					) : null}
 				</div>
@@ -294,18 +349,7 @@ export function CustomerForm({
 					</p>
 				) : null}
 
-				{errorMessage ? (
-					<p
-						role="alert"
-						className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-					>
-						<TriangleAlert
-							className="mt-px size-4 shrink-0"
-							aria-hidden="true"
-						/>
-						{errorMessage}
-					</p>
-				) : null}
+				<FormError message={errorMessage} />
 			</DialogBody>
 			<DialogFooter>
 				<Button

@@ -226,18 +226,25 @@ describe("GeneralInfoBroadcast", () => {
 		});
 	});
 
-	it("will not send an empty message", async () => {
+	it("will not send an empty message, and says which fields are missing", async () => {
 		renderComposer();
 
-		await screen.findByRole("button", { name: /send to 12 recipients/i });
+		const send = await screen.findByRole("button", {
+			name: /send to 12 recipients/i,
+		});
+		// Not a dead button: pressing it explains what is missing, at the fields.
+		expect((send as HTMLButtonElement).disabled).toBe(false);
 
-		expect(
-			(
-				screen.getByRole("button", {
-					name: /send to 12 recipients/i,
-				}) as HTMLButtonElement
-			).disabled,
-		).toBe(true);
+		fireEvent.click(send);
+
+		expect(sendFn).not.toHaveBeenCalled();
+		expect(screen.getByText("Subject is required.")).toBeTruthy();
+		expect(screen.getByText("Message is required.")).toBeTruthy();
+		expect(document.activeElement).toBe(screen.getByLabelText("Subject"));
+
+		compose();
+		expect(screen.queryByText("Subject is required.")).toBeNull();
+		expect(screen.queryByText("Message is required.")).toBeNull();
 	});
 
 	it("reports sending while the broadcast is in flight", async () => {

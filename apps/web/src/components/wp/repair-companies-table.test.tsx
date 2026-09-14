@@ -64,7 +64,9 @@ const { RepairCompaniesTable } = await import("./repair-companies-table");
 const active: RepairCompany = {
 	id: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
 	companyName: "Alpine Backflow Repair",
-	phone: "555-0142",
+	// A valid US number: the form refuses to save any other, so a fixture that
+	// is edited and saved has to carry one.
+	phone: "(555) 014-2233",
 	email: "dispatch@alpine.example",
 	status: "active",
 	createdAt: "2026-09-01T00:00:00.000Z",

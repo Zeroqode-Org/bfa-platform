@@ -34,7 +34,15 @@ screen's to rewrite. Nothing here creates, closes or moves an assignment.
 The AG renewal notice ([PRD § 6.9](/docs/prd)) fires against `ag_renewal_date`.
 An agricultural customer without one is a notice that can never be scheduled, so
 the date is required at the point the rate is chosen rather than left for the
-workflow to discover. The form only shows the field on the agricultural rate.
+workflow to discover. The form only shows the field on the agricultural rate,
+and only that rate asks for it: the date is typed as `MM/DD/YYYY` or chosen from the calendar picker, must be a real
+calendar day, and is sent as the API's `YYYY-MM-DD`.
+
+Name and email are required inline, the email must look like an address
+(*Please enter a valid email address.*), and every text field reports the
+server's length limit at the field — see the shared
+[inline validation](/docs/design-system#form-validation) pattern. A server
+refusal is shown as a form-level message inside the dialog, not a toast.
 
 Going the other way clears it. Moving a customer back to the standard rate
 writes NULL, in the form *and* in the procedure — a stale date left on the row

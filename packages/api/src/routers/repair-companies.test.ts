@@ -310,6 +310,32 @@ describeDb("repair company procedures", () => {
 			).rejects.toThrow();
 		});
 
+		it("stores a valid phone as (XXX) XXX-XXXX and refuses an invalid one outright", async () => {
+			const created = await callerFor(
+				ids.adminA,
+			).repairCompanies.createRepairCompany({
+				companyName: "Unformatted Phone Repairs",
+				phone: "+1 555.010.7000",
+			});
+
+			expect(created.phone).toBe("(555) 010-7000");
+
+			for (const phone of ["555-0142", "555-CALL-NOW", "555-010-7000 x12"]) {
+				await expect(
+					callerFor(ids.adminA).repairCompanies.createRepairCompany({
+						companyName: "Invalid Phone Repairs",
+						phone,
+					}),
+				).rejects.toThrow(/10-digit US phone number/);
+			}
+
+			const { rows } = await pool.query(
+				"select count(*)::int as count from repair_companies where water_purveyor_id = $1 and company_name = 'Invalid Phone Repairs'",
+				[wpA],
+			);
+			expect(rows[0]?.count).toBe(0);
+		});
+
 		it("defaults a new company to active, so it reaches the next failure notice", async () => {
 			const created = await callerFor(
 				ids.adminA,
@@ -398,7 +424,7 @@ describeDb("repair company procedures", () => {
 				ids.adminA,
 			).repairCompanies.createRepairCompany({
 				companyName: "No Longer Approved",
-				phone: "555-0199",
+				phone: "555-019-9000",
 			});
 
 			const updated = await callerFor(
@@ -422,7 +448,7 @@ describeDb("repair company procedures", () => {
 			// a past failure notice quoted are still on the row.
 			expect(rows[0]).toMatchObject({
 				company_name: "No Longer Approved",
-				phone: "555-0199",
+				phone: "(555) 019-9000",
 				status: "inactive",
 			});
 		});
@@ -453,7 +479,7 @@ describeDb("repair company procedures", () => {
 				ids.adminA,
 			).repairCompanies.createRepairCompany({
 				companyName: "Saved Without Editing",
-				phone: "555-0101",
+				phone: "555.010.1000",
 				email: "saved@example.com",
 			});
 
@@ -501,7 +527,7 @@ describeDb("repair company procedures", () => {
 				ids.adminA,
 			).repairCompanies.createRepairCompany({
 				companyName: "One Field Moves",
-				phone: "555-0102",
+				phone: "5550102000",
 			});
 
 			const updated = await callerFor(
@@ -509,12 +535,12 @@ describeDb("repair company procedures", () => {
 			).repairCompanies.updateRepairCompany({
 				id: created.id,
 				companyName: created.companyName,
-				phone: "555-0103",
+				phone: "555-010-3000",
 				email: created.email,
 				status: created.status,
 			});
 
-			expect(updated.phone).toBe("555-0103");
+			expect(updated.phone).toBe("(555) 010-3000");
 			expect(updated.updatedAt.getTime()).not.toBe(created.updatedAt.getTime());
 		});
 
@@ -525,7 +551,7 @@ describeDb("repair company procedures", () => {
 				ids.adminA,
 			).repairCompanies.createRepairCompany({
 				companyName: "Clears A Phone",
-				phone: "555-0104",
+				phone: "(555) 010-4000",
 			});
 
 			const updated = await callerFor(
@@ -539,6 +565,58 @@ describeDb("repair company procedures", () => {
 			});
 
 			expect(updated.phone).toBeNull();
+		});
+
+		it("refuses to save a legacy invalid phone unchanged, and saves once it is corrected or cleared", async () => {
+			// A row written before the phone rule, which no procedure can create now.
+			const legacyId = randomUUID();
+			await pool.query(
+				`insert into repair_companies (id, water_purveyor_id, company_name, phone, email, status)
+				 values ($1, $2, 'Legacy Phone Repairs', '555-0142', 'legacy@example.com', 'active')`,
+				[legacyId, wpA],
+			);
+			const unchanged = {
+				id: legacyId,
+				companyName: "Legacy Phone Repairs",
+				email: "legacy@example.com",
+				status: "active" as const,
+			};
+
+			const before = await pool.query(
+				"select phone, updated_at from repair_companies where id = $1",
+				[legacyId],
+			);
+			const updatedAtBefore = new Date(before.rows[0]?.updated_at).getTime();
+
+			await expect(
+				callerFor(ids.adminA).repairCompanies.updateRepairCompany({
+					...unchanged,
+					phone: "555-0142",
+				}),
+			).rejects.toThrow(/10-digit US phone number/);
+
+			const after = await pool.query(
+				"select phone, updated_at from repair_companies where id = $1",
+				[legacyId],
+			);
+			// Refused before the write: the legacy value and its timestamp are as they were.
+			expect(after.rows[0]?.phone).toBe("555-0142");
+			expect(new Date(after.rows[0]?.updated_at).getTime()).toBe(
+				updatedAtBefore,
+			);
+
+			const corrected = await callerFor(
+				ids.adminA,
+			).repairCompanies.updateRepairCompany({
+				...unchanged,
+				phone: "555 014 2000",
+			});
+			expect(corrected.phone).toBe("(555) 014-2000");
+
+			const cleared = await callerFor(
+				ids.adminA,
+			).repairCompanies.updateRepairCompany({ ...unchanged, phone: null });
+			expect(cleared.phone).toBeNull();
 		});
 
 		it("logs a status change on its own line, on top of the update line", async () => {
@@ -604,7 +682,7 @@ describeDb("repair company procedures", () => {
 			await callerFor(ids.adminA).repairCompanies.updateRepairCompany({
 				id: created.id,
 				companyName: "Tried To Change Tenant",
-				phone: "555-0105",
+				phone: "+1 555 010 5000",
 				email: created.email,
 				status: created.status,
 				waterPurveyorId: wpB,

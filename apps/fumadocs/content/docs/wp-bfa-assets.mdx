@@ -55,8 +55,10 @@ mispointed row.
 
 Every text field has a maximum length, defined once in
 `packages/api/src/lib/asset-field-limits.ts`. The Zod shapes are built from
-those numbers and the form puts the same ones on its `maxLength` attributes, so
-the browser stops typing exactly where the server stops accepting. None of them
+those numbers and the form checks the same ones inline, so a value over the
+limit is reported at its field (*Must be 100 characters or fewer.*) before it is
+sent — rather than silently cut off, which a `maxLength` attribute does to a
+pasted value. None of them
 is a product rule — the columns are Postgres `text` and neither the PRD nor the
 build plan puts a ceiling on a BIN or an address — they are input hygiene: wide
 enough that no real value meets them, narrow enough that a pasted document does
@@ -66,11 +68,21 @@ not become a row.
 
 The same three required answers, in both places. The form trims before it
 judges, so a BIN of spaces reads as empty exactly as it does in
-`createAssetInput`; the save button stays disabled until a BIN, a service
-address and a valid calendar date are all present, and its tooltip names
-whichever is still missing. The date is round-tripped through `Date` rather than
-pattern-matched, because `2027-02-31` parses to 3 March — the kind of wrong that
-surfaces months later as a reminder that fired on a day nobody chose.
+`createAssetInput`. The save button is never disabled for a missing answer:
+pressing it reveals an inline message under each field that is still missing or
+invalid and moves focus to the first one (the shared
+[inline validation](/docs/design-system#form-validation) pattern). The annual
+test date is typed as `MM/DD/YYYY` or chosen from the calendar picker and sent as the API's `YYYY-MM-DD`; it is
+round-tripped through `Date` rather than pattern-matched, because `02/31/2027`
+would otherwise parse to 3 March — the kind of wrong that surfaces months later
+as a reminder that fired on a day nobody chose. The serial number stays free
+text; only its length is checked.
+
+A duplicate BIN is the one server refusal with a field of its own: `CONFLICT`
+from `createAsset`/`updateAsset` is shown under the BIN input with the same
+`aria-invalid`/`aria-describedby` wiring as a client-side error, and clears as
+soon as the BIN is edited. Any other refusal is a form-level message above the
+buttons — never a toast.
 
 None of that is the boundary. Everything the form refuses, `createAssetInput` /
 `updateAssetInput` refuse again, and the client half exists only so a request
@@ -224,6 +236,11 @@ that second press sends the acknowledgement. The order of the checks matters
 too: the already-attached case is decided *before* the suspension gate, so a
 customer suspended after they were attached does not turn a re-save into a
 confirmation prompt for a change nobody is making.
+
+**Attach customer** is not disabled while nothing is chosen: pressing it puts
+*Choose a customer to attach.* under the picker and focuses it. A refusal from
+`assignCustomer` is shown inside the dialog above its buttons, not as a toast,
+and is cleared when the dialog closes.
 
 An assignment made this way logs `to_customer_suspended: true` — the line that
 explains why an asset's notices went quiet from that date.

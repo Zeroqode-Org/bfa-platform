@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { DATE_MESSAGE, EMAIL_MESSAGE } from "@bfa-platform/ui/lib/validation";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,8 +13,8 @@ import {
 import type { Customer } from "./customer-types";
 
 /**
- * The customer form: what it sends, and when the agricultural renewal date
- * appears at all.
+ * The customer form: what it sends, what it refuses inline before sending, and
+ * when the agricultural renewal date appears at all.
  *
  * The payload builder is exercised directly rather than only through the DOM —
  * it is where the rule that a standard customer carries no renewal date lives
@@ -53,6 +54,18 @@ function renderForm(props: Partial<Parameters<typeof CustomerForm>[0]> = {}) {
 	return { onSubmit, onCancel };
 }
 
+async function chooseAgricultural() {
+	fireEvent.click(screen.getByLabelText("Rate category"));
+
+	// Base UI commits an option on the pointer sequence, not on a bare click.
+	const option = await screen.findByRole("option", { name: "Agricultural" });
+	fireEvent.pointerDown(option);
+	fireEvent.pointerUp(option);
+	fireEvent.click(option);
+
+	return screen.findByLabelText("AG renewal date");
+}
+
 afterEach(() => {
 	cleanup();
 });
@@ -66,19 +79,19 @@ describe("buildCustomerPayload", () => {
 				email: "marta@example.com",
 				// Left over from a moment on the agricultural rate — dropped, because
 				// the server refuses a date on a standard customer.
-				agRenewalDate: "2027-03-01",
+				agRenewalDate: "03/01/2027",
 			}),
 		).toMatchObject({ rateCategory: "standard", agRenewalDate: null });
 	});
 
-	it("keeps the renewal date for an agricultural customer", () => {
+	it("sends an agricultural customer's MM/DD/YYYY renewal date as the API's ISO day", () => {
 		expect(
 			buildCustomerPayload({
 				...emptyCustomerValues,
 				name: "Ridgeline Orchards",
 				email: "billing@ridgeline.example",
 				rateCategory: "agricultural",
-				agRenewalDate: "2027-03-01",
+				agRenewalDate: "03/01/2027",
 			}),
 		).toMatchObject({
 			rateCategory: "agricultural",
@@ -119,9 +132,33 @@ describe("customerToFormValues", () => {
 			),
 		).toMatchObject({ accountNumber: "", address: "", agRenewalDate: "" });
 	});
+
+	it("shows a stored renewal date as MM/DD/YYYY", () => {
+		expect(
+			customerToFormValues(
+				customer({ rateCategory: "agricultural", agRenewalDate: "2027-03-01" }),
+			).agRenewalDate,
+		).toBe("03/01/2027");
+	});
 });
 
 describe("CustomerForm", () => {
+	it("opts out of browser validation and carries no native constraints", () => {
+		renderForm({
+			initialValues: customerToFormValues(
+				customer({ rateCategory: "agricultural", agRenewalDate: "2027-03-01" }),
+			),
+		});
+
+		const form = screen
+			.getByRole("button", { name: "Add customer" })
+			.closest("form") as HTMLFormElement;
+
+		expect(form.noValidate).toBe(true);
+		expect(form.querySelectorAll("[required]")).toHaveLength(0);
+		expect(form.querySelectorAll('input[type="date"]')).toHaveLength(0);
+	});
+
 	it("submits the typed values as a standard customer", () => {
 		const { onSubmit } = renderForm();
 
@@ -147,6 +184,47 @@ describe("CustomerForm", () => {
 		});
 	});
 
+	it("shows nothing until submitted, then names each missing answer and focuses the first", () => {
+		const { onSubmit } = renderForm();
+
+		expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(
+			screen.getAllByRole("alert").map((node) => node.textContent),
+		).toEqual(["Name is required.", "Email is required."]);
+
+		const name = screen.getByLabelText("Name");
+		expect(document.activeElement).toBe(name);
+		expect(name.getAttribute("aria-invalid")).toBe("true");
+		expect(name.getAttribute("aria-describedby")).toBe(
+			screen.getByText("Name is required.").id,
+		);
+	});
+
+	it("refuses an invalid email and clears the message as soon as it is corrected", () => {
+		const { onSubmit } = renderForm();
+
+		fireEvent.change(screen.getByLabelText("Name"), {
+			target: { value: "Marta Ellison" },
+		});
+		const email = screen.getByLabelText("Email");
+		fireEvent.change(email, { target: { value: "marta@example" } });
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText(EMAIL_MESSAGE)).toBeTruthy();
+		expect(document.activeElement).toBe(email);
+
+		fireEvent.change(email, { target: { value: "marta@example.com" } });
+		expect(screen.queryByText(EMAIL_MESSAGE)).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+	});
+
 	it("hides the AG renewal date on the standard rate", () => {
 		renderForm();
 
@@ -156,18 +234,10 @@ describe("CustomerForm", () => {
 	it("reveals the AG renewal date as soon as the agricultural rate is chosen", async () => {
 		renderForm();
 
-		fireEvent.click(screen.getByLabelText("Rate category"));
-
-		// Base UI commits an option on the pointer sequence, not on a bare click.
-		const option = await screen.findByRole("option", { name: "Agricultural" });
-		fireEvent.pointerDown(option);
-		fireEvent.pointerUp(option);
-		fireEvent.click(option);
-
-		expect(await screen.findByLabelText("AG renewal date")).toBeTruthy();
+		expect(await chooseAgricultural()).toBeTruthy();
 	});
 
-	it("shows the AG renewal date, required, on the agricultural rate", () => {
+	it("shows the AG renewal date as MM/DD/YYYY on the agricultural rate", () => {
 		renderForm({
 			initialValues: customerToFormValues(
 				customer({ rateCategory: "agricultural", agRenewalDate: "2027-03-01" }),
@@ -176,8 +246,53 @@ describe("CustomerForm", () => {
 
 		const field = screen.getByLabelText("AG renewal date") as HTMLInputElement;
 
-		expect(field.value).toBe("2027-03-01");
-		expect(field.required).toBe(true);
+		expect(field.value).toBe("03/01/2027");
+		expect(field.getAttribute("aria-required")).toBe("true");
+	});
+
+	it("requires the renewal date only once the agricultural rate is chosen", async () => {
+		const { onSubmit } = renderForm();
+
+		fireEvent.change(screen.getByLabelText("Name"), {
+			target: { value: "Ridgeline Orchards" },
+		});
+		fireEvent.change(screen.getByLabelText("Email"), {
+			target: { value: "billing@ridgeline.example" },
+		});
+
+		const date = await chooseAgricultural();
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText("AG renewal date is required.")).toBeTruthy();
+		expect(document.activeElement).toBe(date);
+	});
+
+	it("refuses an impossible renewal date", async () => {
+		const { onSubmit } = renderForm();
+
+		fireEvent.change(screen.getByLabelText("Name"), {
+			target: { value: "Ridgeline Orchards" },
+		});
+		fireEvent.change(screen.getByLabelText("Email"), {
+			target: { value: "billing@ridgeline.example" },
+		});
+		const date = await chooseAgricultural();
+		fireEvent.change(date, { target: { value: "02/30/2026" } });
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText(DATE_MESSAGE)).toBeTruthy();
+
+		fireEvent.change(date, { target: { value: "02/28/2027" } });
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				rateCategory: "agricultural",
+				agRenewalDate: "2027-02-28",
+			}),
+		);
 	});
 
 	it("submits an agricultural customer with its renewal date", () => {
@@ -232,7 +347,7 @@ describe("CustomerForm", () => {
 		).toBe(true);
 	});
 
-	it("shows the server's message without clearing what was typed", () => {
+	it("shows the server's message inline without clearing what was typed", () => {
 		renderForm({
 			initialValues: customerToFormValues(customer()),
 			errorMessage: "Customer not found",

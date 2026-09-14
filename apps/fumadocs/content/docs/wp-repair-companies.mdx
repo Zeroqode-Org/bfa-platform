@@ -20,7 +20,7 @@ companies* in the [build plan](/docs/build-plan) and PRD § 6.6.5.
 | Field | Required | Notes |
 |---|---|---|
 | `company_name` | yes | Trimmed; a name of only spaces is empty, not valid |
-| `phone` | no | Blank is stored as NULL, never as `''`; no format is imposed |
+| `phone` | no | Blank is stored as NULL, never as `''`. Otherwise a valid US 10-digit number, stored as `(XXX) XXX-XXXX` — enforced by the input schema, not only the form |
 | `email` | no | Blank is NULL — but an address that *is* given has to be one, lowercased and trimmed |
 | `status` | yes | `active` or `inactive` — see below |
 | `water_purveyor_id` | — | Never sent by the client; derived from the caller |
@@ -29,6 +29,32 @@ Both contact columns are nullable, so a company reachable by phone alone is a
 real record. Optional does not mean unvalidated: an address that is present goes
 into a failure notice, and a typo there is a repair company the customer cannot
 reach — so a blank email collapses to NULL and anything else must parse.
+
+The form checks both contact fields inline before sending, using the shared
+[inline validation](/docs/design-system#form-validation) pattern. Each is
+independently optional. The phone field is masked as `(XXX) XXX-XXXX` while it
+is typed: it takes digits only, adds the parentheses, space and dash as each
+group completes, and stops at ten digits. A pasted `5551234567` or
+`+1 555 123 4567` becomes `(555) 123-4567`; a paste longer than ten digits is
+refused rather than truncated. Pasted or autofilled text containing a letter, an
+extension, any other character or a malformed country code is refused whole —
+the field keeps its value — so the form never turns text like
+`ph: 555-123-4567`, which the server rejects, into a valid number. An incomplete number is never completed — it
+stays as entered under *Please enter a valid 10-digit US phone number.*
+
+The server applies the same rule, so a direct API caller cannot store what the
+form refuses. `createRepairCompanyInput` and `updateRepairCompanyInput` validate
+the phone with `normalizeUsPhone` (`packages/api/src/lib/us-phone.ts`): blank
+or null is no phone; ten digits with ordinary punctuation and an optional `+1`
+or leading `1` are stored in the one canonical spelling `(XXX) XXX-XXXX`; any
+other length, letters, an extension or a malformed value is refused with
+*Enter a valid 10-digit US phone number*. A test in `apps/web` holds the form's
+rule and the server's to the same answers.
+
+No migration rewrites existing rows. A record saved before this rule, with a
+phone in any other shape, cannot be saved unchanged — the update is refused
+until the phone is corrected or cleared. Tenant scoping is unchanged: the
+update still matches on both the row id and the caller's purveyor.
 
 There is no foreign key from `test_submissions` to this table. The failure
 workflow joins on `water_purveyor_id` when it composes the email; it does not

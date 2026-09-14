@@ -1,5 +1,6 @@
 "use client";
 
+import { INVITATION_FIELD_LIMITS } from "@bfa-platform/api/lib/invitation-field-limits";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
 	Dialog,
@@ -10,10 +11,21 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@bfa-platform/ui/components/dialog";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	email,
+	maxLength,
+	required,
+} from "@bfa-platform/ui/lib/validation";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, TriangleAlert } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 
@@ -67,10 +79,21 @@ export function InviteCertifierDialog() {
  * `InviteWpForm` uses.
  */
 export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
-	const emailId = useId();
+	const hintId = useId();
 	const errorId = useId();
 
-	const [email, setEmail] = useState("");
+	const [values, setValues] = useState({ email: "" });
+
+	const validation = useFormValidation({
+		values,
+		rules: {
+			email: composeRules(
+				required("Certifier email is required."),
+				email(),
+				maxLength(INVITATION_FIELD_LIMITS.email),
+			),
+		},
+	});
 
 	const createInvitation = useMutation(
 		trpc.invitations.createInvitation.mutationOptions({
@@ -83,7 +106,7 @@ export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
 				toast.success(`Invitation created for ${invitation.email}`, {
 					description: `They join your water purveyor when the link is redeemed. ${deliveryMessage}`,
 				});
-				setEmail("");
+				setValues({ email: "" });
 				onClose();
 			},
 			// No toast on failure: the message goes inline, next to the field the
@@ -93,9 +116,10 @@ export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (!validation.validate()) return;
 
 		createInvitation.mutate({
-			email,
+			email: values.email,
 			role: "certifier",
 			// No `waterPurveyorId`. The server reads the tenant off the caller's own
 			// profile and refuses a WP role that names one, so there is deliberately
@@ -105,37 +129,36 @@ export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
 	}
 
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+		<form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
 			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={emailId}>Certifier email</Label>
+				<Label htmlFor={validation.fieldId("email")}>Certifier email</Label>
 				<Input
-					id={emailId}
+					{...validation.controlProps("email", {
+						describedBy: [createInvitation.isError ? errorId : null, hintId]
+							.filter(Boolean)
+							.join(" "),
+					})}
 					name="certifierEmail"
 					type="email"
-					value={email}
-					onChange={(event) => setEmail(event.target.value)}
+					value={values.email}
+					onChange={(event) => setValues({ email: event.target.value })}
 					placeholder="tester@example.com"
 					autoComplete="email"
-					aria-describedby={createInvitation.isError ? errorId : undefined}
 					disabled={createInvitation.isPending}
-					required
 				/>
-				<p className="text-[12px] text-muted-foreground">
+				<FieldError {...validation.errorProps("email")} />
+				<p id={hintId} className="text-[12px] text-muted-foreground">
 					A certifier who already works for another purveyor keeps their profile
 					— the link only adds yours.
 				</p>
 			</div>
 
-			{createInvitation.isError ? (
-				<p
-					id={errorId}
-					role="alert"
-					className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-				>
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{createInvitation.error.message}
-				</p>
-			) : null}
+			<FormError
+				id={errorId}
+				message={
+					createInvitation.isError ? createInvitation.error.message : null
+				}
+			/>
 
 			<DialogFooter>
 				<Button

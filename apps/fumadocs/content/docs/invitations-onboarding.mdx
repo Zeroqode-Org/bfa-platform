@@ -443,6 +443,14 @@ measure and pending by the other must not be usable.
 | `new_water_purveyor` | `associated_wp_id` is null | the same as above — the purveyor's name came with the invitation and is shown, not asked for |
 | `existing_certifier` | the address already belongs to a certifier | nothing — one confirm button |
 
+The form checks its fields inline before the server action runs (the shared
+[inline validation](/docs/design-system#form-validation) pattern): every
+requested field is required, the password needs at least 8 characters and a
+matching confirmation, and the license expiration date is typed as `MM/DD/YYYY` or chosen from the calendar picker,
+must be a real calendar day, and is posted to the action as `YYYY-MM-DD`. A
+form that fails those checks never reaches the action; one that passes them and
+is still refused shows the action's message inline, never as a toast.
+
 The mode is decided on the server from the invitation itself and passed into the
 form, so a tampered form cannot ask for a different set of fields than the
 invitation calls for. The action revalidates all of it regardless.
@@ -528,6 +536,15 @@ and only under that flag does `vitest.setup.ts` read `DATABASE_URL` from
 else is using. Setting the flag without a `DATABASE_URL` fails loudly rather
 than skipping — asking for these tests and silently running none of them is the
 wrong answer to a missing variable.
+
+The script also forces `EMAIL_DRIVER=console` for the test process. The suites
+send invitations and broadcasts to fixture addresses such as `@example.com`, and
+a developer's local `EMAIL_DRIVER=provider` would otherwise hand them to Resend,
+which attempts real delivery and rejects those recipients. The override is set
+before Vitest starts and `.env.local` never overwrites a variable that is already
+set, so the configured scratch `DATABASE_URL` is still used while the email
+driver is not. It applies to `npm run test:db` only; the app and production read
+`EMAIL_DRIVER` as configured.
 
 Arguments pass through, so `npm run test:db -- rls` runs just the RLS suite.
 Each suite cleans up its own fixtures; the RLS suite additionally rolls back

@@ -1,6 +1,11 @@
 "use client";
 
-import { AUTOMATED_NOTICE_VARIABLES } from "@bfa-platform/api/lib/notice-variables";
+import { NOTICE_FIELD_LIMITS } from "@bfa-platform/api/lib/notice-field-limits";
+import {
+	AUTOMATED_NOTICE_VARIABLES,
+	templateTextError,
+	variableKeys,
+} from "@bfa-platform/api/lib/notice-variables";
 import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
@@ -17,13 +22,23 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "@bfa-platform/ui/components/empty";
+import {
+	FieldCounter,
+	FieldError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import { Skeleton } from "@bfa-platform/ui/components/skeleton";
 import { Textarea } from "@bfa-platform/ui/components/textarea";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	maxLength,
+	required,
+} from "@bfa-platform/ui/lib/validation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
-import { useId, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { trpc } from "@/utils/trpc";
@@ -41,6 +56,26 @@ import type { NoticeSampleValues } from "./notice-types";
 const PENDING_SAMPLE: NoticeSampleValues = Object.fromEntries(
 	AUTOMATED_NOTICE_VARIABLES.map((variable) => [variable.key, variable.sample]),
 ) as NoticeSampleValues;
+
+const AUTOMATED_KEYS = variableKeys(AUTOMATED_NOTICE_VARIABLES);
+const EMPTY_DRAFT = { subject: "", body: "" };
+
+/**
+ * The server's `templateText` rule, checked at the field: present, within the
+ * limit, and using only placeholders an automated notice can resolve.
+ */
+function templateRule(label: string, max: number) {
+	return composeRules(
+		required(`${label} is required.`),
+		maxLength(max),
+		(value) => templateTextError(value, AUTOMATED_KEYS) ?? undefined,
+	);
+}
+
+const TEMPLATE_RULES = {
+	subject: templateRule("Subject", NOTICE_FIELD_LIMITS.subject),
+	body: templateRule("Message", NOTICE_FIELD_LIMITS.body),
+};
 
 /**
  * The four automated notice templates, and the editor for whichever one is
@@ -62,8 +97,6 @@ const PENDING_SAMPLE: NoticeSampleValues = Object.fromEntries(
  */
 export function NoticeTemplatesEditor({ canEdit }: { canEdit: boolean }) {
 	const queryClient = useQueryClient();
-	const subjectId = useId();
-	const bodyId = useId();
 
 	const templates = useQuery(trpc.notices.listNoticeTemplates.queryOptions());
 	const previewSample = useQuery(
@@ -95,6 +128,18 @@ export function NoticeTemplatesEditor({ canEdit }: { canEdit: boolean }) {
 				body: selected.body,
 			})
 		: null;
+
+	// One validation instance for whichever type is open. "Changed" is measured
+	// against that type's stored text, and switching tabs hides the previous
+	// type's messages rather than carrying them onto different text.
+	const validation = useFormValidation({
+		values: draft ?? EMPTY_DRAFT,
+		initialValues: selected
+			? { subject: selected.subject, body: selected.body }
+			: EMPTY_DRAFT,
+		rules: TEMPLATE_RULES,
+	});
+	const bodyCounterId = `${validation.fieldId("body")}-count`;
 
 	/** Writes an edit for the selected type, leaving the other three alone. */
 	function editSelected(next: { subject: string; body: string }) {
@@ -212,7 +257,10 @@ export function NoticeTemplatesEditor({ canEdit }: { canEdit: boolean }) {
 								aria-selected={active}
 								variant={active ? "default" : "outline"}
 								size="sm"
-								onClick={() => setSelectedType(template.noticeType)}
+								onClick={() => {
+									setSelectedType(template.noticeType);
+									validation.reset();
+								}}
 							>
 								{template.label}
 								{template.isCustomized ? null : (
@@ -250,9 +298,9 @@ export function NoticeTemplatesEditor({ canEdit }: { canEdit: boolean }) {
 							</p>
 
 							<div className="flex flex-col gap-1.5">
-								<Label htmlFor={subjectId}>Subject</Label>
+								<Label htmlFor={validation.fieldId("subject")}>Subject</Label>
 								<Input
-									id={subjectId}
+									{...validation.controlProps("subject")}
 									ref={insertion.subjectRef}
 									name="subject"
 									value={draft.subject}
@@ -262,12 +310,15 @@ export function NoticeTemplatesEditor({ canEdit }: { canEdit: boolean }) {
 										editSelected({ ...draft, subject: event.target.value })
 									}
 								/>
+								<FieldError {...validation.errorProps("subject")} />
 							</div>
 
 							<div className="flex flex-col gap-1.5">
-								<Label htmlFor={bodyId}>Message</Label>
+								<Label htmlFor={validation.fieldId("body")}>Message</Label>
 								<Textarea
-									id={bodyId}
+									{...validation.controlProps("body", {
+										describedBy: bodyCounterId,
+									})}
 									ref={insertion.bodyRef}
 									name="body"
 									rows={12}
@@ -278,6 +329,12 @@ export function NoticeTemplatesEditor({ canEdit }: { canEdit: boolean }) {
 									onChange={(event) =>
 										editSelected({ ...draft, body: event.target.value })
 									}
+								/>
+								<FieldError {...validation.errorProps("body")} />
+								<FieldCounter
+									id={bodyCounterId}
+									length={draft.body.trim().length}
+									max={NOTICE_FIELD_LIMITS.body}
 								/>
 							</div>
 
@@ -296,13 +353,15 @@ export function NoticeTemplatesEditor({ canEdit }: { canEdit: boolean }) {
 									<Button
 										type="button"
 										disabled={saving || unchanged}
-										onClick={() =>
+										onClick={() => {
+											if (!validation.validate()) return;
+
 											saveTemplate.mutate({
 												noticeType: selected.noticeType,
 												subject: draft.subject,
 												body: draft.body,
-											})
-										}
+											});
+										}}
 									>
 										{saving ? "Saving…" : "Save template"}
 									</Button>

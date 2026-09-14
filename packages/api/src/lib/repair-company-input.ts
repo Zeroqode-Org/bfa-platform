@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { REPAIR_COMPANY_FIELD_LIMITS } from "./repair-company-field-limits";
+import { normalizeUsPhone, US_PHONE_MESSAGE } from "./us-phone";
+
 /**
  * Input shapes for the repair-company procedures.
  *
@@ -14,18 +17,35 @@ import { z } from "zod";
  */
 
 /**
- * Optional free text. A form that has been typed into and cleared sends `""`,
- * not `undefined`, and storing that would give the column two spellings of
- * "empty" — so blank collapses to NULL here rather than in each caller.
+ * Optional US phone number.
+ *
+ * Blank, whitespace and null all mean "no phone" and collapse to NULL, the same
+ * as the other optional fields — a company reachable by email alone is a real
+ * record. Anything else has to be a valid 10-digit US number and is stored as
+ * `(XXX) XXX-XXXX` (see `us-phone.ts`); every other value is refused.
+ *
+ * The update shape uses the same rule, so a row saved before it — a legacy
+ * phone like `555-0142` — cannot be saved again unchanged: the edit has to
+ * correct the number or clear it. No migration rewrites existing rows; they
+ * are corrected the next time somebody saves them.
  */
-function optionalText(max: number) {
-	return z
-		.string()
-		.trim()
-		.max(max)
-		.nullish()
-		.transform((value) => value || null);
-}
+const optionalUsPhone = z
+	.string()
+	.trim()
+	.max(REPAIR_COMPANY_FIELD_LIMITS.phone)
+	.nullish()
+	.transform((value, ctx) => {
+		if (!value) return null;
+
+		const phone = normalizeUsPhone(value);
+
+		if (phone === null) {
+			ctx.addIssue({ code: "custom", message: US_PHONE_MESSAGE });
+			return z.NEVER;
+		}
+
+		return phone;
+	});
 
 /**
  * Optional email, validated only once there is something to validate.
@@ -46,13 +66,22 @@ const optionalEmail = z
 	.toLowerCase()
 	.nullish()
 	.transform((value) => value || null)
-	.pipe(z.email("Enter a valid email address").max(254).nullable());
+	.pipe(
+		z
+			.email("Enter a valid email address")
+			.max(REPAIR_COMPANY_FIELD_LIMITS.email)
+			.nullable(),
+	);
 
 const repairCompanyFields = {
 	// Trimmed before the length check, so a name of nothing but spaces is empty
 	// rather than valid.
-	companyName: z.string().trim().min(1, "Company name is required").max(200),
-	phone: optionalText(50),
+	companyName: z
+		.string()
+		.trim()
+		.min(1, "Company name is required")
+		.max(REPAIR_COMPANY_FIELD_LIMITS.companyName),
+	phone: optionalUsPhone,
 	email: optionalEmail,
 	// `inactive` is the deactivation the screen offers. There is no third state
 	// and no deletion: a company that stops being approved keeps its row.

@@ -74,6 +74,73 @@ Two font families, split by role — not by section:
 
 **Inputs** — `1px solid #D5DBE1`, radius 8px, `10px 12px` padding, 14px text. Read-only/auto-filled fields (e.g. BIN-found assembly details) get a flat `#E7EBEF` background with `#687A8D` text instead of a disabled look.
 
+### Form validation
+
+Every form, dialog and inline editor reports field problems the same way, and
+never through the browser's own validation popups or a toast.
+
+- **Pieces.** `useFormValidation` (`packages/ui/src/hooks/use-form-validation.ts`)
+  tracks which fields' errors are visible and wires ids; `FieldError`,
+  `FormError` and `FieldCounter` (`packages/ui/src/components/field-message.tsx`)
+  render them; `DateInput` (typed date plus calendar picker) and `PhoneInput` are
+  the date and phone controls; the rules (`required`, `email`, `usPhone`, `usDate`,
+  `usDateNotBefore`, `maxLength`, `composeRules`) live in
+  `packages/ui/src/lib/validation.ts`.
+- **Look.** An invalid control gets the existing `aria-invalid` styling on
+  `Input`, `Textarea` and the Base UI `SelectTrigger` (danger border and ring).
+  Its message sits directly under the control: 12px danger text with a
+  `TriangleAlert` icon. A refusal that belongs to no single field is a
+  `FormError` strip (danger tint) above the buttons.
+- **Semantics.** Forms set `noValidate` and carry no `required`, `minLength`,
+  `maxLength` or `type="date"` constraints. The control points at its message
+  with `aria-describedby` (alongside any hint it already had) and the message is
+  `role="alert"`.
+- **Timing.** Nothing shows when a form opens. Leaving a field that was changed
+  reveals its problem; submitting reveals every problem and focuses the first
+  invalid control. A revealed message follows the value — it clears on the
+  keystroke that fixes it and is never left stale. Missing answers never
+  disable the submit button; pressing it explains what is missing.
+- **Formats.** Emails need a reasonable address shape (*Please enter a valid
+  email address.*). US phones are ten digits, masked as `(XXX) XXX-XXXX` while
+  typed (see *Phone mask* below). Dates are `MM/DD/YYYY` — all four year
+  digits, a two-digit year is refused rather than guessed — must be real
+  calendar days, are rewritten in that exact spelling on blur (`2/3/2027` →
+  `02/03/2027`), and are converted to `YYYY-MM-DD` only at the API boundary.
+- **Date mask.** `DateInput` masks entry as `MM/DD/YYYY`: only digits are
+  accepted from the keyboard and paste, slashes appear after the month and day,
+  and the text stops at eight digits (ten characters). Backspace, Delete,
+  selection replacement and paste edit the digits and keep the caret where the
+  person was working; a pasted `2/3/2027` is padded to `02/03/2027`. The mask
+  shapes text only — `02/30/2026` stays as entered and the inline date error
+  explains it.
+- **Phone mask.** `PhoneInput` masks entry as `(XXX) XXX-XXXX` on the same
+  digit-mask model (`packages/ui/src/lib/digit-mask.ts`): only digits from the
+  keyboard or paste, separators added as each group completes, at most ten
+  digits, with Backspace, Delete, selection replacement and the caret behaving
+  as for dates. A pasted or autofilled `5551234567` or `+1 555 123 4567` becomes
+  `(555) 123-4567`; a paste that would exceed ten digits is refused rather than
+  cut down. Pasted or autofilled text is held to the server's character rule:
+  anything with a letter, an extension (`x12`, `ext. 12`), another character or
+  a malformed country code (`+2 …`, `+44 …`) is refused whole and the field is
+  left unchanged — forbidden characters are never stripped into a valid number. An incomplete number stays as entered with the inline phone error.
+  Only phone fields are masked — email and address fields stay free text with
+  their existing inline rules.
+- **Date picker.** `DateInput` pairs the typed field with a calendar button
+  (Base UI `Popover`, no extra dependency) following the WAI-ARIA date picker
+  dialog pattern: the button and dialog are named by `pickerLabel` (for example
+  *Choose annual test date*); focus opens on the selected day or today; the
+  days are a grid with a roving tab stop — arrows move by day or week,
+  Home/End to the week's ends, Page Up/Down by month (Shift for a year), Enter
+  or Space chooses; Escape or choosing a day closes it and returns focus to the
+  button. Choosing a day writes `MM/DD/YYYY` into the field. Day arithmetic uses
+  UTC fields only, so no day shifts across time zones. Length limits
+  come from the same constants the Zod schemas use; long-text fields (notice and
+  broadcast messages) also show a character counter.
+- **Server errors.** Still the boundary. A refusal that maps reliably to one
+  field (a duplicate BIN) is shown at that field; anything else is a
+  `FormError`. Toasts are for successful operations and for row actions with no
+  form to report into.
+
 **Modal** — centered, white, radius 12px, `24px` padding, backdrop `rgba(16,24,40,0.45)`. Click-outside-to-close via a backdrop click handler that stops propagation from the modal body.
 
 **Wizard progress** — a row of thin (5px) rounded segments, one per step, filled `#1588C1` up to the current step, `0.5` opacity for the remainder. Step label underneath in 12px muted text ("Step 3 of 6 · Test readings").

@@ -359,6 +359,14 @@ A badge says *Customized* or *Platform default*; **Reset to platform default**
 loads the platform's text back into the editor without writing anything, since
 saving is still what writes.
 
+Both composers check the text inline before it is sent, using the server's own
+rules: subject and message are required, within `NOTICE_FIELD_LIMITS` (200 and
+5,000 characters, from `packages/api/src/lib/notice-field-limits.ts`), and use
+only the placeholders that composer supports. A problem is shown under its field
+and focus moves to it; the message field also shows a character counter. The
+send button is not disabled for missing text — pressing it says what is missing.
+A refusal from the server is an inline strip, never a toast.
+
 **General info broadcast.** Recipient select, subject, message, the two-variable
 panel and a preview. The audience and its size are shown before anything is
 sent, and the send button itself reads *Send to N recipients*. Success, delivery
@@ -403,6 +411,12 @@ npm test
 ```bash
 npm run test:db
 ```
+
+`npm run test:db` forces `EMAIL_DRIVER=console` for the test process, so the
+broadcast suites never attempt live delivery to their fixture customers,
+whatever the local environment sets; they still run against the configured
+scratch `DATABASE_URL` (see
+[Invitations and Onboarding](/docs/invitations-onboarding#tests)).
 
 The two database suites seed two purveyors with deliberately interchangeable
 templates and customers — same names, same text — so a leak between them looks
