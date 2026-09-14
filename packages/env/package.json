@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./app-url": "./src/app-url.ts",
 		"./server": "./src/server.ts",
 		"./web": "./src/web.ts"
 	},

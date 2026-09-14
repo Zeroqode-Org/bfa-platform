@@ -1,5 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
+import { resolveAppBaseUrl } from "@bfa-platform/env/app-url";
+
 /**
  * Invite tokens.
  *
@@ -54,16 +56,18 @@ export function invitationSecretMatches(
 }
 
 /**
- * Absolute base URL for links in outbound mail.
+ * Absolute base URL for links in outbound mail: `APP_URL`, then Vercel's
+ * `VERCEL_PROJECT_PRODUCTION_URL`, then `http://localhost:3001`. The order and
+ * the validation live in `@bfa-platform/env/app-url`.
  *
- * From the environment, never hardcoded, with a localhost default so the console
- * driver prints a link a developer can click without configuring anything. The
- * dev port matches `apps/web`'s `next dev --port 3001`.
+ * Read off `process.env` rather than the validated server env, so this module
+ * stays importable by unit suites without every server variable. The same
+ * validation runs at startup through `packages/env/src/server.ts`; it runs again
+ * here so a `SKIP_ENV_VALIDATION` run still refuses a bad URL instead of mailing
+ * it. Never derived from request headers.
  */
 export function appBaseUrl(): string {
-	const configured = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL;
-
-	return (configured ?? "http://localhost:3001").replace(/\/+$/, "");
+	return resolveAppBaseUrl(process.env);
 }
 
 /** The URL an invitee opens. Carries the secret, not the stored digest. */
