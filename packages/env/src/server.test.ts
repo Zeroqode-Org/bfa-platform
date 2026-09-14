@@ -13,6 +13,9 @@ async function loadEnv(overrides: Record<string, string | undefined>) {
 	vi.stubEnv("RESEND_API_KEY", undefined);
 	vi.stubEnv("RESEND_FROM_EMAIL", undefined);
 	vi.stubEnv("RESEND_REPLY_TO", undefined);
+	vi.stubEnv("APP_URL", undefined);
+	vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
+	vi.stubEnv("VERCEL_PROJECT_PRODUCTION_URL", undefined);
 
 	for (const [key, value] of Object.entries(overrides)) {
 		vi.stubEnv(key, value);
@@ -104,6 +107,47 @@ describe("email configuration", () => {
 	])("refuses %s", async (_label, invalid) => {
 		await expect(loadEnv({ ...provider, ...invalid })).rejects.toThrow(
 			"Invalid environment variables",
+		);
+	});
+});
+
+describe("app base URL configuration", () => {
+	it("needs neither APP_URL nor VERCEL_PROJECT_PRODUCTION_URL", async () => {
+		const env = await loadEnv({});
+
+		expect(env.APP_URL).toBeUndefined();
+		expect(env.NEXT_PUBLIC_APP_URL).toBeUndefined();
+		expect(env.VERCEL_PROJECT_PRODUCTION_URL).toBeUndefined();
+	});
+
+	it("accepts an http(s) APP_URL and a bare Vercel hostname", async () => {
+		const env = await loadEnv({
+			APP_URL: "https://app.example.com/",
+			VERCEL_PROJECT_PRODUCTION_URL: "example.com",
+		});
+
+		expect(env.APP_URL).toBe("https://app.example.com/");
+		expect(env.VERCEL_PROJECT_PRODUCTION_URL).toBe("example.com");
+	});
+
+	it.each([
+		["APP_URL", "javascript:alert(1)", "must use http: or https:"],
+		["APP_URL", "/invite", "must be an absolute http(s) URL"],
+		["NEXT_PUBLIC_APP_URL", "javascript:alert(1)", "must use http: or https:"],
+		["VERCEL_PROJECT_PRODUCTION_URL", "https://example.com", "bare hostname"],
+	])("refuses %s=%s at startup", async (key, value, message) => {
+		await expect(loadEnv({ [key]: value })).rejects.toThrow(
+			"Invalid environment variables",
+		);
+
+		expect(console.error).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.arrayContaining([
+				expect.objectContaining({
+					path: [key],
+					message: expect.stringContaining(message),
+				}),
+			]),
 		);
 	});
 });

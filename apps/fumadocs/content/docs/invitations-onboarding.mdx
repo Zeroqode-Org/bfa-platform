@@ -220,9 +220,12 @@ outside `email.ts`".
 | `RESEND_API_KEY` | when `EMAIL_DRIVER=provider` | — | Resend API key (`re_…`). Server-only secret |
 | `RESEND_FROM_EMAIL` | when `EMAIL_DRIVER=provider` | — | Sender, as `address@domain` or `Display Name <address@domain>` on a verified domain |
 | `RESEND_REPLY_TO` | when `EMAIL_DRIVER=provider` | — | Plain email address replies are sent to — `info@backflowreporter.io` in production |
-| `APP_URL` / `NEXT_PUBLIC_APP_URL` | no | `http://localhost:3001` | Base URL for links in outbound mail |
+| `APP_URL` | no | — | Explicit base URL for links in outbound mail. Portable override for Docker, any other host, or a Vercel project that needs a different domain |
+| `NEXT_PUBLIC_APP_URL` | no | — | **Legacy.** Kept temporarily for backward compatibility; used when `APP_URL` is not set. Do not use in new configuration |
+| `VERCEL_PROJECT_PRODUCTION_URL` | no | — | Set by Vercel itself. Used when neither `APP_URL` nor `NEXT_PUBLIC_APP_URL` is set |
 
-The four email variables are validated in `packages/env/src/server.ts`.
+The email variables and both URL variables are validated in
+`packages/env/src/server.ts`.
 **Console remains the default**, and it needs neither Resend variable, so CI, a
 fresh clone and every environment that has not opted in keep working with none
 of them set. Real delivery happens **only** where `EMAIL_DRIVER=provider` is set
@@ -238,6 +241,60 @@ The Resend variables never take a `NEXT_PUBLIC_` prefix — they are read only b
 server code and must not reach a browser bundle. Locally they live in
 `apps/web/.env.local`; in a deployment they are set as environment variables.
 `EMAIL_DRIVER=provider` is not set in any deployment yet.
+
+### Links in outbound mail
+
+`packages/env/src/app-url.ts` — `resolveAppBaseUrl`, called by `appBaseUrl()`
+and `buildInviteLink()` in `packages/api/src/lib/invitation-token.ts`.
+
+Every link in an email is an absolute `http(s)` URL built on one base URL,
+chosen from configuration in this order:
+
+1. **`APP_URL`**, when set. The explicit, portable override — use it for Docker
+   and every host other than Vercel, or on Vercel to pin a domain other than the
+   project's production one.
+2. **`NEXT_PUBLIC_APP_URL`**, when `APP_URL` is not set — **legacy**, kept
+   temporarily so environments that already set it keep their links. New
+   configuration should set only `APP_URL`; this fallback will be removed once
+   existing environments have moved over.
+3. **`VERCEL_PROJECT_PRODUCTION_URL`**, when neither of the above is set. Vercel
+   provides it as a bare hostname, so `https://` is prepended. It is the
+   project's production domain, which is why a domain change reaches the links
+   without anyone editing a variable.
+4. **`http://localhost:3001`**, only when none is set — a fresh clone, tests
+   and CI. The port is `apps/web`'s dev server.
+
+An empty value counts as unset. A trailing `/` is dropped, so a base of
+`https://app.example.com/` still yields `https://app.example.com/invite/…`.
+
+**A value that is set but invalid stops the app** rather than falling through to
+the next source. `APP_URL` (and the legacy `NEXT_PUBLIC_APP_URL`, under the same
+rules) must be an absolute `http:` or `https:` URL with a hostname and no
+credentials, query string or fragment — `javascript:`, a
+relative path or a bare hostname are refused. `VERCEL_PROJECT_PRODUCTION_URL`
+must be a bare hostname, as Vercel sends it. Both are checked by env validation
+at startup, and again every time a link is built, so a `SKIP_ENV_VALIDATION`
+run throws before a send instead of mailing a bad link.
+
+Two sources are **deliberately not used**:
+
+- **`VERCEL_URL`** — the URL of one specific deployment, previews included. A
+  link to it can land a recipient on a stale build or behind Vercel's
+  deployment protection.
+- **Request headers** — `Host` and `X-Forwarded-Host` are chosen by whoever sends
+  the request, so building a link from them is a host-header injection, and
+  background jobs have no request to read.
+
+`NEXT_PUBLIC_APP_URL` is read only from the server's environment, for backward
+compatibility. This is server-only configuration and nothing in a browser
+bundle needs it, so when touching an environment, move the value to `APP_URL`.
+
+**Vercel setup.** Vercel only passes `VERCEL_PROJECT_PRODUCTION_URL` to the app
+when the project exposes its system variables: in the Vercel Dashboard, open
+the project's **Settings → Environment Variables** and enable **Automatically
+expose System Environment Variables**, then redeploy production. Without that
+setting, and without `APP_URL` or `NEXT_PUBLIC_APP_URL`, a Vercel deployment falls back to localhost
+links. The code uses no Vercel runtime API: the variable is read like any other.
 
 ### The shared email layout
 
@@ -482,10 +539,10 @@ every statement it makes, so nothing it does survives itself.
 | `packages/api/src/routers/invitations.test.ts` | yes | `createInvitation` end to end — Zod validation, role permissions, the stored digest, the printed link |
 | `packages/api/src/lib/invitation-redemption.test.ts` | yes | invalid / expired / redeemed tokens, successful redemption for each mode, the existing-certifier second-WP path, rollback, and two concurrent redemptions |
 | `packages/api/src/lib/email.test.ts` | no | the console driver's payload; the provider driver against a mocked Resend — payload mapping, returned id, refused sends and missing ids thrown, missing credentials refused before a request; driver selection; the send-attempt log line for sent and failed attempts |
-| `packages/env/src/server.test.ts` | no | email env validation — `console` default with no credentials, and `provider` refused without, or with malformed, Resend variables |
+| `packages/env/src/server.test.ts` | no | email env validation — `console` default with no credentials, and `provider` refused without, or with malformed, Resend variables; `APP_URL`, `NEXT_PUBLIC_APP_URL` and `VERCEL_PROJECT_PRODUCTION_URL` optional, and refused at startup when malformed |
 | `packages/api/src/lib/email-layout.test.ts` | no | the shared email shell — header, body and footer, one `<h1>`, no remote resources or tracking, escaped title and heading, the CTA and its visible fallback URL, refused non-http(s) links |
 | `packages/api/src/lib/invitations.test.ts` | no | the tenant-authorization matrix, the invitation state machine, and the invite email — sent inside the shared layout, heading → CTA → fallback URL → expiry in order, a readable UTC expiry, and escaped purveyor names and links |
-| `packages/api/src/lib/invitation-token.test.ts` | no | digest, entropy, uniqueness, link shape |
+| `packages/api/src/lib/invitation-token.test.ts` | no | digest, entropy, uniqueness, link shape; base URL order (`APP_URL`, then legacy `NEXT_PUBLIC_APP_URL`, then `VERCEL_PROJECT_PRODUCTION_URL`, then localhost), `VERCEL_URL` ignored, trailing slashes, refused schemes and relative URLs |
 | `apps/web/src/components/admin/invite-wp-dialog.test.tsx` | no | the invite-new-WP form — what it sends, its pending state, the honest success message, and a refused call leaving the dialog open |
 
 The RLS suite runs as the `authenticated` role because the application itself

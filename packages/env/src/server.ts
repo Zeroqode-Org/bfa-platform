@@ -2,6 +2,22 @@ import "dotenv/config";
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
+import { normalizeAppUrl, normalizeVercelProductionUrl } from "./app-url";
+
+/**
+ * A string that `normalize` accepts. The normalizer's own message becomes the
+ * issue, so startup reports the same reason a link builder would throw with.
+ */
+function urlVariable(normalize: (value: string) => string) {
+	return z.string().superRefine((value, ctx) => {
+		try {
+			normalize(value.trim());
+		} catch (error) {
+			ctx.addIssue({ code: "custom", message: (error as Error).message });
+		}
+	});
+}
+
 /**
  * Resend's `from` accepts a bare address or `Display Name <address>`; anything
  * else is refused by the API, so it is refused here first.
@@ -29,6 +45,20 @@ export const env = createEnv({
 			.startsWith("re_", { message: "must be a Resend API key (re_…)" })
 			.optional(),
 		RESEND_FROM_EMAIL: senderAddress.optional(),
+		// Base URL for links in outbound mail — see `./app-url` for the order.
+		// Both optional: unset everywhere means `http://localhost:3001`, which is
+		// what local development, tests and CI want. Set but invalid fails here.
+		APP_URL: urlVariable(normalizeAppUrl).optional(),
+		// Legacy spelling of APP_URL, kept temporarily so existing environments
+		// keep their links. Validated the same way; new configuration uses APP_URL.
+		NEXT_PUBLIC_APP_URL: urlVariable((value) =>
+			normalizeAppUrl(value, "NEXT_PUBLIC_APP_URL"),
+		).optional(),
+		// Provided by Vercel as a bare hostname, and only when the project has
+		// "Automatically expose System Environment Variables" switched on.
+		VERCEL_PROJECT_PRODUCTION_URL: urlVariable(
+			normalizeVercelProductionUrl,
+		).optional(),
 		// Where a recipient's reply goes. Provider configuration, not message data:
 		// every transactional email shares one monitored mailbox.
 		RESEND_REPLY_TO: z
