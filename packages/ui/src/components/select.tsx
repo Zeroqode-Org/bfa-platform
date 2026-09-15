@@ -121,7 +121,16 @@ function SelectItem({
 	);
 }
 
+/**
+ * The placeholder a select shows while nothing is chosen. A select for a value a
+ * person must actually decide — a status, a type, a rate — opens on this rather
+ * than on its first option, so an untouched field reads as unanswered instead of
+ * as a silent default.
+ */
+const SELECT_PLACEHOLDER = "Select…";
+
 export {
+	SELECT_PLACEHOLDER,
 	Select,
 	SelectContent,
 	SelectGroup,

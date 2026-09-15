@@ -2,6 +2,7 @@
 
 import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
+import { DateInput } from "@bfa-platform/ui/components/date-input";
 import {
 	Dialog,
 	DialogBody,
@@ -17,7 +18,7 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "@bfa-platform/ui/components/empty";
-import { Input } from "@bfa-platform/ui/components/input";
+import { FieldError } from "@bfa-platform/ui/components/field-message";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
 	Select,
@@ -36,13 +37,19 @@ import {
 	TableHeader,
 	TableRow,
 } from "@bfa-platform/ui/components/table";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	usDate,
+	usDateNotBefore,
+	usDateToIso,
+} from "@bfa-platform/ui/lib/validation";
 import {
 	keepPreviousData,
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
 import { FileText, TriangleAlert } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { trpc } from "@/utils/trpc";
 
@@ -109,8 +116,6 @@ export function SubmittedTestsTable({
 	initialSubmissionId?: string;
 } = {}) {
 	const queryClient = useQueryClient();
-	const fromId = useId();
-	const toId = useId();
 
 	const [page, setPage] = useState(1);
 	const [result, setResult] = useState<ResultFilter>("all");
@@ -120,10 +125,27 @@ export function SubmittedTestsTable({
 		initialSubmissionId ?? null,
 	);
 
+	// The boxes hold `MM/DD/YYYY` text; the procedure takes ISO days. A blank box
+	// is no bound. A box holding something that is not a real date is neither a
+	// bound nor "no bound" — dropping it would quietly widen the list — so
+	// nothing is asked until it is fixed, and its own message says why.
+	const fromIso = from.trim() ? usDateToIso(from) : undefined;
+	const toIso = to.trim() ? usDateToIso(to) : undefined;
+	const rangeHasInvalidDate = fromIso === null || toIso === null;
+
 	// A range typed backwards is a typo, and the server refuses it. Catching it
 	// here keeps the screen from reporting a validation error as a failed
 	// request, and says which of the two boxes is the problem.
-	const rangeIsBackwards = Boolean(from && to && from > to);
+	const rangeIsBackwards = Boolean(fromIso && toIso && fromIso > toIso);
+
+	const rangeValidation = useFormValidation({
+		values: { from, to },
+		rules: {
+			from: usDate(),
+			to: (value, range) =>
+				usDate()(value) ?? usDateNotBefore(range.from)(value),
+		},
+	});
 
 	// A narrowed list is a different list: staying on page 4 of it would show an
 	// empty page and read as "no tests".
@@ -139,14 +161,14 @@ export function SubmittedTestsTable({
 					page,
 					pageSize: PAGE_SIZE,
 					result: result === "all" ? undefined : (result as SubmissionResult),
-					from: from || undefined,
-					to: to || undefined,
+					from: fromIso ?? undefined,
+					to: toIso ?? undefined,
 				},
 				{
 					// Keeps the previous page on screen while the next one loads, so
 					// paging does not blink the whole table back to skeletons.
 					placeholderData: keepPreviousData,
-					enabled: !rangeIsBackwards,
+					enabled: !rangeIsBackwards && !rangeHasInvalidDate,
 				},
 			),
 		);
@@ -171,6 +193,7 @@ export function SubmittedTestsTable({
 		setResult("all");
 		setFrom("");
 		setTo("");
+		rangeValidation.reset();
 	}
 
 	async function refreshAfterChange() {
@@ -217,32 +240,36 @@ export function SubmittedTestsTable({
 					</Select>
 				</div>
 
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={fromId} className="text-[12px] text-muted-foreground">
+				<div className="flex w-[170px] flex-col gap-1.5">
+					<Label
+						htmlFor={rangeValidation.fieldId("from")}
+						className="text-[12px] text-muted-foreground"
+					>
 						Tested from
 					</Label>
-					<Input
-						id={fromId}
-						type="date"
+					<DateInput
+						pickerLabel="Choose tested-from date"
+						{...rangeValidation.controlProps("from")}
 						value={from}
-						max={to || undefined}
-						onChange={(event) => setFrom(event.target.value)}
-						className="w-[170px]"
+						onValueChange={setFrom}
 					/>
+					<FieldError {...rangeValidation.errorProps("from")} />
 				</div>
 
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={toId} className="text-[12px] text-muted-foreground">
+				<div className="flex w-[170px] flex-col gap-1.5">
+					<Label
+						htmlFor={rangeValidation.fieldId("to")}
+						className="text-[12px] text-muted-foreground"
+					>
 						Tested to
 					</Label>
-					<Input
-						id={toId}
-						type="date"
+					<DateInput
+						pickerLabel="Choose tested-to date"
+						{...rangeValidation.controlProps("to")}
 						value={to}
-						min={from || undefined}
-						onChange={(event) => setTo(event.target.value)}
-						className="w-[170px]"
+						onValueChange={setTo}
 					/>
+					<FieldError {...rangeValidation.errorProps("to")} />
 				</div>
 
 				{hasFilters ? (

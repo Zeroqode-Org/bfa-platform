@@ -9,6 +9,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@bfa-platform/ui/components/card";
+import { DateInput } from "@bfa-platform/ui/components/date-input";
 import {
 	Empty,
 	EmptyDescription,
@@ -16,7 +17,7 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "@bfa-platform/ui/components/empty";
-import { Input } from "@bfa-platform/ui/components/input";
+import { FieldError } from "@bfa-platform/ui/components/field-message";
 import { Label } from "@bfa-platform/ui/components/label";
 import { Skeleton } from "@bfa-platform/ui/components/skeleton";
 import {
@@ -24,6 +25,16 @@ import {
 	StatCardSkeleton,
 	type StatCardTone,
 } from "@bfa-platform/ui/components/stat-card";
+import {
+	useFormValidation,
+	type ValidationRules,
+} from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	isoToUsDate,
+	usDate,
+	usDateNotBefore,
+	usDateToIso,
+} from "@bfa-platform/ui/lib/validation";
 import { useQuery } from "@tanstack/react-query";
 import {
 	CalendarCheck,
@@ -34,7 +45,7 @@ import {
 	TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
-import { useId, useState } from "react";
+import { useState } from "react";
 
 import { trpc } from "@/utils/trpc";
 
@@ -55,7 +66,6 @@ import {
 	formatCount,
 	formatDay,
 	formatMonth,
-	isCalendarDate,
 	submittedTestHref,
 } from "./dashboard-types";
 import {
@@ -85,22 +95,21 @@ import {
  * recorded in the docs.
  */
 export function WpDashboard({ today }: { today: string }) {
-	const fromId = useId();
-	const toId = useId();
-
 	// Seeded from the server's `today` rather than from the browser clock: this
 	// component renders on the server first, and a default computed from
 	// `new Date()` would be computed twice, a moment apart, either side of the
-	// hydration boundary.
-	const [range, setRange] = useState(() => defaultBreakdownRange(today));
+	// hydration boundary. Held as the `MM/DD/YYYY` text in the boxes; the ISO days
+	// the procedure takes are derived from it below.
+	const [range, setRange] = useState(() => displayedBreakdownRange(today));
 
 	// Two ways a range can be unusable, and they are different problems with
 	// different answers, so the screen tells them apart.
 	//
-	// *Incomplete* is a cleared box — an ordinary step on the way to typing a
-	// different date. A native date input hands back `""`, which `z.iso.date()`
-	// refuses, and a refusal surfaces as a failed request: the screen would
-	// report that something went wrong when the truth is the reader is mid-edit.
+	// *Incomplete* is a cleared or half-typed box — an ordinary step on the way
+	// to typing a different date. Sending it would get it refused by
+	// `z.iso.date()`, and a refusal surfaces as a failed request: the screen
+	// would report that something went wrong when the truth is the reader is
+	// mid-edit.
 	//
 	// *Backwards* is both dates filled in and the wrong way round. A typo, not
 	// an empty result — reporting it as two zeroes would let somebody conclude
@@ -109,21 +118,33 @@ export function WpDashboard({ today }: { today: string }) {
 	// Neither is sent. The server's own validation is untouched and is still the
 	// boundary; this only decides whether there is a question worth asking yet.
 	// The backwards case keeps the wording the Submitted Tests filters use.
-	const rangeIsComplete =
-		isCalendarDate(range.from) && isCalendarDate(range.to);
-	const rangeIsBackwards = rangeIsComplete && range.from > range.to;
+	const fromIso = usDateToIso(range.from);
+	const toIso = usDateToIso(range.to);
+	const rangeIsComplete = fromIso !== null && toIso !== null;
+	const rangeIsBackwards =
+		fromIso !== null && toIso !== null && fromIso > toIso;
 	const rangeIsUsable = rangeIsComplete && !rangeIsBackwards;
+
+	// A box holding something that is not a date says so under itself, and the
+	// end box says so when it comes before the start.
+	const rangeValidation = useFormValidation({
+		values: range,
+		rules: BREAKDOWN_RANGE_RULES,
+	});
 
 	const metrics = useQuery(trpc.dashboard.dashboardMetrics.queryOptions());
 	const trend = useQuery(trpc.dashboard.complianceTrend.queryOptions());
 	const incoming = useQuery(trpc.dashboard.incomingReports.queryOptions({}));
 	const delinquent = useQuery(trpc.dashboard.delinquentAssets.queryOptions({}));
 	const breakdown = useQuery(
-		trpc.dashboard.passFailBreakdown.queryOptions(range, {
-			// Filling the blank box back in flips this to true and the query runs
-			// itself — there is nothing for the reader to press.
-			enabled: rangeIsUsable,
-		}),
+		trpc.dashboard.passFailBreakdown.queryOptions(
+			{ from: fromIso ?? "", to: toIso ?? "" },
+			{
+				// Filling the blank box back in flips this to true and the query runs
+				// itself — there is nothing for the reader to press.
+				enabled: rangeIsUsable,
+			},
+		),
 	);
 
 	return (
@@ -275,52 +296,47 @@ export function WpDashboard({ today }: { today: string }) {
 						</CardHeader>
 						<CardContent className="flex flex-col gap-4">
 							<div className="flex flex-wrap items-end gap-3">
-								<div className="flex flex-col gap-1.5">
+								<div className="flex w-[170px] flex-col gap-1.5">
 									<Label
-										htmlFor={fromId}
+										htmlFor={rangeValidation.fieldId("from")}
 										className="text-[12px] text-muted-foreground"
 									>
 										Tested from
 									</Label>
-									<Input
-										id={fromId}
-										type="date"
+									<DateInput
+										pickerLabel="Choose tested-from date"
+										{...rangeValidation.controlProps("from")}
 										value={range.from}
-										max={range.to || undefined}
-										onChange={(event) =>
-											setRange((current) => ({
-												...current,
-												from: event.target.value,
-											}))
+										onValueChange={(value) =>
+											setRange((current) => ({ ...current, from: value }))
 										}
-										className="w-[170px]"
 									/>
+									<FieldError {...rangeValidation.errorProps("from")} />
 								</div>
-								<div className="flex flex-col gap-1.5">
+								<div className="flex w-[170px] flex-col gap-1.5">
 									<Label
-										htmlFor={toId}
+										htmlFor={rangeValidation.fieldId("to")}
 										className="text-[12px] text-muted-foreground"
 									>
 										Tested to
 									</Label>
-									<Input
-										id={toId}
-										type="date"
+									<DateInput
+										pickerLabel="Choose tested-to date"
+										{...rangeValidation.controlProps("to")}
 										value={range.to}
-										min={range.from || undefined}
-										onChange={(event) =>
-											setRange((current) => ({
-												...current,
-												to: event.target.value,
-											}))
+										onValueChange={(value) =>
+											setRange((current) => ({ ...current, to: value }))
 										}
-										className="w-[170px]"
 									/>
+									<FieldError {...rangeValidation.errorProps("to")} />
 								</div>
 								<Button
 									variant="secondary"
 									size="sm"
-									onClick={() => setRange(defaultBreakdownRange(today))}
+									onClick={() => {
+										setRange(displayedBreakdownRange(today));
+										rangeValidation.reset();
+									}}
 								>
 									Last 12 months
 								</Button>
@@ -334,9 +350,9 @@ export function WpDashboard({ today }: { today: string }) {
 								<StateBlock
 									tone="warning"
 									title={
-										isCalendarDate(range.from)
+										fromIso
 											? "Pick an end date"
-											: isCalendarDate(range.to)
+											: toIso
 												? "Pick a start date"
 												: "Pick both dates"
 									}
@@ -381,6 +397,24 @@ export function WpDashboard({ today }: { today: string }) {
 		</div>
 	);
 }
+
+type DisplayedRange = { from: string; to: string };
+
+/** The default breakdown window, spelled the way the date boxes show it. */
+function displayedBreakdownRange(today: string): DisplayedRange {
+	const range = defaultBreakdownRange(today);
+
+	return { from: isoToUsDate(range.from), to: isoToUsDate(range.to) };
+}
+
+/**
+ * Each box must hold a real date, and the end may not come before the start.
+ * An empty box is not a field error here — the panel below names it.
+ */
+const BREAKDOWN_RANGE_RULES: ValidationRules<DisplayedRange> = {
+	from: usDate(),
+	to: (value, range) => usDate()(value) ?? usDateNotBefore(range.from)(value),
+};
 
 /**
  * The five cards, in the build plan's order.

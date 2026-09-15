@@ -93,6 +93,15 @@ editable rather than the record happening to be laid out as a form.
 Four blocks: the header (BIN, type, date, result, certifier), the test record,
 the answers, and the sign-off.
 
+Corrections are checked inline before **Save corrections** sends them: the test
+date is typed as `MM/DD/YYYY` or chosen from the calendar picker (blank clears it) and must be a real calendar day,
+and the typed BIN and every text or number answer report
+`SUBMISSION_FIELD_LIMITS` at the field instead of being cut off. A refused save
+is shown in the footer beside the button, not as a toast. The list's
+*Tested from* / *Tested to* filters use the same `MM/DD/YYYY` field and calendar picker; a box holding
+something that is not a real date holds the list back and says so under itself,
+rather than being quietly dropped from the query.
+
 **The per-BFA-type layout is deliberately not built yet.** The results document
 has one layout per type — an RP report carries relief-valve rows, a PVB report
 carries air-inlet rows, no empty sections — built as a shared frame plus a

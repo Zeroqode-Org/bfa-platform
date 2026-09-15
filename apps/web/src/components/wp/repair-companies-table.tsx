@@ -37,6 +37,7 @@ import { trpc } from "@/utils/trpc";
 import {
 	buildRepairCompanyPayload,
 	RepairCompanyForm,
+	repairCompanyFormErrors,
 	repairCompanyToFormValues,
 	STATUS_LABELS,
 } from "./repair-company-form";
@@ -353,9 +354,11 @@ export function RepairCompaniesTable() {
 									: undefined
 							}
 							pending={formMutation.isPending}
-							errorMessage={
-								formMutation.isError ? formMutation.error.message : undefined
-							}
+							// A duplicate email goes under the Email field; anything else
+							// is the form-wide message. Never a toast.
+							{...repairCompanyFormErrors(
+								formMutation.isError ? formMutation.error : null,
+							)}
 							submitLabel={isEditing ? "Save changes" : "Add company"}
 							pendingLabel={isEditing ? "Saving…" : "Adding…"}
 							onCancel={() => setIsFormOpen(false)}

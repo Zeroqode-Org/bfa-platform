@@ -233,13 +233,16 @@ echo rather than from the two date inputs. Those disagree for as long as a
 request is in flight, and a chart labelled with the pending range would tell a
 small lie every time somebody changed it.
 
-An incomplete range is caught on the client and simply not sent: clearing either
-date box yields `""`, which `z.iso.date()` refuses, and a refusal would reach
-the screen as a failed request — telling the reader something is broken while
-they are mid-edit. The screen names the empty box instead, keeps that state
-distinct from the backwards-range one, and re-enables the query the moment a
-valid date is typed back in. The server's validation is unchanged and is still
-the boundary.
+The two boxes are `MM/DD/YYYY` date fields, typed or chosen from a calendar picker, converted to ISO days before the
+request. An incomplete range is caught on the client and simply not sent: a
+cleared or half-typed box has no ISO day, which `z.iso.date()` would refuse, and
+a refusal would reach the screen as a failed request — telling the reader
+something is broken while they are mid-edit. The screen names the empty box
+instead, keeps that state distinct from the backwards-range one, and re-enables
+the query the moment a valid date is typed back in. A box holding something that
+is not a real date (`02/30/2026`) also says so under itself once it is left, and
+the end box says *Must be on or after the start date.* when the range runs
+backwards. The server's validation is unchanged and is still the boundary.
 
 ### Tests with no recorded result
 

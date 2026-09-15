@@ -14,6 +14,8 @@ import {
 	vi,
 } from "vitest";
 
+import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "../lib/email-uniqueness";
+
 /**
  * The customer procedures against real Postgres: who may call them, what they
  * can see, and — the part that matters — what happens when a caller names a
@@ -263,6 +265,152 @@ describeDb("customers procedures", () => {
 				wp_id: wpA,
 			});
 			expect(typeof entry?.timestamp).toBe("string");
+		});
+	});
+
+	describe("email uniqueness within a purveyor", () => {
+		it("refuses a second customer with the same address, however it is spelled", async () => {
+			const first = await callerFor(ids.adminA).customers.createCustomer({
+				name: "Unique Email First",
+				email: "unique.customer@example.com",
+				rateCategory: "standard",
+			});
+			expect(first.email).toBe("unique.customer@example.com");
+
+			await expect(
+				callerFor(ids.employeeA).customers.createCustomer({
+					name: "Unique Email Second",
+					email: "  Unique.Customer@EXAMPLE.com ",
+					rateCategory: "standard",
+				}),
+			).rejects.toMatchObject({
+				code: "CONFLICT",
+				message: CUSTOMER_EMAIL_TAKEN_MESSAGE,
+			});
+
+			const { rows } = await pool.query(
+				`select count(*)::int as count from customers
+				 where water_purveyor_id = $1 and lower(btrim(email)) = 'unique.customer@example.com'`,
+				[wpA],
+			);
+			expect(rows[0]?.count).toBe(1);
+		});
+
+		it("allows the same address in a different purveyor", async () => {
+			await callerFor(ids.adminA).customers.createCustomer({
+				name: "Cross Tenant Email A",
+				email: "cross.tenant.customer@example.com",
+				rateCategory: "standard",
+			});
+
+			const other = await callerFor(ids.adminB).customers.createCustomer({
+				name: "Cross Tenant Email B",
+				email: "cross.tenant.customer@example.com",
+				rateCategory: "standard",
+			});
+
+			expect(other.email).toBe("cross.tenant.customer@example.com");
+		});
+
+		it("refuses an edit onto another customer's address and leaves the row untouched", async () => {
+			await callerFor(ids.adminA).customers.createCustomer({
+				name: "Holds The Address",
+				email: "held.customer@example.com",
+				rateCategory: "standard",
+			});
+			const mover = await callerFor(ids.adminA).customers.createCustomer({
+				name: "Wants The Address",
+				email: "own.customer@example.com",
+				rateCategory: "standard",
+			});
+
+			await expect(
+				callerFor(ids.adminA).customers.updateCustomer({
+					id: mover.id,
+					name: mover.name,
+					email: "HELD.customer@example.com",
+					accountNumber: mover.accountNumber,
+					address: mover.address,
+					rateCategory: "standard",
+					agRenewalDate: null,
+					status: mover.status,
+				}),
+			).rejects.toMatchObject({
+				code: "CONFLICT",
+				message: CUSTOMER_EMAIL_TAKEN_MESSAGE,
+			});
+
+			const { rows } = await pool.query(
+				"select email, updated_at from customers where id = $1",
+				[mover.id],
+			);
+			expect(rows[0]?.email).toBe("own.customer@example.com");
+			expect(new Date(rows[0]?.updated_at).getTime()).toBe(
+				mover.updatedAt.getTime(),
+			);
+		});
+
+		it("saves an edit that keeps the customer's own address", async () => {
+			const created = await callerFor(ids.adminA).customers.createCustomer({
+				name: "Keeps Its Address",
+				email: "keeps.customer@example.com",
+				rateCategory: "standard",
+			});
+
+			const renamed = await callerFor(ids.adminA).customers.updateCustomer({
+				id: created.id,
+				name: "Keeps Its Address, Renamed",
+				// Its own address in another spelling is still its own address.
+				email: " Keeps.Customer@Example.com ",
+				accountNumber: created.accountNumber,
+				address: created.address,
+				rateCategory: "standard",
+				agRenewalDate: null,
+				status: created.status,
+			});
+
+			expect(renamed.name).toBe("Keeps Its Address, Renamed");
+			expect(renamed.email).toBe("keeps.customer@example.com");
+		});
+
+		it("enforces the rule in the database, not only in the procedure", async () => {
+			await pool.query(
+				`insert into customers (water_purveyor_id, name, email, rate_category, status)
+				 values ($1, 'Raw Constraint First', 'raw.customer@example.com', 'standard', 'active')`,
+				[wpA],
+			);
+
+			await expect(
+				pool.query(
+					`insert into customers (water_purveyor_id, name, email, rate_category, status)
+					 values ($1, 'Raw Constraint Second', '  RAW.Customer@example.com', 'standard', 'active')`,
+					[wpA],
+				),
+			).rejects.toMatchObject({
+				code: "23505",
+				constraint: "customers_water_purveyor_id_email_key",
+			});
+		});
+
+		it("lets exactly one of two concurrent creates take an address", async () => {
+			const results = await Promise.allSettled(
+				["Race Left", "Race Right"].map((name) =>
+					callerFor(ids.adminA).customers.createCustomer({
+						name,
+						email: "race.customer@example.com",
+						rateCategory: "standard",
+					}),
+				),
+			);
+
+			expect(
+				results.filter((result) => result.status === "fulfilled"),
+			).toHaveLength(1);
+			const [refused] = results.filter(
+				(result): result is PromiseRejectedResult =>
+					result.status === "rejected",
+			);
+			expect(refused?.reason).toMatchObject({ code: "CONFLICT" });
 		});
 	});
 

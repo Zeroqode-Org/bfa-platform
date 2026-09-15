@@ -1,24 +1,27 @@
 // @vitest-environment jsdom
 
 import { ASSET_FIELD_LIMITS } from "@bfa-platform/api/lib/asset-field-limits";
+import {
+	DATE_MESSAGE,
+	maxLengthMessage,
+} from "@bfa-platform/ui/lib/validation";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	AddAssetForm,
-	assetFormProblems,
 	assetToFormValues,
 	buildAssetPayload,
 	buildCreateAssetPayload,
 	EditAssetForm,
 	emptyAssetValues,
-	isCalendarDate,
 } from "./asset-form";
 import type { Asset } from "./asset-types";
 import { assetFormErrors } from "./asset-types";
 
 /**
- * The asset form: what it sends, and what it refuses to carry.
+ * The asset form: what it sends, what it refuses inline before sending, and
+ * what it refuses to carry.
  *
  * The payload builder is exercised directly as well as through the DOM — it is
  * where the client's half of "the scheduler owns the status, and occupancy
@@ -48,6 +51,33 @@ function asset(overrides: Partial<Asset> = {}): Asset {
 	};
 }
 
+/** Opens the BFA type select and commits one type. */
+function chooseBfaType(type: string) {
+	fireEvent.click(screen.getByLabelText("BFA type"));
+
+	// Base UI commits an option on the pointer sequence, not on a bare click.
+	const item = screen.getByRole("option", { name: type });
+	fireEvent.pointerDown(item);
+	fireEvent.pointerUp(item);
+	fireEvent.click(item);
+}
+
+function fillRequired({
+	bin = "BIN-10041",
+	bfaType = "RP" as string | null,
+	serviceAddress = "18 Canal Road",
+	annualTestDate = "04/01/2027",
+} = {}) {
+	fireEvent.change(screen.getByLabelText("BIN"), { target: { value: bin } });
+	if (bfaType) chooseBfaType(bfaType);
+	fireEvent.change(screen.getByLabelText("Service address"), {
+		target: { value: serviceAddress },
+	});
+	fireEvent.change(screen.getByLabelText("Annual test date"), {
+		target: { value: annualTestDate },
+	});
+}
+
 afterEach(() => {
 	cleanup();
 });
@@ -57,17 +87,19 @@ describe("buildAssetPayload", () => {
 		expect(
 			buildAssetPayload({
 				...emptyAssetValues,
+				bfaType: "RP",
 				bin: "  BIN-10041 ",
 				serviceAddress: " 18 Canal Road ",
 				make: "   ",
 				model: "",
-				annualTestDate: "2027-04-01",
+				annualTestDate: "04/01/2027",
 			}),
 		).toMatchObject({
 			bin: "BIN-10041",
 			serviceAddress: "18 Canal Road",
 			make: null,
 			model: null,
+			annualTestDate: "2027-04-01",
 		});
 	});
 
@@ -75,7 +107,7 @@ describe("buildAssetPayload", () => {
 		// All three are the server's: the tenant from the caller's profile, the
 		// status from the scheduler, and the customer from `assignCustomer`, which
 		// records the occupancy change rather than moving a pointer.
-		const keys = Object.keys(buildAssetPayload(emptyAssetValues));
+		const keys = Object.keys(buildAssetPayload(assetToFormValues(asset())));
 
 		expect(keys).not.toContain("waterPurveyorId");
 		expect(keys).not.toContain("assetStatus");
@@ -88,9 +120,10 @@ describe("buildCreateAssetPayload", () => {
 		expect(
 			buildCreateAssetPayload({
 				...emptyAssetValues,
+				bfaType: "RP",
 				bin: "BIN-10041",
 				serviceAddress: "18 Canal Road",
-				annualTestDate: "2027-04-01",
+				annualTestDate: "04/01/2027",
 				currentCustomerId: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
 			}).currentCustomerId,
 		).toBe("8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607");
@@ -98,35 +131,46 @@ describe("buildCreateAssetPayload", () => {
 
 	it("sends null when the picker was left alone", () => {
 		expect(
-			buildCreateAssetPayload(emptyAssetValues).currentCustomerId,
+			buildCreateAssetPayload({ ...emptyAssetValues, bfaType: "RP" })
+				.currentCustomerId,
 		).toBeNull();
 	});
 });
 
 describe("assetToFormValues", () => {
-	it("turns null columns into empty fields", () => {
+	it("turns null columns into empty fields and shows the date as MM/DD/YYYY", () => {
 		expect(
 			assetToFormValues(
 				asset({ make: null, model: null, assemblyLocation: null }),
 			),
-		).toMatchObject({ make: "", model: "", assemblyLocation: "" });
+		).toMatchObject({
+			make: "",
+			model: "",
+			assemblyLocation: "",
+			annualTestDate: "04/01/2027",
+		});
 	});
 });
 
 describe("AddAssetForm", () => {
+	it("opts out of browser validation and carries no native constraints", () => {
+		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
+
+		const form = screen
+			.getByRole("button", { name: "Add asset" })
+			.closest("form") as HTMLFormElement;
+
+		expect(form.noValidate).toBe(true);
+		expect(form.querySelectorAll("[required]")).toHaveLength(0);
+		expect(form.querySelectorAll("[maxlength]")).toHaveLength(0);
+		expect(form.querySelectorAll('input[type="date"]')).toHaveLength(0);
+	});
+
 	it("submits the typed values, with the annual test date the schedule needs", () => {
 		const onSubmit = vi.fn();
 		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
 
-		fireEvent.change(screen.getByLabelText("BIN"), {
-			target: { value: "BIN-10041" },
-		});
-		fireEvent.change(screen.getByLabelText("Service address"), {
-			target: { value: "18 Canal Road" },
-		});
-		fireEvent.change(screen.getByLabelText("Annual test date"), {
-			target: { value: "2027-04-01" },
-		});
+		fillRequired();
 		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
 
 		expect(onSubmit).toHaveBeenCalledWith({
@@ -143,6 +187,139 @@ describe("AddAssetForm", () => {
 			// is normal, and `null` is the answer for it.
 			currentCustomerId: null,
 		});
+	});
+
+	it("opens a new asset with the BFA type unanswered", () => {
+		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
+
+		const type = screen.getByLabelText("BFA type");
+		expect(type.textContent).toContain("Select…");
+		expect(type.textContent).not.toContain("RP");
+		expect(type.hasAttribute("data-placeholder")).toBe(true);
+	});
+
+	it("blocks a missing BFA type at the field and clears the error once one is chosen", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		fillRequired({ bfaType: null });
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		const type = screen.getByLabelText("BFA type");
+		const message = screen.getByText("Select a BFA type.");
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(type.getAttribute("aria-invalid")).toBe("true");
+		expect(type.getAttribute("aria-describedby")).toBe(message.id);
+		expect(document.activeElement).toBe(type);
+
+		chooseBfaType("DCDA");
+
+		expect(screen.queryByText("Select a BFA type.")).toBeNull();
+		expect(type.getAttribute("aria-invalid")).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ bfaType: "DCDA" }),
+		);
+	});
+
+	it("keeps save available and names the four missing answers when pressed", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		const save = screen.getByRole("button", { name: "Add asset" });
+		// Not a dead button to interpret: pressing it says what is missing.
+		expect(save.hasAttribute("disabled")).toBe(false);
+		expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+		fireEvent.click(save);
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(
+			screen.getAllByRole("alert").map((node) => node.textContent),
+		).toEqual([
+			"A BIN is required.",
+			"Select a BFA type.",
+			"A service address is required.",
+			"An annual test date is required.",
+		]);
+		expect(document.activeElement).toBe(screen.getByLabelText("BIN"));
+	});
+
+	it("keeps the annual test date's hint alongside its error", () => {
+		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		const date = screen.getByLabelText("Annual test date");
+		const message = screen.getByText("An annual test date is required.");
+		const hint = screen.getByText(/The reminder goes out/);
+
+		expect(date.getAttribute("aria-describedby")).toBe(
+			`${message.id} ${hint.id}`,
+		);
+	});
+
+	it("treats a BIN of only spaces as empty, the way the server does", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		fillRequired({ bin: "   " });
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText("A BIN is required.")).toBeTruthy();
+	});
+
+	it("refuses a date that is not a real calendar day", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		// 31 February parses to 3 March if nothing checks — a reminder that would
+		// fire on a day nobody chose.
+		fillRequired({ annualTestDate: "02/31/2027" });
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText(DATE_MESSAGE)).toBeTruthy();
+		expect(document.activeElement).toBe(
+			screen.getByLabelText("Annual test date"),
+		);
+	});
+
+	it("reports the API schema's length limits at the field instead of cutting text off", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		const bin = screen.getByLabelText("BIN") as HTMLInputElement;
+		const tooLong = "B".repeat(ASSET_FIELD_LIMITS.bin + 1);
+		fillRequired({ bin: tooLong });
+
+		// Nothing silently trimmed: the whole value is still there to shorten.
+		expect(bin.value).toBe(tooLong);
+
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(
+			screen.getByText(maxLengthMessage(ASSET_FIELD_LIMITS.bin)),
+		).toBeTruthy();
+	});
+
+	it("keeps the serial number free text", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		fillRequired();
+		fireEvent.change(screen.getByLabelText("Serial number"), {
+			target: { value: "SN-88120 / rev B" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ serialNumber: "SN-88120 / rev B" }),
+		);
 	});
 
 	it("offers no control for the status the scheduler computes", () => {
@@ -180,91 +357,6 @@ describe("AddAssetForm", () => {
 		expect(screen.getByText(/No customers yet/)).toBeTruthy();
 	});
 
-	it("keeps save disabled until the three required answers are there", () => {
-		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
-
-		const save = screen.getByRole("button", { name: "Add asset" });
-		expect(save.hasAttribute("disabled")).toBe(true);
-
-		fireEvent.change(screen.getByLabelText("BIN"), {
-			target: { value: "BIN-10041" },
-		});
-		expect(save.hasAttribute("disabled")).toBe(true);
-
-		fireEvent.change(screen.getByLabelText("Service address"), {
-			target: { value: "18 Canal Road" },
-		});
-		expect(save.hasAttribute("disabled")).toBe(true);
-
-		fireEvent.change(screen.getByLabelText("Annual test date"), {
-			target: { value: "2027-04-01" },
-		});
-		expect(save.hasAttribute("disabled")).toBe(false);
-	});
-
-	it("treats a BIN of only spaces as empty, the way the server does", () => {
-		const onSubmit = vi.fn();
-		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
-
-		fireEvent.change(screen.getByLabelText("BIN"), {
-			target: { value: "   " },
-		});
-		fireEvent.change(screen.getByLabelText("Service address"), {
-			target: { value: "18 Canal Road" },
-		});
-		fireEvent.change(screen.getByLabelText("Annual test date"), {
-			target: { value: "2027-04-01" },
-		});
-
-		const save = screen.getByRole("button", { name: "Add asset" });
-		expect(save.hasAttribute("disabled")).toBe(true);
-
-		// And a submit that reaches the handler anyway sends nothing.
-		fireEvent.submit(save.closest("form") as HTMLFormElement);
-		expect(onSubmit).not.toHaveBeenCalled();
-	});
-
-	it("refuses a date that is not a real calendar day", () => {
-		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
-
-		fireEvent.change(screen.getByLabelText("BIN"), {
-			target: { value: "BIN-10041" },
-		});
-		fireEvent.change(screen.getByLabelText("Service address"), {
-			target: { value: "18 Canal Road" },
-		});
-		// 31 February parses to 3 March if nothing checks — a reminder that would
-		// fire on a day nobody chose.
-		fireEvent.change(screen.getByLabelText("Annual test date"), {
-			target: { value: "2027-02-31" },
-		});
-
-		expect(
-			screen
-				.getByRole("button", { name: "Add asset" })
-				.hasAttribute("disabled"),
-		).toBe(true);
-	});
-
-	it("stops typing at the length the API schema accepts", () => {
-		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
-
-		// The numbers come from the same module the Zod shapes are built from, so
-		// this asserts they are wired up, not that they are any particular value.
-		expect(screen.getByLabelText("BIN").getAttribute("maxlength")).toBe(
-			String(ASSET_FIELD_LIMITS.bin),
-		);
-		expect(
-			screen.getByLabelText("Service address").getAttribute("maxlength"),
-		).toBe(String(ASSET_FIELD_LIMITS.serviceAddress));
-		expect(screen.getByLabelText("Make").getAttribute("maxlength")).toBe(
-			String(ASSET_FIELD_LIMITS.make),
-		);
-		expect(screen.getByLabelText("Size").getAttribute("maxlength")).toBe(
-			String(ASSET_FIELD_LIMITS.size),
-		);
-	});
-
 	it("does not warn about a BIN change on a record that has no old BIN", () => {
 		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
 
@@ -273,6 +365,31 @@ describe("AddAssetForm", () => {
 		});
 
 		expect(screen.queryByText(/Changing a BIN is recorded/)).toBeNull();
+	});
+});
+
+describe("AddAssetForm — annual test date picker", () => {
+	it("fills the annual test date from the calendar and sends it as the ISO day", async () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		fillRequired({ annualTestDate: "04/01/2027" });
+		fireEvent.click(
+			screen.getByRole("button", { name: "Choose annual test date" }),
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Thursday, April 15, 2027" }),
+		);
+
+		expect(
+			screen.getByLabelText<HTMLInputElement>("Annual test date").value,
+		).toBe("04/15/2027");
+
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ annualTestDate: "2027-04-15" }),
+		);
 	});
 });
 
@@ -285,9 +402,14 @@ describe("EditAssetForm", () => {
 		expect(screen.getByLabelText<HTMLInputElement>("BIN").value).toBe(
 			"BIN-10041",
 		);
+		// An existing asset keeps its saved type selected, not a placeholder.
+		expect(screen.getByLabelText("BFA type").textContent).toContain("RP");
+		expect(screen.getByLabelText("BFA type").textContent).not.toContain(
+			"Select…",
+		);
 		expect(
 			screen.getByLabelText<HTMLInputElement>("Annual test date").value,
-		).toBe("2027-04-01");
+		).toBe("04/01/2027");
 	});
 
 	it("lets the BIN be corrected — it is editable, not frozen", () => {
@@ -302,7 +424,10 @@ describe("EditAssetForm", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
 		expect(onSubmit).toHaveBeenCalledWith(
-			expect.objectContaining({ bin: "BIN-20099" }),
+			expect.objectContaining({
+				bin: "BIN-20099",
+				annualTestDate: "2027-04-01",
+			}),
 		);
 	});
 
@@ -436,28 +561,5 @@ describe("assetFormErrors", () => {
 
 	it("says nothing when there is no error", () => {
 		expect(assetFormErrors(null)).toEqual({});
-	});
-});
-
-describe("isCalendarDate", () => {
-	it("accepts a real day and refuses one that only looks like a date", () => {
-		expect(isCalendarDate("2027-04-01")).toBe(true);
-		expect(isCalendarDate("2028-02-29")).toBe(true);
-		expect(isCalendarDate("2027-02-29")).toBe(false);
-		expect(isCalendarDate("2027-13-01")).toBe(false);
-		expect(isCalendarDate("")).toBe(false);
-		expect(isCalendarDate("next April")).toBe(false);
-	});
-});
-
-describe("assetFormProblems", () => {
-	it("names the three required answers, on the trimmed values", () => {
-		expect(
-			assetFormProblems({
-				...emptyAssetValues,
-				bin: "  ",
-				serviceAddress: "18 Canal Road",
-			}),
-		).toEqual({ bin: true, serviceAddress: false, annualTestDate: true });
 	});
 });

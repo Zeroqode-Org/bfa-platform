@@ -1,15 +1,32 @@
 "use client";
 
 import { Button } from "@bfa-platform/ui/components/button";
+import { DateInput } from "@bfa-platform/ui/components/date-input";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
-import { TriangleAlert } from "lucide-react";
-import { useActionState, useId } from "react";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	maxLength,
+	minLength,
+	required,
+	usDate,
+	usDateToIso,
+} from "@bfa-platform/ui/lib/validation";
+import { useActionState, useId, useState } from "react";
 
 import {
 	type RedeemState,
 	redeemInvitationAction,
 } from "@/app/invite/[token]/actions";
+import {
+	MIN_PASSWORD_LENGTH,
+	REDEEM_FIELD_LIMITS,
+} from "@/lib/redeem-field-limits";
 
 export type RedeemFormProps = {
 	secret: string;
@@ -19,127 +36,242 @@ export type RedeemFormProps = {
 
 const initialState: RedeemState = { error: null };
 
+type RedeemValues = {
+	fullName: string;
+	certifierCompany: string;
+	certifierIdNumber: string;
+	licenseExpirationDate: string;
+	password: string;
+	confirmPassword: string;
+};
+
+const EMPTY_VALUES: RedeemValues = {
+	fullName: "",
+	certifierCompany: "",
+	certifierIdNumber: "",
+	licenseExpirationDate: "",
+	password: "",
+	confirmPassword: "",
+};
+
+const passwordRule = composeRules(
+	required("Password is required."),
+	minLength(
+		MIN_PASSWORD_LENGTH,
+		`Use at least ${MIN_PASSWORD_LENGTH} characters.`,
+	),
+	maxLength(REDEEM_FIELD_LIMITS.password, { trim: false }),
+);
+
+const certifierRules = {
+	certifierCompany: composeRules(
+		required("Company is required."),
+		maxLength(REDEEM_FIELD_LIMITS.certifierCompany),
+	),
+	certifierIdNumber: composeRules(
+		required("Certifier ID number is required."),
+		maxLength(REDEEM_FIELD_LIMITS.certifierIdNumber),
+	),
+	licenseExpirationDate: composeRules(
+		required("License expiration date is required."),
+		usDate(),
+	),
+};
+
 /**
  * First-login form. Which fields appear is decided on the server from the
  * invitation itself — the mode and role are passed in, not chosen here, so a
  * tampered form cannot ask for (or skip) a different set of fields than the
  * invitation calls for. The action revalidates all of it anyway.
+ *
+ * The inline rules below mirror the action's so a missing field is reported
+ * at the field before anything is sent. They are not the boundary: the action
+ * parses the submitted `FormData` again, and its own refusal comes back as the
+ * form-level message.
  */
 export function RedeemForm({ secret, mode, isCertifier }: RedeemFormProps) {
-	const fullNameId = useId();
-	const passwordId = useId();
-	const confirmPasswordId = useId();
-	const certifierCompanyId = useId();
-	const certifierIdNumberId = useId();
-	const licenseExpirationId = useId();
-	const errorId = useId();
+	const passwordHintId = useId();
 
 	const [state, formAction, isPending] = useActionState(
 		redeemInvitationAction,
 		initialState,
 	);
+	const [values, setValues] = useState(EMPTY_VALUES);
 
 	const isExistingCertifier = mode === "existing_certifier";
+	const asksForProfile = !isExistingCertifier;
+	const asksForCertifier = isCertifier && asksForProfile;
+
+	const validation = useFormValidation({
+		values,
+		rules: {
+			fullName: (value) =>
+				asksForProfile
+					? composeRules(
+							required("Full name is required."),
+							maxLength(REDEEM_FIELD_LIMITS.fullName),
+						)(value)
+					: undefined,
+			certifierCompany: (value) =>
+				asksForCertifier ? certifierRules.certifierCompany(value) : undefined,
+			certifierIdNumber: (value) =>
+				asksForCertifier ? certifierRules.certifierIdNumber(value) : undefined,
+			licenseExpirationDate: (value) =>
+				asksForCertifier
+					? certifierRules.licenseExpirationDate(value)
+					: undefined,
+			password: (value) => (asksForProfile ? passwordRule(value) : undefined),
+			confirmPassword: (value, current) => {
+				if (!asksForProfile) return undefined;
+				if (!value) return "Confirm your password.";
+
+				return value === current.password
+					? undefined
+					: "The passwords do not match.";
+			},
+		},
+	});
+
+	function update(field: keyof RedeemValues, value: string) {
+		setValues((current) => ({ ...current, [field]: value }));
+	}
 
 	return (
-		<form action={formAction} className="mt-6 flex flex-col gap-4">
+		<form
+			action={formAction}
+			// Cancelling the submit event is what stops React dispatching the
+			// action, so an invalid form never reaches the server at all.
+			onSubmit={(event) => {
+				if (!validation.validate()) event.preventDefault();
+			}}
+			className="mt-6 flex flex-col gap-4"
+			noValidate
+		>
 			<input type="hidden" name="secret" value={secret} />
 			<input type="hidden" name="mode" value={mode} />
 			<input
 				type="hidden"
 				name="isCertifier"
-				value={isCertifier && !isExistingCertifier ? "yes" : "no"}
+				value={asksForCertifier ? "yes" : "no"}
 			/>
 
 			{isExistingCertifier ? null : (
 				<>
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={fullNameId}>Full name</Label>
+						<Label htmlFor={validation.fieldId("fullName")}>Full name</Label>
 						<Input
-							id={fullNameId}
+							{...validation.controlProps("fullName")}
 							name="fullName"
 							autoComplete="name"
 							placeholder="Alex Rivera"
-							required
+							value={values.fullName}
+							onChange={(event) => update("fullName", event.target.value)}
 						/>
+						<FieldError {...validation.errorProps("fullName")} />
 					</div>
 
 					{isCertifier ? (
 						<>
 							<div className="flex flex-col gap-1.5">
-								<Label htmlFor={certifierCompanyId}>Company</Label>
+								<Label htmlFor={validation.fieldId("certifierCompany")}>
+									Company
+								</Label>
 								<Input
-									id={certifierCompanyId}
+									{...validation.controlProps("certifierCompany")}
 									name="certifierCompany"
 									autoComplete="organization"
 									placeholder="Rivera Backflow Testing"
-									required
+									value={values.certifierCompany}
+									onChange={(event) =>
+										update("certifierCompany", event.target.value)
+									}
 								/>
+								<FieldError {...validation.errorProps("certifierCompany")} />
 							</div>
 
 							<div className="flex flex-col gap-1.5">
-								<Label htmlFor={certifierIdNumberId}>Certifier ID number</Label>
-								<Input
-									id={certifierIdNumberId}
-									name="certifierIdNumber"
-									placeholder="CERT-00123"
-									required
-								/>
-							</div>
-
-							<div className="flex flex-col gap-1.5">
-								<Label htmlFor={licenseExpirationId}>
-									License expiration date
+								<Label htmlFor={validation.fieldId("certifierIdNumber")}>
+									Certifier ID number
 								</Label>
 								<Input
-									id={licenseExpirationId}
+									{...validation.controlProps("certifierIdNumber")}
+									name="certifierIdNumber"
+									placeholder="CERT-00123"
+									value={values.certifierIdNumber}
+									onChange={(event) =>
+										update("certifierIdNumber", event.target.value)
+									}
+								/>
+								<FieldError {...validation.errorProps("certifierIdNumber")} />
+							</div>
+
+							<div className="flex flex-col gap-1.5">
+								<Label htmlFor={validation.fieldId("licenseExpirationDate")}>
+									License expiration date
+								</Label>
+								<DateInput
+									pickerLabel="Choose license expiration date"
+									{...validation.controlProps("licenseExpirationDate")}
+									value={values.licenseExpirationDate}
+									onValueChange={(value) =>
+										update("licenseExpirationDate", value)
+									}
+								/>
+								{/* The action takes the API's `YYYY-MM-DD`; the person types
+								    `MM/DD/YYYY`. The conversion is here, at the boundary. */}
+								<input
+									type="hidden"
 									name="licenseExpirationDate"
-									type="date"
-									required
+									value={usDateToIso(values.licenseExpirationDate) ?? ""}
+								/>
+								<FieldError
+									{...validation.errorProps("licenseExpirationDate")}
 								/>
 							</div>
 						</>
 					) : null}
 
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={passwordId}>Password</Label>
+						<Label htmlFor={validation.fieldId("password")}>Password</Label>
 						<Input
-							id={passwordId}
+							{...validation.controlProps("password", {
+								describedBy: passwordHintId,
+							})}
 							name="password"
 							type="password"
 							autoComplete="new-password"
-							minLength={8}
-							required
+							value={values.password}
+							onChange={(event) => update("password", event.target.value)}
 						/>
-						<p className="text-[12px] text-muted-foreground">
-							At least 8 characters.
+						<FieldError {...validation.errorProps("password")} />
+						<p
+							id={passwordHintId}
+							className="text-[12px] text-muted-foreground"
+						>
+							At least {MIN_PASSWORD_LENGTH} characters.
 						</p>
 					</div>
 
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={confirmPasswordId}>Confirm password</Label>
+						<Label htmlFor={validation.fieldId("confirmPassword")}>
+							Confirm password
+						</Label>
 						<Input
-							id={confirmPasswordId}
+							{...validation.controlProps("confirmPassword")}
 							name="confirmPassword"
 							type="password"
 							autoComplete="new-password"
-							minLength={8}
-							required
+							value={values.confirmPassword}
+							onChange={(event) =>
+								update("confirmPassword", event.target.value)
+							}
 						/>
+						<FieldError {...validation.errorProps("confirmPassword")} />
 					</div>
 				</>
 			)}
 
-			{state.error ? (
-				<p
-					id={errorId}
-					role="alert"
-					className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-				>
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{state.error}
-				</p>
-			) : null}
+			<FormError message={state.error} />
 
 			<Button type="submit" disabled={isPending} className="mt-1 w-full">
 				{isPending

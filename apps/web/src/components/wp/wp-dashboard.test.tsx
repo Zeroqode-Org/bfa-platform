@@ -615,10 +615,28 @@ describe("WpDashboard pass/fail breakdown", () => {
 		});
 		expect(
 			(screen.getByLabelText("Tested from") as HTMLInputElement).value,
-		).toBe("2025-10-01");
+		).toBe("10/01/2025");
+		// The boxes show the confirmed MM/DD/YYYY format; the request carries ISO.
 		expect((screen.getByLabelText("Tested to") as HTMLInputElement).value).toBe(
-			TODAY,
+			"09/11/2026",
 		);
+	});
+
+	it("reports a date that is not a real day under its own box, and sends nothing", async () => {
+		renderDashboard();
+
+		await waitFor(() => expect(breakdownFn).toHaveBeenCalledTimes(1));
+
+		const from = screen.getByLabelText("Tested from");
+		fireEvent.change(from, { target: { value: "02/30/2026" } });
+		fireEvent.blur(from);
+
+		const message = await screen.findByText(
+			"Please enter a valid date in MM/DD/YYYY format.",
+		);
+		expect(from.getAttribute("aria-invalid")).toBe("true");
+		expect(from.getAttribute("aria-describedby")).toBe(message.id);
+		expect(breakdownFn).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows the counts and each share of the results", async () => {
@@ -638,7 +656,7 @@ describe("WpDashboard pass/fail breakdown", () => {
 		await waitFor(() => expect(breakdownFn).toHaveBeenCalled());
 
 		fireEvent.change(screen.getByLabelText("Tested from"), {
-			target: { value: "2026-06-01" },
+			target: { value: "06/01/2026" },
 		});
 
 		await waitFor(() =>
@@ -650,21 +668,21 @@ describe("WpDashboard pass/fail breakdown", () => {
 
 		expect(
 			(screen.getByLabelText("Tested from") as HTMLInputElement).value,
-		).toBe("2026-06-01");
+		).toBe("06/01/2026");
 	});
 
 	it("puts the range back to the last twelve months on request", async () => {
 		renderDashboard();
 
 		fireEvent.change(screen.getByLabelText("Tested from"), {
-			target: { value: "2026-06-01" },
+			target: { value: "06/01/2026" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "Last 12 months" }));
 
 		await waitFor(() =>
 			expect(
 				(screen.getByLabelText("Tested from") as HTMLInputElement).value,
-			).toBe("2025-10-01"),
+			).toBe("10/01/2025"),
 		);
 	});
 
@@ -748,7 +766,7 @@ describe("WpDashboard pass/fail breakdown", () => {
 		await screen.findByText("Pick a start date");
 
 		fireEvent.change(screen.getByLabelText("Tested from"), {
-			target: { value: "2026-06-01" },
+			target: { value: "06/01/2026" },
 		});
 
 		// No button to press — refilling the box is what re-enables it.
@@ -805,11 +823,17 @@ describe("WpDashboard pass/fail breakdown", () => {
 		await waitFor(() => expect(breakdownFn).toHaveBeenCalledTimes(1));
 
 		fireEvent.change(screen.getByLabelText("Tested to"), {
-			target: { value: "2025-01-01" },
+			target: { value: "01/01/2025" },
 		});
 
 		expect(
 			await screen.findByText("That date range runs backwards"),
+		).toBeTruthy();
+
+		// And the end box itself says so once the reader leaves it.
+		fireEvent.blur(screen.getByLabelText("Tested to"));
+		expect(
+			screen.getByText("Must be on or after the start date."),
 		).toBeTruthy();
 		// The server would refuse it too. Not sending it keeps a typo from
 		// reading as an outage.

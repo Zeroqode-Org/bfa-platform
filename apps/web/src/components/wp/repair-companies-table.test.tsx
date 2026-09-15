@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
@@ -64,7 +65,9 @@ const { RepairCompaniesTable } = await import("./repair-companies-table");
 const active: RepairCompany = {
 	id: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
 	companyName: "Alpine Backflow Repair",
-	phone: "555-0142",
+	// A valid US number: the form refuses to save any other, so a fixture that
+	// is edited and saved has to carry one.
+	phone: "(555) 014-2233",
 	email: "dispatch@alpine.example",
 	status: "active",
 	createdAt: "2026-09-01T00:00:00.000Z",
@@ -339,6 +342,12 @@ describe("RepairCompaniesTable", () => {
 		fireEvent.change(await screen.findByLabelText("Company name"), {
 			target: { value: "New Repairs" },
 		});
+		// The status opens unanswered, so creating a company means choosing one.
+		fireEvent.click(screen.getByLabelText("Status"));
+		const activeOption = screen.getByRole("option", { name: "Active" });
+		fireEvent.pointerDown(activeOption);
+		fireEvent.pointerUp(activeOption);
+		fireEvent.click(activeOption);
 		fireEvent.click(screen.getByRole("button", { name: "Add company" }));
 
 		await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
@@ -366,6 +375,51 @@ describe("RepairCompaniesTable", () => {
 		);
 		// The fields are still there to correct, which is the point of not closing.
 		expect(screen.getByLabelText("Company name")).toBeTruthy();
+	});
+
+	it("refuses to create a company with no status chosen, at the field", async () => {
+		renderTable();
+
+		fireEvent.click(
+			await screen.findByRole("button", { name: /add repair company/i }),
+		);
+		fireEvent.change(await screen.findByLabelText("Company name"), {
+			target: { value: "No Status Repairs" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Add company" }));
+
+		expect(await screen.findByText("Select a status.")).toBeTruthy();
+		expect(screen.getByLabelText("Status").getAttribute("aria-invalid")).toBe(
+			"true",
+		);
+		expect(createFn).not.toHaveBeenCalled();
+	});
+
+	it("shows a duplicate email refusal from an edit under Email, never as a toast", async () => {
+		const { toast } = await import("sonner");
+		vi.mocked(toast.error).mockClear();
+		updateFn.mockRejectedValue(
+			Object.assign(new Error(REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE), {
+				data: { code: "CONFLICT" },
+			}),
+		);
+		renderTable();
+
+		fireEvent.click(
+			(await screen.findAllByRole("button", { name: "Edit" }))[0],
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Save changes" }),
+		);
+
+		const message = await screen.findByText(REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE);
+		const email = screen.getByLabelText("Email");
+
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(email.getAttribute("aria-invalid")).toBe("true");
+		expect(email.getAttribute("aria-describedby")).toContain(message.id);
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		expect(toast.error).not.toHaveBeenCalled();
 	});
 
 	it("offers a way to add the first company when there are none", async () => {

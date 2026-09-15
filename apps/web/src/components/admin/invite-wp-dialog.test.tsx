@@ -78,6 +78,40 @@ afterEach(() => {
 });
 
 describe("InviteWpForm", () => {
+	it("names both missing answers inline, sends nothing, and focuses the first", () => {
+		renderForm();
+
+		const form = screen
+			.getByRole("button", { name: /send invite/i })
+			.closest("form") as HTMLFormElement;
+		expect(form.noValidate).toBe(true);
+		expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+		fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
+
+		expect(mutationFn).not.toHaveBeenCalled();
+		expect(
+			screen.getAllByRole("alert").map((node) => node.textContent),
+		).toEqual(["Company name is required.", "Contact email is required."]);
+		expect(document.activeElement).toBe(screen.getByLabelText("Company name"));
+	});
+
+	it("refuses an invalid contact email at the field", () => {
+		renderForm();
+
+		fireEvent.change(screen.getByLabelText("Company name"), {
+			target: { value: "Riverside Water District" },
+		});
+		const email = screen.getByLabelText("Contact email");
+		fireEvent.change(email, { target: { value: "admin@riverside" } });
+		fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
+
+		expect(mutationFn).not.toHaveBeenCalled();
+		const message = screen.getByRole("alert");
+		expect(message.textContent).toBe("Please enter a valid email address.");
+		expect(email.getAttribute("aria-describedby")).toBe(message.id);
+	});
+
 	it("sends a provisioning invitation: wp_admin, no purveyor, and the name", async () => {
 		mutationFn.mockResolvedValue({
 			id: "invitation-1",

@@ -37,6 +37,7 @@ import { trpc } from "@/utils/trpc";
 import {
 	buildCustomerPayload,
 	CustomerForm,
+	customerFormErrors,
 	customerToFormValues,
 	RATE_CATEGORY_LABELS,
 	STATUS_LABELS,
@@ -352,9 +353,11 @@ export function CustomersTable() {
 									: undefined
 							}
 							pending={formMutation.isPending}
-							errorMessage={
-								formMutation.isError ? formMutation.error.message : undefined
-							}
+							// A duplicate email goes under the Email field; anything else
+							// is the form-wide message. Never a toast.
+							{...customerFormErrors(
+								formMutation.isError ? formMutation.error : null,
+							)}
 							submitLabel={isEditing ? "Save changes" : "Add customer"}
 							pendingLabel={isEditing ? "Saving…" : "Adding…"}
 							onCancel={() => setIsFormOpen(false)}

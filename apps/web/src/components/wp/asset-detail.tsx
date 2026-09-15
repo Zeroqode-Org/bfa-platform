@@ -18,6 +18,10 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "@bfa-platform/ui/components/empty";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { PageTitle } from "@bfa-platform/ui/components/page-title";
 import {
 	Select,
@@ -36,6 +40,8 @@ import {
 	TableHeader,
 	TableRow,
 } from "@bfa-platform/ui/components/table";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import { required } from "@bfa-platform/ui/lib/validation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, TriangleAlert, Users } from "lucide-react";
 import Link from "next/link";
@@ -314,6 +320,14 @@ function AssignCustomerDialog({
 
 	const customers = useQuery(trpc.customers.listCustomers.queryOptions());
 
+	// The one real choice in this dialog: there is no sensible default customer,
+	// so pressing Attach without one says so under the picker rather than
+	// leaving a disabled button to interpret.
+	const validation = useFormValidation({
+		values: { customerId: selected ?? "" },
+		rules: { customerId: required("Choose a customer to attach.") },
+	});
+
 	const assignCustomer = useMutation(
 		trpc.assets.assignCustomer.mutationOptions({
 			onSuccess: async (result) => {
@@ -325,13 +339,16 @@ function AssignCustomerDialog({
 				close();
 				await onChanged();
 			},
-			onError: (mutationError) => toast.error(mutationError.message),
+			// No toast on failure: the refusal is shown inside the dialog, above
+			// the buttons, while the choice it is about is still on screen.
 		}),
 	);
 
 	function close() {
 		setSelected(null);
 		setIsConfirmingSuspended(false);
+		validation.reset();
+		assignCustomer.reset();
 		onOpenChange(false);
 	}
 
@@ -348,6 +365,8 @@ function AssignCustomerDialog({
 	});
 
 	function attach() {
+		if (!validation.validate()) return;
+
 		// The consequence is large enough to be worth one more click. Only the
 		// second press carries the acknowledgement the server requires.
 		if (action === "confirm-suspended") {
@@ -394,7 +413,10 @@ function AssignCustomerDialog({
 							onValueChange={(value) => setSelected(value as string)}
 							disabled={customers.isPending || assignCustomer.isPending}
 						>
-							<SelectTrigger aria-label="Choose a customer to attach">
+							<SelectTrigger
+								{...validation.controlProps("customerId")}
+								aria-label="Choose a customer to attach"
+							>
 								<SelectValue placeholder="Choose a customer…" />
 							</SelectTrigger>
 							<SelectContent>
@@ -418,6 +440,7 @@ function AssignCustomerDialog({
 								</SelectGroup>
 							</SelectContent>
 						</Select>
+						<FieldError {...validation.errorProps("customerId")} />
 
 						{/* Said beside the choice, before the confirmation, so the
 						    consequence is visible while the list is still open. */}
@@ -446,6 +469,10 @@ function AssignCustomerDialog({
 					</div>
 				)}
 
+				<FormError
+					message={assignCustomer.isError ? assignCustomer.error.message : null}
+				/>
+
 				<DialogFooter>
 					<Button
 						variant="secondary"
@@ -458,7 +485,9 @@ function AssignCustomerDialog({
 					</Button>
 					<Button
 						variant={isConfirmingSuspended ? "destructive" : "default"}
-						disabled={action === "blocked" || assignCustomer.isPending}
+						// Only in flight is it unavailable. With nothing chosen, pressing it
+						// explains what is missing; the current occupant is not selectable.
+						disabled={assignCustomer.isPending}
 						onClick={attach}
 					>
 						{assignCustomer.isPending

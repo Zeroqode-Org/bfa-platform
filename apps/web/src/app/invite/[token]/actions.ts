@@ -9,6 +9,10 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { landingRouteFor } from "@/lib/landing-route";
+import {
+	MIN_PASSWORD_LENGTH,
+	REDEEM_FIELD_LIMITS,
+} from "@/lib/redeem-field-limits";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -23,17 +27,23 @@ import { createClient } from "@/lib/supabase/server";
 
 export type RedeemState = { error: string | null };
 
-const MIN_PASSWORD_LENGTH = 8;
-
 const redeemSchema = z
 	.object({
 		secret: z.string().min(1),
 		mode: z.enum(["new_profile", "new_water_purveyor", "existing_certifier"]),
-		fullName: z.string().trim().max(200).optional(),
-		password: z.string().max(200).optional(),
-		confirmPassword: z.string().max(200).optional(),
-		certifierCompany: z.string().trim().max(200).optional(),
-		certifierIdNumber: z.string().trim().max(100).optional(),
+		fullName: z.string().trim().max(REDEEM_FIELD_LIMITS.fullName).optional(),
+		password: z.string().max(REDEEM_FIELD_LIMITS.password).optional(),
+		confirmPassword: z.string().max(REDEEM_FIELD_LIMITS.password).optional(),
+		certifierCompany: z
+			.string()
+			.trim()
+			.max(REDEEM_FIELD_LIMITS.certifierCompany)
+			.optional(),
+		certifierIdNumber: z
+			.string()
+			.trim()
+			.max(REDEEM_FIELD_LIMITS.certifierIdNumber)
+			.optional(),
 		licenseExpirationDate: z
 			.string()
 			.regex(/^\d{4}-\d{2}-\d{2}$/, "Enter the date as YYYY-MM-DD")
