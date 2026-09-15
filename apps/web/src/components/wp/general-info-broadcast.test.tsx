@@ -11,9 +11,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * The general-info broadcast composer: which variables it offers, what it says
- * about the audience before anything is sent, what the send carries, and what a
- * read-only role is shown instead of the send button.
+ * The general-info broadcast composer: who it is sent to (never pre-chosen),
+ * which variables it offers, what it says about the audience before anything
+ * is sent, what the send carries, and what a read-only role is shown instead of
+ * the send button.
  *
  * The tRPC module is mocked because importing it for real would give the
  * queries a live HTTP link. `queryOptions`/`mutationOptions` are thin
@@ -71,7 +72,18 @@ function renderComposer({ canSend = true }: { canSend?: boolean } = {}) {
 	);
 }
 
-/** Types a subject and body, which is what makes the send button live. */
+/** Chooses an audience in the Recipients select. */
+function chooseRecipients(name: RegExp = /^All customers$/) {
+	fireEvent.click(screen.getByLabelText("Recipients"));
+
+	// Base UI commits an option on the pointer sequence, not on a bare click.
+	const option = screen.getByRole("option", { name });
+	fireEvent.pointerDown(option);
+	fireEvent.pointerUp(option);
+	fireEvent.click(option);
+}
+
+/** Types a subject and body. */
 function compose({
 	subject = "News from {{wp_name}}",
 	body = "Hello {{customer_name}}, the mains are being flushed.",
@@ -111,16 +123,57 @@ afterEach(() => {
 	cleanup();
 });
 
-describe("GeneralInfoBroadcast", () => {
-	it("counts the recipients while the audience is loading", () => {
+describe("GeneralInfoBroadcast — choosing the recipients", () => {
+	it("opens with no audience chosen and counts nobody until one is", async () => {
+		renderComposer();
+
+		const trigger = screen.getByLabelText("Recipients");
+		expect(trigger.textContent).toContain("Select…");
+		expect(trigger.hasAttribute("data-placeholder")).toBe(true);
+		expect(
+			screen.getByText(/Choose the recipients to see how many customers/),
+		).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Send broadcast" })).toBeTruthy();
+		// The placeholder is never sent as an audience, not even to count it.
+		expect(audienceFn).not.toHaveBeenCalled();
+	});
+
+	it("refuses to send without recipients, at the field, and clears once they are chosen", async () => {
+		renderComposer();
+		compose();
+
+		fireEvent.click(screen.getByRole("button", { name: "Send broadcast" }));
+
+		expect(sendFn).not.toHaveBeenCalled();
+		const trigger = screen.getByLabelText("Recipients");
+		const message = screen.getByText("Select the recipients.");
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(trigger.getAttribute("aria-invalid")).toBe("true");
+		expect(trigger.getAttribute("aria-describedby")).toBe(message.id);
+		expect(document.activeElement).toBe(trigger);
+
+		chooseRecipients();
+
+		expect(screen.queryByText("Select the recipients.")).toBeNull();
+		expect(trigger.getAttribute("aria-invalid")).toBeNull();
+		expect(
+			await screen.findByText(/All customers — 12 recipients/),
+		).toBeTruthy();
+	});
+
+	it("counts the recipients while the chosen audience is loading", () => {
 		audienceFn.mockReturnValue(new Promise(() => {}));
 		renderComposer();
+
+		chooseRecipients();
 
 		expect(screen.getByText(/counting recipients/i)).toBeTruthy();
 	});
 
-	it("names the audience and its size before anything is sent", async () => {
+	it("names the chosen audience and its size before anything is sent", async () => {
 		renderComposer();
+
+		chooseRecipients();
 
 		expect(
 			await screen.findByText(/All customers — 12 recipients/),
@@ -130,6 +183,26 @@ describe("GeneralInfoBroadcast", () => {
 		).toBeTruthy();
 	});
 
+	it("re-counts when the audience changes", async () => {
+		renderComposer();
+
+		chooseRecipients();
+		await screen.findByText(/All customers — 12 recipients/);
+
+		chooseRecipients(/past-due assembly/i);
+
+		await waitFor(() => {
+			expect(audienceFn).toHaveBeenCalledWith({
+				recipientFilter: "past_due_only",
+			});
+		});
+		expect(
+			await screen.findByText(/past-due assembly — 5 recipients/i),
+		).toBeTruthy();
+	});
+});
+
+describe("GeneralInfoBroadcast", () => {
 	it("offers only the two variables a customer has one of", async () => {
 		renderComposer();
 
@@ -160,7 +233,8 @@ describe("GeneralInfoBroadcast", () => {
 	it("substitutes the sample recipient in the preview", async () => {
 		renderComposer();
 
-		await screen.findByLabelText("Subject");
+		chooseRecipients();
+		await screen.findByText(/All customers — 12 recipients/);
 		compose();
 
 		expect(
@@ -182,35 +256,11 @@ describe("GeneralInfoBroadcast", () => {
 		);
 	});
 
-	it("re-counts when the audience changes", async () => {
-		renderComposer();
-
-		await screen.findByText(/All customers — 12 recipients/);
-
-		fireEvent.click(screen.getByLabelText("Recipients"));
-
-		// Base UI commits an option on the pointer sequence, not on a bare click.
-		const option = await screen.findByRole("option", {
-			name: /past-due assembly/i,
-		});
-		fireEvent.pointerDown(option);
-		fireEvent.pointerUp(option);
-		fireEvent.click(option);
-
-		await waitFor(() => {
-			expect(audienceFn).toHaveBeenCalledWith({
-				recipientFilter: "past_due_only",
-			});
-		});
-		expect(
-			await screen.findByText(/past-due assembly — 5 recipients/i),
-		).toBeTruthy();
-	});
-
 	it("sends the composed message with the selected audience", async () => {
 		renderComposer();
 
-		await screen.findByLabelText("Subject");
+		chooseRecipients();
+		await screen.findByText(/All customers — 12 recipients/);
 		compose();
 
 		fireEvent.click(
@@ -229,6 +279,7 @@ describe("GeneralInfoBroadcast", () => {
 	it("will not send an empty message, and says which fields are missing", async () => {
 		renderComposer();
 
+		chooseRecipients();
 		const send = await screen.findByRole("button", {
 			name: /send to 12 recipients/i,
 		});
@@ -251,7 +302,8 @@ describe("GeneralInfoBroadcast", () => {
 		sendFn.mockReturnValue(new Promise(() => {}));
 		renderComposer();
 
-		await screen.findByLabelText("Subject");
+		chooseRecipients();
+		await screen.findByText(/All customers — 12 recipients/);
 		compose();
 		fireEvent.click(
 			screen.getByRole("button", { name: /send to 12 recipients/i }),
@@ -265,7 +317,8 @@ describe("GeneralInfoBroadcast", () => {
 	it("confirms how many customers were written to", async () => {
 		renderComposer();
 
-		await screen.findByLabelText("Subject");
+		chooseRecipients();
+		await screen.findByText(/All customers — 12 recipients/);
 		compose();
 		fireEvent.click(
 			screen.getByRole("button", { name: /send to 12 recipients/i }),
@@ -284,7 +337,8 @@ describe("GeneralInfoBroadcast", () => {
 		);
 		renderComposer();
 
-		await screen.findByLabelText("Subject");
+		chooseRecipients();
+		await screen.findByText(/All customers — 12 recipients/);
 		compose();
 		fireEvent.click(
 			screen.getByRole("button", { name: /send to 12 recipients/i }),
@@ -299,7 +353,7 @@ describe("GeneralInfoBroadcast", () => {
 
 		await screen.findByLabelText("Subject");
 
-		expect(screen.queryByRole("button", { name: /send to/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /send/i })).toBeNull();
 		expect(screen.getByText(/only a wp admin/i)).toBeTruthy();
 		expect(
 			(screen.getByLabelText("Subject") as HTMLInputElement).disabled,

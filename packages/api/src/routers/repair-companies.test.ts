@@ -14,6 +14,8 @@ import {
 	vi,
 } from "vitest";
 
+import { REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE } from "../lib/email-uniqueness";
+
 /**
  * The repair-company procedures against real Postgres: who may call them, what
  * they can see, and — the part that matters — what happens when a caller names
@@ -365,6 +367,173 @@ describeDb("repair company procedures", () => {
 				wp_id: wpA,
 			});
 			expect(typeof entry?.timestamp).toBe("string");
+		});
+	});
+
+	describe("email uniqueness within a purveyor", () => {
+		it("refuses a second company with the same address, however it is spelled", async () => {
+			const first = await callerFor(
+				ids.adminA,
+			).repairCompanies.createRepairCompany({
+				companyName: "Unique Email First",
+				email: "unique.dispatch@example.com",
+			});
+			expect(first.email).toBe("unique.dispatch@example.com");
+
+			await expect(
+				callerFor(ids.subAdminA).repairCompanies.createRepairCompany({
+					companyName: "Unique Email Second",
+					email: "  Unique.Dispatch@EXAMPLE.com ",
+				}),
+			).rejects.toMatchObject({
+				code: "CONFLICT",
+				message: REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE,
+			});
+
+			const { rows } = await pool.query(
+				`select count(*)::int as count from repair_companies
+				 where water_purveyor_id = $1 and lower(btrim(email)) = 'unique.dispatch@example.com'`,
+				[wpA],
+			);
+			expect(rows[0]?.count).toBe(1);
+		});
+
+		it("allows the same address in a different purveyor", async () => {
+			await callerFor(ids.adminA).repairCompanies.createRepairCompany({
+				companyName: "Cross Tenant Email A",
+				email: "cross.tenant.dispatch@example.com",
+			});
+
+			const other = await callerFor(
+				ids.adminB,
+			).repairCompanies.createRepairCompany({
+				companyName: "Cross Tenant Email B",
+				email: "cross.tenant.dispatch@example.com",
+			});
+
+			expect(other.email).toBe("cross.tenant.dispatch@example.com");
+		});
+
+		it("allows any number of companies with no email", async () => {
+			const withoutEmail = await Promise.all(
+				["No Email One", "No Email Two", "No Email Three"].map((companyName) =>
+					callerFor(ids.adminA).repairCompanies.createRepairCompany({
+						companyName,
+						email: companyName === "No Email Two" ? "" : null,
+					}),
+				),
+			);
+
+			expect(withoutEmail.map((row) => row.email)).toEqual([null, null, null]);
+
+			// And the partial index says the same thing to a write that bypasses
+			// the procedure.
+			await pool.query(
+				`insert into repair_companies (water_purveyor_id, company_name, email, status)
+				 values ($1, 'Raw No Email One', null, 'active'),
+				        ($1, 'Raw No Email Two', null, 'active')`,
+				[wpA],
+			);
+		});
+
+		it("refuses an edit onto another company's address and leaves the row untouched", async () => {
+			const taken = await callerFor(
+				ids.adminA,
+			).repairCompanies.createRepairCompany({
+				companyName: "Holds The Address",
+				email: "held.address@example.com",
+			});
+			const mover = await callerFor(
+				ids.adminA,
+			).repairCompanies.createRepairCompany({
+				companyName: "Wants The Address",
+				email: "own.address@example.com",
+			});
+
+			await expect(
+				callerFor(ids.adminA).repairCompanies.updateRepairCompany({
+					id: mover.id,
+					companyName: mover.companyName,
+					phone: mover.phone,
+					email: "HELD.address@example.com",
+					status: mover.status,
+				}),
+			).rejects.toMatchObject({
+				code: "CONFLICT",
+				message: REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE,
+			});
+
+			const { rows } = await pool.query(
+				"select email, updated_at from repair_companies where id = $1",
+				[mover.id],
+			);
+			expect(rows[0]?.email).toBe("own.address@example.com");
+			expect(new Date(rows[0]?.updated_at).getTime()).toBe(
+				mover.updatedAt.getTime(),
+			);
+			expect(taken.email).toBe("held.address@example.com");
+		});
+
+		it("saves an edit that keeps the company's own address", async () => {
+			const created = await callerFor(
+				ids.adminA,
+			).repairCompanies.createRepairCompany({
+				companyName: "Keeps Its Address",
+				email: "keeps.address@example.com",
+			});
+
+			const renamed = await callerFor(
+				ids.adminA,
+			).repairCompanies.updateRepairCompany({
+				id: created.id,
+				companyName: "Keeps Its Address, Renamed",
+				phone: created.phone,
+				// Its own address in another spelling is still its own address.
+				email: " Keeps.Address@Example.com ",
+				status: created.status,
+			});
+
+			expect(renamed.companyName).toBe("Keeps Its Address, Renamed");
+			expect(renamed.email).toBe("keeps.address@example.com");
+		});
+
+		it("enforces the rule in the database, not only in the procedure", async () => {
+			await pool.query(
+				`insert into repair_companies (water_purveyor_id, company_name, email, status)
+				 values ($1, 'Raw Constraint First', 'raw.constraint@example.com', 'active')`,
+				[wpA],
+			);
+
+			await expect(
+				pool.query(
+					`insert into repair_companies (water_purveyor_id, company_name, email, status)
+					 values ($1, 'Raw Constraint Second', '  RAW.Constraint@example.com', 'active')`,
+					[wpA],
+				),
+			).rejects.toMatchObject({
+				code: "23505",
+				constraint: "repair_companies_water_purveyor_id_email_key",
+			});
+		});
+
+		it("lets exactly one of two concurrent creates take an address", async () => {
+			const results = await Promise.allSettled(
+				["Race Left", "Race Right"].map((companyName) =>
+					callerFor(ids.adminA).repairCompanies.createRepairCompany({
+						companyName,
+						email: "race.dispatch@example.com",
+					}),
+				),
+			);
+
+			expect(
+				results.filter((result) => result.status === "fulfilled"),
+			).toHaveLength(1);
+			const [refused] = results.filter(
+				(result): result is PromiseRejectedResult =>
+					result.status === "rejected",
+			);
+			expect(refused?.reason).toMatchObject({ code: "CONFLICT" });
 		});
 	});
 

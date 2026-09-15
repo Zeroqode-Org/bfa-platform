@@ -11,6 +11,7 @@ import {
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
+	SELECT_PLACEHOLDER,
 	Select,
 	SelectContent,
 	SelectGroup,
@@ -46,10 +47,13 @@ import { BFA_TYPE_LABELS } from "./asset-types";
  *
  * `annualTestDate` is the date as displayed, `MM/DD/YYYY`; the API's
  * `YYYY-MM-DD` exists only on the way in and out.
+ *
+ * `bfaType` may be `""`: a new asset opens with its type unanswered, so the
+ * assembly type is always one somebody chose rather than the first in the list.
  */
 export type AssetFormValues = {
 	bin: string;
-	bfaType: AssetPayload["bfaType"];
+	bfaType: AssetPayload["bfaType"] | "";
 	serviceAddress: string;
 	assemblyLocation: string;
 	make: string;
@@ -65,9 +69,21 @@ export type AssetFormValues = {
 	currentCustomerId: string | null;
 };
 
+/** Form values in which the BFA type holds a real choice — the only kind that is sent. */
+export type CompletedAssetFormValues = AssetFormValues & {
+	bfaType: AssetPayload["bfaType"];
+};
+
+/** Whether the BFA type has been answered, so the values may become a payload. */
+export function isCompletedAsset(
+	values: AssetFormValues,
+): values is CompletedAssetFormValues {
+	return values.bfaType !== "";
+}
+
 export const emptyAssetValues: AssetFormValues = {
 	bin: "",
-	bfaType: "RP",
+	bfaType: "",
 	serviceAddress: "",
 	assemblyLocation: "",
 	make: "",
@@ -82,7 +98,7 @@ export const emptyAssetValues: AssetFormValues = {
 const NO_CUSTOMER = "";
 
 /** An existing row as form values. Nullable columns become empty strings. */
-export function assetToFormValues(asset: Asset): AssetFormValues {
+export function assetToFormValues(asset: Asset): CompletedAssetFormValues {
 	return {
 		bin: asset.bin,
 		bfaType: asset.bfaType,
@@ -108,8 +124,13 @@ export function assetToFormValues(asset: Asset): AssetFormValues {
  * The annual test date goes out as the API's `YYYY-MM-DD`. One that is not a
  * real day is sent as typed rather than blanked: the form does not submit it,
  * and if something else does, the server's refusal is the honest answer.
+ *
+ * Takes only completed values: an unanswered BFA type is never converted into a
+ * default here, and `""` never reaches the procedure's enum.
  */
-export function buildAssetPayload(values: AssetFormValues): AssetPayload {
+export function buildAssetPayload(
+	values: CompletedAssetFormValues,
+): AssetPayload {
 	return {
 		bin: values.bin.trim(),
 		bfaType: values.bfaType,
@@ -132,7 +153,7 @@ export function buildAssetPayload(values: AssetFormValues): AssetPayload {
  * dropped on the way to the edit path.
  */
 export function buildCreateAssetPayload(
-	values: AssetFormValues,
+	values: CompletedAssetFormValues,
 ): CreateAssetPayload {
 	return {
 		...buildAssetPayload(values),
@@ -152,6 +173,7 @@ export const assetFormRules = {
 		required("A BIN is required."),
 		maxLength(ASSET_FIELD_LIMITS.bin),
 	),
+	bfaType: required("Select a BFA type."),
 	serviceAddress: composeRules(
 		required("A service address is required."),
 		maxLength(ASSET_FIELD_LIMITS.serviceAddress),
@@ -208,10 +230,9 @@ export function AssetForm({
 	customersPending?: boolean;
 	submitLabel: string;
 	pendingLabel: string;
-	onSubmit: (values: AssetFormValues) => void;
+	onSubmit: (values: CompletedAssetFormValues) => void;
 	onCancel: () => void;
 }) {
-	const bfaTypeId = useId();
 	const annualTestDateHintId = useId();
 	const currentCustomerId = useId();
 
@@ -242,7 +263,7 @@ export function AssetForm({
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!validation.validate()) return;
+		if (!validation.validate() || !isCompletedAsset(values)) return;
 
 		setRejectedBin(values.bin.trim());
 		onSubmit(values);
@@ -306,17 +327,20 @@ export function AssetForm({
 					</div>
 
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={bfaTypeId}>BFA type</Label>
+						<Label htmlFor={validation.fieldId("bfaType")}>BFA type</Label>
 						<Select
 							items={BFA_TYPE_LABELS}
-							value={values.bfaType}
+							value={values.bfaType || null}
 							onValueChange={(value) =>
-								update("bfaType", value as AssetPayload["bfaType"])
+								update("bfaType", (value ?? "") as AssetFormValues["bfaType"])
 							}
 							disabled={pending}
 						>
-							<SelectTrigger id={bfaTypeId} name="bfaType">
-								<SelectValue />
+							<SelectTrigger
+								{...validation.controlProps("bfaType")}
+								name="bfaType"
+							>
+								<SelectValue placeholder={SELECT_PLACEHOLDER} />
 							</SelectTrigger>
 							<SelectContent>
 								<SelectGroup>
@@ -328,6 +352,7 @@ export function AssetForm({
 								</SelectGroup>
 							</SelectContent>
 						</Select>
+						<FieldError {...validation.errorProps("bfaType")} />
 					</div>
 				</div>
 

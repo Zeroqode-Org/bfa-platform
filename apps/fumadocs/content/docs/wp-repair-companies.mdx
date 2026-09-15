@@ -21,7 +21,7 @@ companies* in the [build plan](/docs/build-plan) and PRD § 6.6.5.
 |---|---|---|
 | `company_name` | yes | Trimmed; a name of only spaces is empty, not valid |
 | `phone` | no | Blank is stored as NULL, never as `''`. Otherwise a valid US 10-digit number, stored as `(XXX) XXX-XXXX` — enforced by the input schema, not only the form |
-| `email` | no | Blank is NULL — but an address that *is* given has to be one, lowercased and trimmed |
+| `email` | no | Blank is NULL — but an address that *is* given has to be one, lowercased and trimmed, and unique **within the purveyor** |
 | `status` | yes | `active` or `inactive` — see below |
 | `water_purveyor_id` | — | Never sent by the client; derived from the caller |
 
@@ -55,6 +55,24 @@ No migration rewrites existing rows. A record saved before this rule, with a
 phone in any other shape, cannot be saved unchanged — the update is refused
 until the phone is corrected or cleared. Tenant scoping is unchanged: the
 update still matches on both the row id and the caller's purveyor.
+
+**One email address per purveyor.** Two repair companies in the same purveyor
+may not share an email address; the same address in different purveyors is
+fine, and any number of companies may have no email at all.
+`0011_tenant_email_uniqueness` enforces it with a *partial* unique index on
+`(water_purveyor_id, lower(btrim(email))) WHERE email IS NOT NULL`, so it is
+case- and whitespace-insensitive and race-safe — two concurrent saves of one
+address cannot both succeed. `createRepairCompany` and `updateRepairCompany`
+translate that violation into `CONFLICT` with *Another repair company in this
+water purveyor already uses this email address.*, which the form shows under the
+Email field (never a toast) and clears once the address changes. Saving a
+company without changing its own email is unaffected, and no phone uniqueness
+rule exists.
+
+**The status opens unanswered.** A new company shows *Select…* and saving without
+a choice puts *Select a status.* under the select rather than quietly saving
+*Active*; editing keeps the stored status selected. `""` is never sent to the
+procedures.
 
 There is no foreign key from `test_submissions` to this table. The failure
 workflow joins on `water_purveyor_id` when it composes the email; it does not

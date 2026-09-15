@@ -51,12 +51,25 @@ function asset(overrides: Partial<Asset> = {}): Asset {
 	};
 }
 
+/** Opens the BFA type select and commits one type. */
+function chooseBfaType(type: string) {
+	fireEvent.click(screen.getByLabelText("BFA type"));
+
+	// Base UI commits an option on the pointer sequence, not on a bare click.
+	const item = screen.getByRole("option", { name: type });
+	fireEvent.pointerDown(item);
+	fireEvent.pointerUp(item);
+	fireEvent.click(item);
+}
+
 function fillRequired({
 	bin = "BIN-10041",
+	bfaType = "RP" as string | null,
 	serviceAddress = "18 Canal Road",
 	annualTestDate = "04/01/2027",
 } = {}) {
 	fireEvent.change(screen.getByLabelText("BIN"), { target: { value: bin } });
+	if (bfaType) chooseBfaType(bfaType);
 	fireEvent.change(screen.getByLabelText("Service address"), {
 		target: { value: serviceAddress },
 	});
@@ -74,6 +87,7 @@ describe("buildAssetPayload", () => {
 		expect(
 			buildAssetPayload({
 				...emptyAssetValues,
+				bfaType: "RP",
 				bin: "  BIN-10041 ",
 				serviceAddress: " 18 Canal Road ",
 				make: "   ",
@@ -93,7 +107,7 @@ describe("buildAssetPayload", () => {
 		// All three are the server's: the tenant from the caller's profile, the
 		// status from the scheduler, and the customer from `assignCustomer`, which
 		// records the occupancy change rather than moving a pointer.
-		const keys = Object.keys(buildAssetPayload(emptyAssetValues));
+		const keys = Object.keys(buildAssetPayload(assetToFormValues(asset())));
 
 		expect(keys).not.toContain("waterPurveyorId");
 		expect(keys).not.toContain("assetStatus");
@@ -106,6 +120,7 @@ describe("buildCreateAssetPayload", () => {
 		expect(
 			buildCreateAssetPayload({
 				...emptyAssetValues,
+				bfaType: "RP",
 				bin: "BIN-10041",
 				serviceAddress: "18 Canal Road",
 				annualTestDate: "04/01/2027",
@@ -116,7 +131,8 @@ describe("buildCreateAssetPayload", () => {
 
 	it("sends null when the picker was left alone", () => {
 		expect(
-			buildCreateAssetPayload(emptyAssetValues).currentCustomerId,
+			buildCreateAssetPayload({ ...emptyAssetValues, bfaType: "RP" })
+				.currentCustomerId,
 		).toBeNull();
 	});
 });
@@ -173,7 +189,42 @@ describe("AddAssetForm", () => {
 		});
 	});
 
-	it("keeps save available and names the three missing answers when pressed", () => {
+	it("opens a new asset with the BFA type unanswered", () => {
+		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
+
+		const type = screen.getByLabelText("BFA type");
+		expect(type.textContent).toContain("Select…");
+		expect(type.textContent).not.toContain("RP");
+		expect(type.hasAttribute("data-placeholder")).toBe(true);
+	});
+
+	it("blocks a missing BFA type at the field and clears the error once one is chosen", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		fillRequired({ bfaType: null });
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		const type = screen.getByLabelText("BFA type");
+		const message = screen.getByText("Select a BFA type.");
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(type.getAttribute("aria-invalid")).toBe("true");
+		expect(type.getAttribute("aria-describedby")).toBe(message.id);
+		expect(document.activeElement).toBe(type);
+
+		chooseBfaType("DCDA");
+
+		expect(screen.queryByText("Select a BFA type.")).toBeNull();
+		expect(type.getAttribute("aria-invalid")).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ bfaType: "DCDA" }),
+		);
+	});
+
+	it("keeps save available and names the four missing answers when pressed", () => {
 		const onSubmit = vi.fn();
 		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
 
@@ -189,6 +240,7 @@ describe("AddAssetForm", () => {
 			screen.getAllByRole("alert").map((node) => node.textContent),
 		).toEqual([
 			"A BIN is required.",
+			"Select a BFA type.",
 			"A service address is required.",
 			"An annual test date is required.",
 		]);
@@ -349,6 +401,11 @@ describe("EditAssetForm", () => {
 
 		expect(screen.getByLabelText<HTMLInputElement>("BIN").value).toBe(
 			"BIN-10041",
+		);
+		// An existing asset keeps its saved type selected, not a placeholder.
+		expect(screen.getByLabelText("BFA type").textContent).toContain("RP");
+		expect(screen.getByLabelText("BFA type").textContent).not.toContain(
+			"Select…",
 		);
 		expect(
 			screen.getByLabelText<HTMLInputElement>("Annual test date").value,

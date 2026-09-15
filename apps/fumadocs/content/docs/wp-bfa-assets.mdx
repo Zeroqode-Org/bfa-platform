@@ -66,7 +66,12 @@ not become a row.
 
 ### What the form checks, and what the server checks
 
-The same three required answers, in both places. The form trims before it
+The same required answers, in both places. The BFA type opens unanswered on the
+add form — *Select…*, not a pre-chosen *RP* — and saving without one puts
+*Select a BFA type.* under the select; the edit form keeps the stored type
+selected, and `""` is never sent to `createAssetInput`, whose enum check is
+unchanged. The customer picker is different on purpose: *No customer yet* is a
+real answer, so it stays the default. The form trims before it
 judges, so a BIN of spaces reads as empty exactly as it does in
 `createAssetInput`. The save button is never disabled for a missing answer:
 pressing it reveals an inline message under each field that is still missing or

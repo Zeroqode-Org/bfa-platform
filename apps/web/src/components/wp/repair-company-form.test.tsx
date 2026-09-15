@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { normalizeUsPhone } from "@bfa-platform/api/lib/us-phone";
 import { EMAIL_MESSAGE, PHONE_MESSAGE } from "@bfa-platform/ui/lib/validation";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -9,6 +10,7 @@ import {
 	buildRepairCompanyPayload,
 	emptyRepairCompanyValues,
 	RepairCompanyForm,
+	repairCompanyFormErrors,
 	repairCompanyToFormValues,
 } from "./repair-company-form";
 import type { RepairCompany } from "./repair-company-types";
@@ -58,6 +60,17 @@ function submit(label = "Add company") {
 	fireEvent.click(screen.getByRole("button", { name: label }));
 }
 
+/** Opens the Status select and commits one option. */
+function chooseStatus(option: "Active" | "Inactive") {
+	fireEvent.click(screen.getByLabelText("Status"));
+
+	// Base UI commits an option on the pointer sequence, not on a bare click.
+	const item = screen.getByRole("option", { name: option });
+	fireEvent.pointerDown(item);
+	fireEvent.pointerUp(item);
+	fireEvent.click(item);
+}
+
 afterEach(() => {
 	cleanup();
 });
@@ -67,6 +80,7 @@ describe("buildRepairCompanyPayload", () => {
 		expect(
 			buildRepairCompanyPayload({
 				...emptyRepairCompanyValues,
+				status: "active",
 				companyName: "  Ridgeline Backflow Repair  ",
 				phone: "   ",
 				email: "",
@@ -143,6 +157,7 @@ describe("RepairCompanyForm — phone mask against the server's normalizer", () 
 		fireEvent.change(screen.getByLabelText("Company name"), {
 			target: { value: "Parity Repairs" },
 		});
+		chooseStatus("Active");
 	}
 
 	function phoneField() {
@@ -311,6 +326,59 @@ describe("RepairCompanyForm — whole pasted phone values against normalizeUsPho
 	});
 });
 
+describe("repairCompanyFormErrors", () => {
+	it("routes a duplicate email to the Email field and everything else to the banner", () => {
+		expect(
+			repairCompanyFormErrors({
+				message: REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE,
+				data: { code: "CONFLICT" },
+			}),
+		).toEqual({ emailErrorMessage: REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE });
+		expect(
+			repairCompanyFormErrors({
+				message: "Repair company not found",
+				data: { code: "NOT_FOUND" },
+			}),
+		).toEqual({ errorMessage: "Repair company not found" });
+		expect(repairCompanyFormErrors(null)).toEqual({});
+	});
+});
+
+describe("RepairCompanyForm — duplicate email refusal", () => {
+	it("shows the refusal under the Email field and clears it when the address changes", () => {
+		renderForm({
+			initialValues: repairCompanyToFormValues(company()),
+			submitLabel: "Save changes",
+			emailErrorMessage: REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE,
+		});
+
+		expect(screen.queryByText(REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE)).toBeNull();
+
+		submit("Save changes");
+
+		const email = screen.getByLabelText("Email");
+		const message = screen.getByText(REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE);
+		expect(message.getAttribute("role")).toBe("alert");
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(email.getAttribute("aria-invalid")).toBe("true");
+		expect(email.getAttribute("aria-describedby")).toBe(message.id);
+		expect(document.querySelector('[data-slot="form-error"]')).toBeNull();
+
+		fireEvent.change(email, { target: { value: "office@ridgeline.example" } });
+		expect(screen.queryByText(REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE)).toBeNull();
+
+		// Same address, another spelling: the server would refuse it too.
+		fireEvent.change(email, {
+			target: { value: " DISPATCH@ridgeline.example " },
+		});
+		expect(screen.getByText(REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE)).toBeTruthy();
+
+		// Clearing the optional email is never a duplicate.
+		fireEvent.change(email, { target: { value: "" } });
+		expect(screen.queryByText(REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE)).toBeNull();
+	});
+});
+
 describe("RepairCompanyForm", () => {
 	it("opts out of browser validation and carries no native constraints", () => {
 		renderForm();
@@ -330,6 +398,54 @@ describe("RepairCompanyForm", () => {
 		expect(screen.queryAllByRole("alert")).toHaveLength(0);
 	});
 
+	it("opens a new company with the status unanswered", () => {
+		renderForm();
+
+		const status = screen.getByLabelText("Status");
+		expect(status.textContent).toContain("Select…");
+		expect(status.textContent).not.toContain("Active");
+		expect(status.hasAttribute("data-placeholder")).toBe(true);
+		expect(screen.queryAllByRole("alert")).toHaveLength(0);
+	});
+
+	it("blocks a missing status at the field and clears the error once one is chosen", () => {
+		const { onSubmit } = renderForm();
+
+		fireEvent.change(screen.getByLabelText("Company name"), {
+			target: { value: "Ridgeline Backflow Repair" },
+		});
+		submit();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		const status = screen.getByLabelText("Status");
+		const message = screen.getByText("Select a status.");
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(status.getAttribute("aria-invalid")).toBe("true");
+		expect(status.getAttribute("aria-describedby")).toBe(message.id);
+		expect(document.activeElement).toBe(status);
+
+		chooseStatus("Inactive");
+
+		expect(screen.queryByText("Select a status.")).toBeNull();
+		expect(status.getAttribute("aria-invalid")).toBeNull();
+
+		submit();
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ status: "inactive" }),
+		);
+	});
+
+	it("keeps an existing company's status selected", () => {
+		renderForm({
+			initialValues: repairCompanyToFormValues(company({ status: "inactive" })),
+			submitLabel: "Save changes",
+		});
+
+		const status = screen.getByLabelText("Status");
+		expect(status.textContent).toContain("Inactive");
+		expect(status.textContent).not.toContain("Select…");
+	});
+
 	it("submits the typed values", () => {
 		const { onSubmit } = renderForm();
 
@@ -342,6 +458,7 @@ describe("RepairCompanyForm", () => {
 		fireEvent.change(screen.getByLabelText("Email"), {
 			target: { value: "dispatch@ridgeline.example" },
 		});
+		chooseStatus("Active");
 		submit();
 
 		expect(onSubmit).toHaveBeenCalledWith({
@@ -358,6 +475,7 @@ describe("RepairCompanyForm", () => {
 		fireEvent.change(screen.getByLabelText("Company name"), {
 			target: { value: "Name Only Repairs" },
 		});
+		chooseStatus("Active");
 		submit();
 
 		expect(onSubmit).toHaveBeenCalledWith({
@@ -380,8 +498,11 @@ describe("RepairCompanyForm", () => {
 		expect(name.getAttribute("aria-invalid")).toBe("true");
 		expect(name.getAttribute("aria-describedby")).toBe(message.id);
 		expect(document.activeElement).toBe(name);
-		// Blank contact fields are a valid record, not two more errors.
-		expect(screen.getAllByRole("alert")).toHaveLength(1);
+		// Blank contact fields are a valid record, not two more errors — the
+		// only other answer missing is the status nobody has chosen yet.
+		expect(
+			screen.getAllByRole("alert").map((node) => node.textContent),
+		).toEqual(["Company name is required.", "Select a status."]);
 		expect(screen.getByLabelText("Phone").getAttribute("aria-invalid")).toBe(
 			null,
 		);
@@ -480,7 +601,7 @@ describe("RepairCompanyForm", () => {
 		).toBeTruthy();
 	});
 
-	it("says nothing about failure notices while the company is active", () => {
+	it("says nothing about failure notices until inactive is chosen", () => {
 		renderForm();
 
 		expect(

@@ -1,9 +1,11 @@
+import { sql } from "drizzle-orm";
 import {
 	date,
 	index,
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core";
 
@@ -34,5 +36,12 @@ export const customers = pgTable(
 	},
 	(table) => [
 		index("customers_water_purveyor_id_idx").on(table.waterPurveyorId),
+		// One email address per purveyor, compared the way the application stores
+		// it (trimmed, lowercased) so no second spelling can slip past. Added in
+		// 0011; the procedures turn a violation into an inline Email error.
+		uniqueIndex("customers_water_purveyor_id_email_key").on(
+			table.waterPurveyorId,
+			sql`lower(btrim(${table.email}))`,
+		),
 	],
 ).enableRLS();

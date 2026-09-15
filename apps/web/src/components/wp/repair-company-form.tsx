@@ -11,6 +11,7 @@ import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import { PhoneInput } from "@bfa-platform/ui/components/phone-input";
 import {
+	SELECT_PLACEHOLDER,
 	Select,
 	SelectContent,
 	SelectGroup,
@@ -28,7 +29,7 @@ import {
 	usPhone,
 } from "@bfa-platform/ui/lib/validation";
 import { TriangleAlert } from "lucide-react";
-import { useId, useState } from "react";
+import { useState } from "react";
 
 import type {
 	RepairCompany,
@@ -46,11 +47,19 @@ export const STATUS_LABELS = {
  * including the status enum, because that is what an input hands back — the
  * conversion to the procedure's shape happens once, in
  * `buildRepairCompanyPayload`.
+ *
+ * The status may be `""`: a new company opens with it unanswered, so "active"
+ * is a choice somebody made rather than a default nobody looked at.
  */
 export type RepairCompanyFormValues = {
 	companyName: string;
 	phone: string;
 	email: string;
+	status: RepairCompany["status"] | "";
+};
+
+/** Form values in which the status holds a real choice — the only kind that is sent. */
+export type CompletedRepairCompanyFormValues = RepairCompanyFormValues & {
 	status: RepairCompany["status"];
 };
 
@@ -58,13 +67,13 @@ export const emptyRepairCompanyValues: RepairCompanyFormValues = {
 	companyName: "",
 	phone: "",
 	email: "",
-	status: "active",
+	status: "",
 };
 
 /** An existing row as form values. Nullable columns become empty strings. */
 export function repairCompanyToFormValues(
 	company: RepairCompany,
-): RepairCompanyFormValues {
+): CompletedRepairCompanyFormValues {
 	return {
 		companyName: company.companyName,
 		phone: company.phone ?? "",
@@ -73,8 +82,18 @@ export function repairCompanyToFormValues(
 	};
 }
 
+/** Whether the status has been answered, so the values may become a payload. */
+export function isCompletedRepairCompany(
+	values: RepairCompanyFormValues,
+): values is CompletedRepairCompanyFormValues {
+	return values.status !== "";
+}
+
 /**
  * Form values as the procedure's input.
+ *
+ * Takes only completed values: an unanswered status is never converted into a
+ * default here, and `""` never reaches the procedure's enum.
  *
  * Both contact fields are optional, and a field that was typed into and cleared
  * hands back `""`. That collapses to `null` here as well as on the server, so
@@ -88,7 +107,7 @@ export function repairCompanyToFormValues(
  * a number that is not one.
  */
 export function buildRepairCompanyPayload(
-	values: RepairCompanyFormValues,
+	values: CompletedRepairCompanyFormValues,
 ): RepairCompanyPayload {
 	return {
 		companyName: values.companyName.trim(),
@@ -96,6 +115,29 @@ export function buildRepairCompanyPayload(
 		email: values.email.trim() || null,
 		status: values.status,
 	};
+}
+
+/**
+ * Where a failed repair-company mutation's message belongs on the form.
+ *
+ * `createRepairCompany` and `updateRepairCompany` raise `CONFLICT` for exactly
+ * one reason — the email address is already used by another repair company in
+ * this purveyor — so the message goes under the Email input rather than into
+ * the form-wide banner.
+ */
+export function repairCompanyFormErrors(
+	error: { message: string; data?: { code?: string | null } | null } | null,
+) {
+	if (!error) return {};
+
+	return error.data?.code === "CONFLICT"
+		? { emailErrorMessage: error.message }
+		: { errorMessage: error.message };
+}
+
+/** The spelling the server compares addresses in: trimmed and lowercased. */
+function normalizedEmail(value: string) {
+	return value.trim().toLowerCase();
 }
 
 /**
@@ -110,6 +152,7 @@ export function RepairCompanyForm({
 	initialValues = emptyRepairCompanyValues,
 	pending = false,
 	errorMessage,
+	emailErrorMessage,
 	submitLabel,
 	pendingLabel,
 	onSubmit,
@@ -117,15 +160,26 @@ export function RepairCompanyForm({
 }: {
 	initialValues?: RepairCompanyFormValues;
 	pending?: boolean;
+	/** A server refusal with no field of its own. */
 	errorMessage?: string;
+	/** A server refusal about the email address — shown under that input. */
+	emailErrorMessage?: string;
 	submitLabel: string;
 	pendingLabel: string;
 	onSubmit: (payload: RepairCompanyPayload) => void;
 	onCancel: () => void;
 }) {
-	const statusId = useId();
-
 	const [values, setValues] = useState<RepairCompanyFormValues>(initialValues);
+	// Which address the rejected request carried — see `CustomerForm`. The
+	// refusal follows that address in any spelling and no other.
+	const [rejectedEmail, setRejectedEmail] = useState<string | null>(null);
+
+	const emailTaken =
+		emailErrorMessage &&
+		values.email.trim() !== "" &&
+		rejectedEmail === normalizedEmail(values.email)
+			? emailErrorMessage
+			: undefined;
 
 	// The server's rules, checked here first so the person hears about them at
 	// the field. Phone and email stay independently optional: a blank one passes
@@ -142,7 +196,9 @@ export function RepairCompanyForm({
 				email(),
 				maxLength(REPAIR_COMPANY_FIELD_LIMITS.email),
 			),
+			status: required("Select a status."),
 		},
+		externalErrors: { email: emailTaken },
 	});
 
 	function update<Field extends keyof RepairCompanyFormValues>(
@@ -154,8 +210,9 @@ export function RepairCompanyForm({
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!validation.validate()) return;
+		if (!validation.validate() || !isCompletedRepairCompany(values)) return;
 
+		setRejectedEmail(normalizedEmail(values.email));
 		onSubmit(buildRepairCompanyPayload(values));
 	}
 
@@ -224,17 +281,20 @@ export function RepairCompanyForm({
 				</p>
 
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={statusId}>Status</Label>
+					<Label htmlFor={validation.fieldId("status")}>Status</Label>
 					<Select
 						items={STATUS_LABELS}
-						value={values.status}
+						value={values.status || null}
 						onValueChange={(value) =>
-							update("status", value as RepairCompany["status"])
+							update(
+								"status",
+								(value ?? "") as RepairCompanyFormValues["status"],
+							)
 						}
 						disabled={pending}
 					>
-						<SelectTrigger id={statusId} name="status">
-							<SelectValue />
+						<SelectTrigger {...validation.controlProps("status")} name="status">
+							<SelectValue placeholder={SELECT_PLACEHOLDER} />
 						</SelectTrigger>
 						<SelectContent>
 							<SelectGroup>
@@ -245,6 +305,7 @@ export function RepairCompanyForm({
 							</SelectGroup>
 						</SelectContent>
 					</Select>
+					<FieldError {...validation.errorProps("status")} />
 				</div>
 
 				{/* Status is the one field here with a consequence outside this form, so

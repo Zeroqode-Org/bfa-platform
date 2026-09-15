@@ -16,7 +16,7 @@ the [build plan](/docs/build-plan) and PRD § 6.6.4.
 | Field | Required | Notes |
 |---|---|---|
 | `name` | yes | Trimmed; a name of only spaces is empty, not valid |
-| `email` | yes | Lowercased and trimmed, so one address has one spelling |
+| `email` | yes | Lowercased and trimmed, so one address has one spelling. Unique **within the purveyor** — see below |
 | `account_number` | no | Blank is stored as NULL, never as `''` |
 | `address` | no | Blank is stored as NULL |
 | `rate_category` | yes | `standard` or `agricultural`; agricultural gets the purple badge |
@@ -43,6 +43,34 @@ Name and email are required inline, the email must look like an address
 server's length limit at the field — see the shared
 [inline validation](/docs/design-system#form-validation) pattern. A server
 refusal is shown as a form-level message inside the dialog, not a toast.
+
+**Rate category and status open unanswered.** A new customer shows *Select…* in
+both, and saving without a choice puts *Select a rate category.* / *Select a
+status.* under the select instead of quietly saving *Standard* and *Active*.
+Editing an existing customer keeps both prefilled with what is stored. The
+form's values allow `""` only while unanswered; the payload is built from a
+completed record, so `""` never reaches the procedures, whose enum validation is
+unchanged.
+
+### One email address per purveyor
+
+Two customers in the same purveyor may not share an email address; the same
+address in two different purveyors is fine, since neither can see the other's
+list. `0011_tenant_email_uniqueness` enforces it with a unique index on
+`(water_purveyor_id, lower(btrim(email)))` — case- and whitespace-insensitive,
+matching how the app already stores addresses, so no second spelling can slip
+past. Being a database constraint rather than a "does it exist yet?" check, two
+concurrent saves of the same address cannot both succeed, whether they come
+through the procedures or PostgREST.
+
+`createCustomer` and `updateCustomer` catch that one unique violation (by index
+name) and answer `CONFLICT` with *Another customer in this water purveyor already
+uses this email address.* The form shows it under the Email field with the shared
+inline error — never a toast — and clears it once the address changes. Saving a
+customer without changing their own email is unaffected: a row never collides
+with itself. The migration does not merge or delete anything: if a purveyor
+already held duplicate addresses it stops, before creating the index, and says
+so.
 
 Going the other way clears it. Moving a customer back to the standard rate
 writes NULL, in the form *and* in the procedure — a stale date left on the row

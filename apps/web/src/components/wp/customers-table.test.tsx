@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
@@ -301,6 +302,49 @@ describe("CustomersTable", () => {
 		}
 
 		expect(dialog.textContent).toContain("Edit customer");
+	});
+
+	it("shows a duplicate email refusal under Email in the open dialog, never as a toast", async () => {
+		const { toast } = await import("sonner");
+		vi.mocked(toast.error).mockClear();
+		createFn.mockRejectedValue(
+			Object.assign(new Error(CUSTOMER_EMAIL_TAKEN_MESSAGE), {
+				data: { code: "CONFLICT" },
+			}),
+		);
+		renderTable();
+
+		fireEvent.click(screen.getAllByRole("button", { name: "Add customer" })[0]);
+		fireEvent.change(await screen.findByLabelText("Name"), {
+			target: { value: "Marta Ellison Two" },
+		});
+		fireEvent.change(screen.getByLabelText("Email"), {
+			target: { value: "MARTA@example.com" },
+		});
+		for (const [label, option] of [
+			["Rate category", "Standard"],
+			["Status", "Active"],
+		] as const) {
+			fireEvent.click(screen.getByLabelText(label));
+			const item = screen.getByRole("option", { name: option });
+			fireEvent.pointerDown(item);
+			fireEvent.pointerUp(item);
+			fireEvent.click(item);
+		}
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+
+		const message = await screen.findByText(CUSTOMER_EMAIL_TAKEN_MESSAGE);
+		const email = screen.getByLabelText("Email");
+
+		expect(createFn).toHaveBeenCalledWith(
+			expect.objectContaining({ rateCategory: "standard", status: "active" }),
+		);
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(email.getAttribute("aria-invalid")).toBe("true");
+		expect(email.getAttribute("aria-describedby")).toContain(message.id);
+		// Still open, still correctable, and nothing popped up somewhere else.
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		expect(toast.error).not.toHaveBeenCalled();
 	});
 
 	it("offers a way to add the first customer when there are none", async () => {

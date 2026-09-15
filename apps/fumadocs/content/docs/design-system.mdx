@@ -113,6 +113,20 @@ never through the browser's own validation popups or a toast.
   person was working; a pasted `2/3/2027` is padded to `02/03/2027`. The mask
   shapes text only — `02/30/2026` stays as entered and the inline date error
   explains it.
+- **Select placeholders.** A select for a value a person must decide — a
+  status, a BFA type, a rate category, a broadcast's recipients — opens on
+  `SELECT_PLACEHOLDER` (*Select…*, from `packages/ui/src/components/select.tsx`)
+  rather than on its first option, and a `required` rule reports *Select a …*
+  under it with the same `aria-invalid`/`aria-describedby` wiring. Editing an
+  existing record keeps its stored value selected. A deliberate "no value"
+  answer stays a real option where the business allows it (*No customer yet*,
+  *Not recorded*), and list filters keep their *All …* default. Forms convert to
+  a payload only from completed values, so `""` never reaches an API enum.
+- **Unique fields.** A uniqueness rule lives in the database (a unique index),
+  never only in a pre-check. The procedure catches that specific violation and
+  answers `CONFLICT`; the form routes `CONFLICT` to the field it belongs to
+  (duplicate BIN → BIN, duplicate email → Email) and clears the message once
+  that field's value changes.
 - **Phone mask.** `PhoneInput` masks entry as `(XXX) XXX-XXXX` on the same
   digit-mask model (`packages/ui/src/lib/digit-mask.ts`): only digits from the
   keyboard or paste, separators added as each group completes, at most ten

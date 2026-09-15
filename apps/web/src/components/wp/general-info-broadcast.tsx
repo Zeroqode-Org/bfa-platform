@@ -27,6 +27,7 @@ import {
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
+	SELECT_PLACEHOLDER,
 	Select,
 	SelectContent,
 	SelectGroup,
@@ -43,7 +44,7 @@ import {
 } from "@bfa-platform/ui/lib/validation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Users } from "lucide-react";
-import { useId, useState } from "react";
+import { useState } from "react";
 
 import { trpc } from "@/utils/trpc";
 
@@ -75,6 +76,10 @@ function broadcastRule(label: string, max: number) {
 }
 
 const BROADCAST_RULES = {
+	// Who a broadcast goes to is the most consequential answer on this card, so
+	// it is never pre-chosen: an untouched select would otherwise mean "every
+	// customer" without anybody having said so.
+	recipientFilter: required("Select the recipients."),
 	subject: broadcastRule("Subject", NOTICE_FIELD_LIMITS.subject),
 	body: broadcastRule("Message", NOTICE_FIELD_LIMITS.body),
 };
@@ -91,27 +96,31 @@ const BROADCAST_RULES = {
  * and the rest have no single value for a recipient; the panel offers the two
  * that do, and the server refuses the others rather than mailing a placeholder.
  *
- * The audience count is shown before anything is sent, from the same server
- * predicate the send uses, so the number on screen is the number of people who
- * will receive this.
+ * The audience opens unchosen. Once one is chosen its count is shown before
+ * anything is sent, from the same server predicate the send uses, so the number
+ * on screen is the number of people who will receive this.
  */
 export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
-	const filterId = useId();
-
-	const [recipientFilter, setRecipientFilter] =
-		useState<BroadcastRecipientFilter>("all_customers");
+	const [recipientFilter, setRecipientFilter] = useState<
+		BroadcastRecipientFilter | ""
+	>("");
 	const [draft, setDraft] = useState({ subject: "", body: "" });
 	const [sentSummary, setSentSummary] = useState<string | null>(null);
 
 	const validation = useFormValidation({
-		values: draft,
+		values: { ...draft, recipientFilter },
 		rules: BROADCAST_RULES,
 	});
 	const bodyCounterId = `${validation.fieldId("body")}-count`;
 
-	const audience = useQuery(
-		trpc.notices.getBroadcastAudience.queryOptions({ recipientFilter }),
-	);
+	// Nothing is counted until an audience is chosen, and the placeholder never
+	// reaches the procedure: the query is disabled, so its input is never sent.
+	const audience = useQuery({
+		...trpc.notices.getBroadcastAudience.queryOptions({
+			recipientFilter: recipientFilter || BROADCAST_RECIPIENT_FILTERS[0],
+		}),
+		enabled: recipientFilter !== "",
+	});
 
 	const sendBroadcast = useMutation(
 		trpc.notices.sendGeneralInfoBroadcast.mutationOptions({
@@ -137,12 +146,16 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 	});
 
 	const sending = sendBroadcast.isPending;
+	const chosen = recipientFilter !== "";
 	const values = audience.data?.sampleValues ?? PENDING_SAMPLE;
 	const recipientCount = audience.data?.recipientCount ?? 0;
-	// Missing or invalid text does not disable the button: pressing it says what
-	// is wrong at the field. Only an audience that cannot receive anything does.
+	// Missing or invalid answers do not disable the button: pressing it says what
+	// is wrong at the field. Only a chosen audience that cannot receive anything
+	// does.
 	const canSubmit =
-		canSend && !sending && audience.isSuccess && recipientCount > 0;
+		canSend &&
+		!sending &&
+		(!chosen || (audience.isSuccess && recipientCount > 0));
 
 	return (
 		<Card>
@@ -157,18 +170,25 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 			<CardContent className="flex flex-col gap-4 lg:flex-row lg:items-start">
 				<div className="flex min-w-0 flex-1 flex-col gap-3">
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={filterId}>Recipients</Label>
+						<Label htmlFor={validation.fieldId("recipientFilter")}>
+							Recipients
+						</Label>
 						<Select
 							items={BROADCAST_FILTER_LABELS}
-							value={recipientFilter}
+							value={recipientFilter || null}
 							disabled={!canSend || sending}
 							onValueChange={(value) => {
-								setRecipientFilter(value as BroadcastRecipientFilter);
+								setRecipientFilter(
+									(value ?? "") as BroadcastRecipientFilter | "",
+								);
 								setSentSummary(null);
 							}}
 						>
-							<SelectTrigger id={filterId} name="recipientFilter">
-								<SelectValue />
+							<SelectTrigger
+								{...validation.controlProps("recipientFilter")}
+								name="recipientFilter"
+							>
+								<SelectValue placeholder={SELECT_PLACEHOLDER} />
 							</SelectTrigger>
 							<SelectContent>
 								<SelectGroup>
@@ -180,9 +200,12 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 								</SelectGroup>
 							</SelectContent>
 						</Select>
-						<p className="text-[12px] text-muted-foreground">
-							{BROADCAST_FILTER_DESCRIPTIONS[recipientFilter]}
-						</p>
+						<FieldError {...validation.errorProps("recipientFilter")} />
+						{chosen ? (
+							<p className="text-[12px] text-muted-foreground">
+								{BROADCAST_FILTER_DESCRIPTIONS[recipientFilter]}
+							</p>
+						) : null}
 					</div>
 
 					{/* Who this reaches, before it reaches them. Same predicate as the
@@ -192,11 +215,13 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 						aria-live="polite"
 					>
 						<Users className="size-4 shrink-0" aria-hidden="true" />
-						{audience.isPending
-							? "Counting recipients…"
-							: audience.isError
-								? "Couldn't count the recipients for this audience."
-								: `${BROADCAST_FILTER_LABELS[recipientFilter]} — ${recipientCount} ${recipientCount === 1 ? "recipient" : "recipients"}`}
+						{!chosen
+							? "Choose the recipients to see how many customers this reaches."
+							: audience.isPending
+								? "Counting recipients…"
+								: audience.isError
+									? "Couldn't count the recipients for this audience."
+									: `${BROADCAST_FILTER_LABELS[recipientFilter]} — ${recipientCount} ${recipientCount === 1 ? "recipient" : "recipients"}`}
 					</p>
 
 					<div className="flex flex-col gap-1.5">
@@ -273,14 +298,16 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 								disabled={!canSubmit}
 								onClick={() => {
 									setSentSummary(null);
-									if (!validation.validate()) return;
+									if (!validation.validate() || recipientFilter === "") return;
 
 									sendBroadcast.mutate({ ...draft, recipientFilter });
 								}}
 							>
 								{sending
 									? "Sending…"
-									: `Send to ${recipientCount} ${recipientCount === 1 ? "recipient" : "recipients"}`}
+									: chosen
+										? `Send to ${recipientCount} ${recipientCount === 1 ? "recipient" : "recipients"}`
+										: "Send broadcast"}
 							</Button>
 							<span className="text-[12px] text-muted-foreground">
 								Sends immediately. There is no undo.
