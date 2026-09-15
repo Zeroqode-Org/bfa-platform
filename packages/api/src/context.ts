@@ -12,6 +12,7 @@ import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import { and, asc, eq } from "drizzle-orm";
 
 import { CallerRefusedError } from "./caller-refusal";
+import { readVerifiedAuthSession } from "./lib/auth-session";
 import {
 	type ImpersonationTokenRejection,
 	impersonationSecret,
@@ -30,8 +31,10 @@ export {
 
 /**
  * Per-request tRPC context. Builds a cookie-backed Supabase client from the raw
- * request and validates the session against the Auth server (`getUser`, not
- * `getSession`). Profile-row resolution is deferred to `protectedProcedure`.
+ * request and validates the session against the Auth server — the access token
+ * goes through `getUser(jwt)`, so neither the user nor the auth session id is
+ * taken from the cookie on trust (see `readVerifiedAuthSession`). Profile-row
+ * resolution is deferred to `protectedProcedure`.
  */
 export async function createContext(opts: FetchCreateContextFnOptions) {
 	const { req, resHeaders } = opts;
@@ -61,13 +64,12 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
 		},
 	);
 
-	const {
-		data: { user },
-	} = await supabase.auth.getUser();
+	const { user, sessionId } = await readVerifiedAuthSession(supabase);
 
 	return {
 		supabase,
 		user,
+		authSessionId: sessionId,
 		resHeaders,
 		// The raw value only. Nothing trusts it until `resolveEffectiveCaller` has
 		// verified the signature and re-checked both accounts.
@@ -78,6 +80,12 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
 export type Context = {
 	supabase: SupabaseClient;
 	user: User | null;
+	/**
+	 * The Auth-server-verified `session_id` of this request's Supabase session.
+	 * An impersonation cookie is honoured only in the session it was issued in;
+	 * absent means none could be verified, and no cookie is honoured.
+	 */
+	authSessionId?: string | null;
 	resHeaders: Headers;
 	/** Raw impersonation cookie, unverified. Absent means none was sent. */
 	impersonationToken?: string | null;
@@ -164,6 +172,11 @@ export type ImpersonationRejection =
 	| ImpersonationTokenRejection
 	/** Signed for a different Super-Admin than the one signed in. */
 	| "actor_mismatch"
+	/**
+	 * Issued in a different Supabase Auth session than this request's — a cookie
+	 * left behind by an earlier sign-in — or no session could be verified.
+	 */
+	| "session_mismatch"
 	/** The signed-in account is no longer a Super-Admin. */
 	| "actor_not_super_admin"
 	/** The target is gone, blocked, no longer a WP admin, or moved purveyor. */
@@ -306,6 +319,10 @@ export async function findImpersonationTarget(
  * - the signature, shape and lifetime verify (`verifyImpersonationToken`);
  * - it was issued to *this* signed-in profile — a cookie copied into another
  *   browser, or left behind for the next person to sign in, does nothing;
+ * - it was issued in *this* Supabase Auth session (`authSessionId`, verified by
+ *   the Auth server) — so the same Super-Admin signing in again gets a new
+ *   session and the old cookie does nothing, even if every client-side attempt
+ *   to delete it failed;
  * - that profile is still a Super-Admin;
  * - the target is still an active `wp_admin` of the same, active purveyor.
  *
@@ -316,6 +333,7 @@ export async function resolveEffectiveCaller(
 	supabase: SupabaseClient,
 	user: User | null,
 	impersonationToken: string | null | undefined,
+	authSessionId: string | null | undefined,
 ): Promise<EffectiveCaller> {
 	const actor = await resolveCaller(supabase, user);
 
@@ -339,6 +357,9 @@ export async function resolveEffectiveCaller(
 	const { claims } = verified;
 	if (claims.actorProfileId !== actor.profileId) {
 		return refuse("actor_mismatch");
+	}
+	if (!authSessionId || claims.authSessionId !== authSessionId) {
+		return refuse("session_mismatch");
 	}
 	if (actor.globalRole !== "super_admin") {
 		return refuse("actor_not_super_admin");

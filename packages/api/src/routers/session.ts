@@ -23,8 +23,10 @@ export const sessionRouter = router({
 	 * `resolveEffectiveCaller` on the next request.
 	 *
 	 * `impersonation_ended` is logged only when the cookie verifies *and* was
-	 * issued to the account signed in on this request — so a stale or foreign
-	 * cookie is cleared silently rather than recorded as somebody's session.
+	 * issued to the account and the auth session of this request — so a stale or
+	 * foreign cookie is cleared silently rather than recorded as somebody's
+	 * session. Clearing is a convenience, not the security boundary: a cookie
+	 * from an earlier auth session is already ignored by `resolveEffectiveCaller`.
 	 */
 	clearImpersonation: publicProcedure
 		.input(z.object({ reason: z.enum(["sign_out", "sign_in"]) }))
@@ -44,7 +46,9 @@ export const sessionRouter = router({
 			if (
 				verified.ok &&
 				ctx.user &&
-				verified.claims.actorProfileId === ctx.user.id
+				verified.claims.actorProfileId === ctx.user.id &&
+				ctx.authSessionId &&
+				verified.claims.authSessionId === ctx.authSessionId
 			) {
 				console.log(
 					JSON.stringify({

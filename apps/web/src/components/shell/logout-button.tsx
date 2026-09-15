@@ -28,6 +28,8 @@ export function LogoutButton({
 
 	async function handleClick() {
 		setIsSigningOut(true);
+		// The result is deliberately ignored: leaving must never depend on this
+		// request. `LoginForm` refuses to enter the app until the clear succeeds.
 		await clearImpersonationCookie("sign_out");
 		const supabase = createClient();
 		await supabase.auth.signOut();

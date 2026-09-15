@@ -50,6 +50,7 @@ const enforceCaller = t.middleware(async ({ ctx, next }) => {
 			ctx.supabase,
 			ctx.user,
 			ctx.impersonationToken,
+			ctx.authSessionId,
 		);
 
 	const responseAlreadySetsCookie = ctx.resHeaders

@@ -75,9 +75,14 @@ type Probe = {
 	}>;
 };
 
+/** Two distinct Supabase Auth sessions of the same Super-Admin. */
+const SESSION = randomUUID();
+const LATER_SESSION = randomUUID();
+
 let callerFor: (
 	profileId: string,
 	impersonationToken?: string | null,
+	authSessionId?: string | null,
 ) => { api: Probe; resHeaders: Headers };
 
 /** The structured log lines emitted during the current test, for one event. */
@@ -106,11 +111,16 @@ describeDb("Super-Admin impersonation (database)", () => {
 		const { appRouter } = await import("./index");
 		const createCaller = t.createCallerFactory(appRouter);
 
-		callerFor = (profileId, impersonationToken = null) => {
+		callerFor = (
+			profileId,
+			impersonationToken = null,
+			authSessionId = SESSION,
+		) => {
 			const resHeaders = new Headers();
 			const api = createCaller({
 				supabase: {} as never,
 				user: { id: profileId } as never,
+				authSessionId,
 				resHeaders,
 				impersonationToken,
 			}) as unknown as Probe;
@@ -324,6 +334,35 @@ describeDb("Super-Admin impersonation (database)", () => {
 				impersonating: false,
 			},
 		);
+	});
+
+	it("ignores the cookie in a later auth session, even when nothing ever deleted it", async () => {
+		// Sign-out's clear and sign-in's clear both failed: the browser still
+		// holds the cookie, and now a new Supabase session for the same person.
+		const token = await start();
+
+		const { api, resHeaders } = callerFor(ids.superAdmin, token, LATER_SESSION);
+
+		await expect(api.whoami()).resolves.toMatchObject({
+			profileId: ids.superAdmin,
+			globalRole: "super_admin",
+			impersonating: false,
+		});
+		expect(cookieSetBy(resHeaders)).toBe("");
+		expect(loggedEvents("impersonation_cookie_rejected")).toEqual([
+			expect.objectContaining({
+				actor_id: ids.superAdmin,
+				reason: "session_mismatch",
+			}),
+		]);
+
+		// And the session that started it still sees the impersonation.
+		await expect(
+			callerFor(ids.superAdmin, token, SESSION).api.whoami(),
+		).resolves.toMatchObject({
+			profileId: ids.firstAdmin,
+			impersonating: true,
+		});
 	});
 
 	it("restores the Super-Admin after ending", async () => {

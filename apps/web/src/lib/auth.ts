@@ -4,9 +4,11 @@ import "server-only";
  * Server-side gates for every signed-in route. Anonymous visitors are sent to
  * `/login` instead of being shown a shell that cannot be filled with data.
  *
- * Everything here uses `getUser()`, which re-validates the JWT against the
- * Auth server — `getSession()` would trust a cookie the browser could have
- * forged.
+ * Everything here goes through `readVerifiedAuthSession`, which sends the
+ * session's access token to the Auth server with `getUser(jwt)` — a bare
+ * `getSession()` would trust a cookie the browser could have forged. The same
+ * verified token yields the auth session id the impersonation cookie is bound
+ * to.
  *
  * Deliberately not `middleware.ts`: Next runs middleware on the Edge runtime,
  * which the project's portability guardrails rule out. The trade-off is that
@@ -19,6 +21,7 @@ import "server-only";
 
 import { callerRefusal } from "@bfa-platform/api/caller-refusal";
 import { type Caller, resolveEffectiveCaller } from "@bfa-platform/api/context";
+import { readVerifiedAuthSession } from "@bfa-platform/api/lib/auth-session";
 import { IMPERSONATION_COOKIE_NAME } from "@bfa-platform/api/lib/impersonation-cookie";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -56,9 +59,7 @@ export type Account = Caller & {
  */
 export async function requireAccount(): Promise<Account> {
 	const supabase = await createClient();
-	const {
-		data: { user },
-	} = await supabase.auth.getUser();
+	const { user, sessionId } = await readVerifiedAuthSession(supabase);
 
 	if (!user) redirect("/login");
 
@@ -69,6 +70,7 @@ export async function requireAccount(): Promise<Account> {
 			supabase,
 			user,
 			cookieStore.get(IMPERSONATION_COOKIE_NAME)?.value,
+			sessionId,
 		);
 
 		if (impersonation) {

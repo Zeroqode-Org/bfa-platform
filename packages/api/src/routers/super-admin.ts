@@ -180,8 +180,10 @@ export const superAdminRouter = router({
 	 * stacking one identity on another.
 	 *
 	 * The identity goes into its own signed, `httpOnly` cookie. The Supabase
-	 * session is not touched — the Super-Admin stays signed in as themselves, and
-	 * the cookie is only honoured alongside that session.
+	 * session is not touched — the Super-Admin stays signed in as themselves — but
+	 * the cookie carries that session's verified `session_id` and is honoured only
+	 * in that session. Signing in again starts a new session, so the cookie stops
+	 * working whether or not the browser ever deletes it.
 	 */
 	startImpersonation: superAdminProcedure
 		.input(z.object({ waterPurveyorId: z.uuid() }))
@@ -191,6 +193,16 @@ export const superAdminRouter = router({
 				throw new TRPCError({
 					code: "PRECONDITION_FAILED",
 					message: "Impersonation is not configured on this server",
+				});
+			}
+
+			// Nothing to bind the cookie to without a verified auth session.
+			const authSessionId = ctx.authSessionId;
+			if (!authSessionId) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message:
+						"Your session could not be verified. Sign in again and retry.",
 				});
 			}
 
@@ -226,6 +238,7 @@ export const superAdminRouter = router({
 					actorProfileId: ctx.actor.profileId,
 					targetProfileId: target.profileId,
 					waterPurveyorId,
+					authSessionId,
 				},
 				secret,
 			);

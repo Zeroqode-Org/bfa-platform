@@ -47,6 +47,23 @@ vi.mock("@/lib/supabase/server", () => ({
 	createClient: async () => ({ auth: { getUser } }),
 }));
 
+/** The auth session every signed-in request in this file is verified in. */
+const SESSION_ID = "5e55a000-0000-4000-8000-00000000000a";
+
+// The verification itself has its own suite (`packages/api/src/lib/auth-session.test.ts`)
+// and an end-to-end one (`app/(wp)/impersonation-session-binding.test.ts`). Here
+// it only has to hand `requireAccount` a user and the session they are in.
+vi.mock("@bfa-platform/api/lib/auth-session", () => ({
+	readVerifiedAuthSession: async (client: {
+		auth: { getUser: () => Promise<{ data: { user: unknown } }> };
+	}) => {
+		const {
+			data: { user },
+		} = await client.auth.getUser();
+		return { user, sessionId: user ? SESSION_ID : null };
+	},
+}));
+
 const resolveEffectiveCaller = vi.fn();
 
 // Replaced whole rather than spread over the original: `context.ts` builds the
@@ -170,8 +187,8 @@ describe("requireAccount while impersonating", () => {
 		});
 	});
 
-	it("hands the raw impersonation cookie to the shared helper, and nothing else decides", async () => {
-		cookieValues.set("bfa_impersonation", "v1.payload.signature");
+	it("hands the raw impersonation cookie and the verified auth session to the shared helper, and nothing else decides", async () => {
+		cookieValues.set("bfa_impersonation", "v2.payload.signature");
 		resolveEffectiveCaller.mockResolvedValue(actingAsSelf(superAdmin));
 
 		await requireAccount();
@@ -179,7 +196,8 @@ describe("requireAccount while impersonating", () => {
 		expect(resolveEffectiveCaller).toHaveBeenCalledWith(
 			expect.anything(),
 			expect.objectContaining({ id: superAdmin.profileId }),
-			"v1.payload.signature",
+			"v2.payload.signature",
+			SESSION_ID,
 		);
 	});
 

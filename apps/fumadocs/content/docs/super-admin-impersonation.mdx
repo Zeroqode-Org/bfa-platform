@@ -62,14 +62,24 @@ regardless.
 |---|---|
 | Name | `bfa_impersonation` — separate from the `sb-…` Supabase Auth cookies, which are never touched |
 | Attributes | `HttpOnly; Path=/; SameSite=Lax; Max-Age=3600`, plus `Secure` when `NODE_ENV=production` |
-| Format | `v1.<base64url(JSON claims)>.<base64url(HMAC-SHA-256)>` |
-| Claims | `actor` (Super-Admin profile id), `target` (WP admin profile id), `wp` (purveyor id), `iat`, `exp` — identifiers only, strict schema |
-| Signature | HMAC-SHA-256 over `v1.<claims>` from `node:crypto` (FIPS-approved, no new dependency), compared in constant time before the payload is parsed |
+| Format | `v2.<base64url(JSON claims)>.<base64url(HMAC-SHA-256)>`. Pre-binding `v1` cookies are refused |
+| Claims | `actor` (Super-Admin profile id), `target` (WP admin profile id), `wp` (purveyor id), `sid` (the Supabase Auth `session_id` it was issued in), `iat`, `exp` — identifiers only, strict schema |
+| Signature | HMAC-SHA-256 over `v2.<claims>` from `node:crypto` (FIPS-approved, no new dependency), compared in constant time before the payload is parsed |
+| Session binding | Honoured only in the auth session named by `sid`. A new sign-in has a new `session_id`, so an old cookie stops working even if nothing ever deletes it |
 | Lifetime | One hour, not sliding. An expired cookie is ignored and cleared; the Super-Admin is back to themselves |
 | Key | `IMPERSONATION_COOKIE_SECRET`, server-only |
 
 The cookie is **not** a second session. It is honoured only together with the
-real Supabase session of the Super-Admin it was issued to.
+exact Supabase Auth session it was issued in, for the Super-Admin it was issued
+to.
+
+Where the session id comes from matters. `readVerifiedAuthSession` in
+`packages/api/src/lib/auth-session.ts` reads the session (refreshing it if
+expired), then sends that exact access token to the Auth server with
+`getUser(jwt)`. Only a token the server accepts is used, and its `session_id`
+claim counts only if its `sub` matches the returned user. A forged or edited
+token, or a session id copied from somewhere else, never reaches the comparison.
+The tRPC context and the route gates both use this helper.
 
 ### Configuration
 
@@ -82,7 +92,7 @@ on the server.
 
 ## One helper for the effective identity
 
-`resolveEffectiveCaller(supabase, user, token)` in
+`resolveEffectiveCaller(supabase, user, token, authSessionId)` in
 `packages/api/src/context.ts` is the only place impersonation is interpreted. It
 is used by:
 
@@ -104,10 +114,11 @@ No feature router contains impersonation code. It resolves in this order:
 | Check | Rejection reason |
 |---|---|
 | A key is configured | `not_configured` |
-| Three parts, `v1`, valid claims, lifetime ≤ 1h, not issued in the future | `malformed` |
+| Three parts, `v2`, valid claims including `sid`, lifetime ≤ 1h, not issued in the future | `malformed` |
 | HMAC matches | `bad_signature` |
 | Not expired | `expired` |
 | `actor` is the signed-in profile | `actor_mismatch` |
+| `sid` is this request's verified auth `session_id` (and one could be verified) | `session_mismatch` |
 | The signed-in profile is still a `super_admin` | `actor_not_super_admin` |
 | `target` still exists, is `active`, is a `wp_admin`, still belongs to `wp`, and `wp` is `active` | `target_invalid` |
 
@@ -196,10 +207,28 @@ appear under somebody else's name.
 
 - **Signing out ends the impersonation.** The logout button calls
   `session.clearImpersonation({ reason: "sign_out" })` before Supabase
-  `signOut`. The login form calls it again with `sign_in` after a successful
-  sign-in and before navigating, so a sign-out whose clear never reached the
-  server still cannot be resumed. Both calls swallow network errors so neither
-  blocks signing out or in.
+  `signOut`. That clear is best-effort: if it fails, logging out still
+  proceeds.
+- **A new sign-in never resumes an old impersonation.** The server guarantees
+  this through the session binding above, not the browser: a cookie issued in an
+  earlier auth session is ignored, and cleared, on the first request of the new
+  one. It holds even if the sign-out clear, the sign-in clear and the local
+  Supabase sign-out all fail, so the browser still holds both the new session
+  and the old cookie. That exact case is covered by a direct `/wp` request in
+  `apps/web/src/app/(wp)/impersonation-session-binding.test.ts`.
+- **Signing in still tidies up, and says so when it can't.** After a successful
+  password check the login form calls
+  `session.clearImpersonation({ reason: "sign_in" })` and waits for it. If that
+  fails, the form does not navigate. It drops the session it just created with
+  a local Supabase sign-out, shows *We couldn't finish signing you in. Check
+  your connection and try again.*, and re-enables **Sign in**. This is
+  housekeeping and a visible retry, not the security boundary.
+- **The certifier area is certifiers only.** `CertifierShell` has no
+  impersonation banner, so the `(certifier)` layout and every page under it call
+  `requireGlobalRole(["certifier"])`. Every other role is redirected to its own
+  landing route. An impersonated WP admin, whose effective role is `wp_admin`,
+  goes to `/wp`, where the banner is always drawn. This is a UX and transparency
+  boundary only; certifier procedures still check the role themselves.
 - **Expiry is silent.** After an hour the next request resolves to the
   Super-Admin again. The `/wp` screen in front of them does not reload by itself.
 

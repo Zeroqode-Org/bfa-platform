@@ -14,10 +14,14 @@ import { z } from "zod";
  *
  * Wire format — three dot-separated parts:
  *
- *     v1.<base64url(JSON claims)>.<base64url(HMAC-SHA-256(secret, "v1.<claims>"))>
+ *     v2.<base64url(JSON claims)>.<base64url(HMAC-SHA-256(secret, "v2.<claims>"))>
  *
- * The claims are identifiers only (actor profile, target profile, purveyor,
- * issued-at, expiry) — nothing secret, and the cookie is `httpOnly` besides.
+ * The claims are identifiers only (actor profile, target profile, purveyor, the
+ * Supabase Auth session it was issued in, issued-at, expiry) — nothing secret,
+ * and the cookie is `httpOnly` besides. The session claim (`sid`) is what binds
+ * the cookie to one sign-in: `resolveEffectiveCaller` ignores it in any other
+ * authentication session, so a cookie the browser failed to delete is useless
+ * after the next sign-in. `v1` cookies carried no session and are refused.
  * HMAC-SHA-256 is FIPS-approved, which the project's crypto rule requires, and
  * it comes from `node:crypto`, so there is no new dependency. The signature is
  * compared in constant time.
@@ -34,7 +38,7 @@ export const IMPERSONATION_TTL_SECONDS = 60 * 60;
 /** Shortest accepted signing secret, in characters. */
 export const IMPERSONATION_SECRET_MIN_LENGTH = 32;
 
-const VERSION = "v1";
+const VERSION = "v2";
 
 /** Tolerated clock drift for `iat`, in seconds. */
 const CLOCK_SKEW_SECONDS = 60;
@@ -44,6 +48,7 @@ const claimsSchema = z
 		actor: z.uuid(),
 		target: z.uuid(),
 		wp: z.uuid(),
+		sid: z.string().min(1).max(128),
 		iat: z.number().int().nonnegative(),
 		exp: z.number().int().positive(),
 	})
@@ -56,6 +61,11 @@ export type ImpersonationClaims = {
 	targetProfileId: string;
 	/** The purveyor the target belongs to, as it did when this was issued. */
 	waterPurveyorId: string;
+	/**
+	 * The verified Supabase Auth `session_id` it was issued in. Must match the
+	 * session of the request presenting it.
+	 */
+	authSessionId: string;
 	issuedAt: Date;
 	expiresAt: Date;
 };
@@ -100,6 +110,7 @@ export function createImpersonationToken(
 		actorProfileId: string;
 		targetProfileId: string;
 		waterPurveyorId: string;
+		authSessionId: string;
 	},
 	secret: string,
 	now: Date = new Date(),
@@ -112,6 +123,7 @@ export function createImpersonationToken(
 			actor: claims.actorProfileId,
 			target: claims.targetProfileId,
 			wp: claims.waterPurveyorId,
+			sid: claims.authSessionId,
 			iat,
 			exp,
 		}),
@@ -185,6 +197,7 @@ export function verifyImpersonationToken(
 			actorProfileId: parsed.actor,
 			targetProfileId: parsed.target,
 			waterPurveyorId: parsed.wp,
+			authSessionId: parsed.sid,
 			issuedAt: new Date(parsed.iat * 1000),
 			expiresAt: new Date(parsed.exp * 1000),
 		},

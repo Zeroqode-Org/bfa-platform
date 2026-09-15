@@ -88,5 +88,20 @@ describe("LogoutButton", () => {
 
 		await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
 		expect(signOut).toHaveBeenCalledTimes(1);
+		expect(calls).toEqual(["signOut", "replace"]);
+		expect(refresh).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("clearImpersonationCookie", () => {
+	it("reports success and failure to its caller instead of swallowing them", async () => {
+		const { clearImpersonationCookie } = await import(
+			"@/lib/clear-impersonation"
+		);
+
+		await expect(clearImpersonationCookie("sign_in")).resolves.toBe(true);
+
+		clearMutate.mockRejectedValueOnce(new Error("network down"));
+		await expect(clearImpersonationCookie("sign_in")).resolves.toBe(false);
 	});
 });

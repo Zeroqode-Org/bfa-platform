@@ -309,14 +309,23 @@ const testRouter = router({
 
 const createCaller = t.createCallerFactory(testRouter);
 
+/**
+ * Two Supabase Auth sessions. `SESSION_A` is the one every request runs in unless
+ * a test says otherwise; `SESSION_B` stands for a later sign-in by the same person.
+ */
+const SESSION_A = "5e55a000-0000-4000-8000-00000000000a";
+const SESSION_B = "5e55b000-0000-4000-8000-00000000000b";
+
 function callerFor(
 	profileId: string | null,
 	impersonationToken: string | null = null,
+	authSessionId: string | null = SESSION_A,
 ) {
 	const resHeaders = new Headers();
 	const api = createCaller({
 		supabase: {} as never,
 		user: profileId ? ({ id: profileId } as never) : null,
+		authSessionId,
 		resHeaders,
 		impersonationToken,
 	});
@@ -340,11 +349,12 @@ function tokenFor(
 		actorProfileId: string;
 		targetProfileId: string;
 		waterPurveyorId: string;
+		authSessionId?: string;
 	},
 	options: { secret?: string; now?: Date } = {},
 ) {
 	return createImpersonationToken(
-		claims,
+		{ authSessionId: SESSION_A, ...claims },
 		options.secret ?? SECRET,
 		options.now ?? new Date(),
 	).token;
@@ -434,6 +444,8 @@ describe("startImpersonation", () => {
 				actorProfileId: ids.superAdmin,
 				targetProfileId: ids.adminA,
 				waterPurveyorId: WP_A,
+				// Bound to the auth session the request was verified in.
+				authSessionId: SESSION_A,
 			},
 		});
 	});
@@ -507,6 +519,16 @@ describe("startImpersonation", () => {
 				tokenFor(validClaims),
 			).api.superAdmin.startImpersonation({ waterPurveyorId: WP_B }),
 		).rejects.toMatchObject({ code: "FORBIDDEN" });
+	});
+
+	it("refuses to start when the request's auth session could not be verified", async () => {
+		const { api, resHeaders } = callerFor(ids.superAdmin, null, null);
+
+		await expect(
+			api.superAdmin.startImpersonation({ waterPurveyorId: WP_A }),
+		).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+		expect(impersonationCookies(resHeaders)).toEqual([]);
+		expect(logEvents("impersonation_started")).toEqual([]);
 	});
 
 	it("logs the start with actor and target context, and no secrets", async () => {
@@ -677,6 +699,14 @@ describe("cookies that must not change the effective caller", () => {
 				}),
 				"actor_mismatch",
 			],
+			[
+				"a cookie from an earlier auth session of the same Super-Admin",
+				() => ({
+					profileId: ids.superAdmin,
+					token: tokenFor({ ...validClaims, authSessionId: SESSION_B }),
+				}),
+				"session_mismatch",
+			],
 		];
 
 	it.each(cases)(
@@ -827,6 +857,62 @@ describe("cookies that must not change the effective caller", () => {
 // endImpersonation
 // ---------------------------------------------------------------------------
 
+describe("binding to the Supabase Auth session", () => {
+	it("a request from a new sign-in does not resume an impersonation whose cookie was never cleared", async () => {
+		// The regression: sign-out clear, sign-in clear and local sign-out all
+		// failed, so the browser sends the old, correctly signed cookie with a
+		// brand-new valid session for the same Super-Admin.
+		const oldCookie = tokenFor(validClaims); // issued in SESSION_A
+
+		const { api, resHeaders } = callerFor(ids.superAdmin, oldCookie, SESSION_B);
+
+		await expect(api.probe.wp()).rejects.toThrow(/water purveyor only/i);
+		expect(impersonationCookies(resHeaders)).toEqual([
+			expect.stringMatching(/^bfa_impersonation=;.*Max-Age=0/),
+		]);
+		expect(logEvents("impersonation_cookie_rejected")).toEqual([
+			expect.objectContaining({
+				actor_id: ids.superAdmin,
+				reason: "session_mismatch",
+			}),
+		]);
+
+		const protectedCall = await callerFor(
+			ids.superAdmin,
+			oldCookie,
+			SESSION_B,
+		).api.probe.protected();
+		expect(protectedCall.impersonating).toBe(false);
+		expect(protectedCall.caller.globalRole).toBe("super_admin");
+
+		// Control: the session that started it still acts as the purveyor.
+		await expect(
+			callerFor(ids.superAdmin, oldCookie, SESSION_A).api.probe.wp(),
+		).resolves.toMatchObject({ profileId: ids.adminA, waterPurveyorId: WP_A });
+	});
+
+	it("honours no cookie when the request's auth session could not be verified", async () => {
+		const { api } = callerFor(ids.superAdmin, tokenFor(validClaims), null);
+
+		const result = await api.probe.protected();
+
+		expect(result.impersonating).toBe(false);
+		expect(logEvents("impersonation_cookie_rejected")[0]).toMatchObject({
+			reason: "session_mismatch",
+		});
+	});
+
+	it("a cookie minted by startImpersonation carries the verified session and nothing a client supplied", async () => {
+		const { api, resHeaders } = callerFor(ids.superAdmin, null, SESSION_B);
+
+		await api.superAdmin.startImpersonation({ waterPurveyorId: WP_A });
+
+		expect(
+			verifyImpersonationToken(tokenSetBy(resHeaders), SECRET),
+		).toMatchObject({ ok: true, claims: { authSessionId: SESSION_B } });
+	});
+});
+
 describe("audit attribution while impersonating", () => {
 	it("keeps the real Super-Admin as actor_id for an action performed as the WP admin", async () => {
 		await expect(
@@ -906,6 +992,19 @@ describe("session.clearImpersonation (sign-out and sign-in)", () => {
 
 	it("clears a cookie issued to somebody else without logging it as their session", async () => {
 		const { api, resHeaders } = callerFor(ids.adminB, tokenFor(validClaims));
+
+		await api.session.clearImpersonation({ reason: "sign_in" });
+
+		expect(impersonationCookies(resHeaders)).toHaveLength(1);
+		expect(logEvents("impersonation_ended")).toEqual([]);
+	});
+
+	it("clears a cookie from an earlier auth session without logging it as this session ending", async () => {
+		const { api, resHeaders } = callerFor(
+			ids.superAdmin,
+			tokenFor(validClaims),
+			SESSION_B,
+		);
 
 		await api.session.clearImpersonation({ reason: "sign_in" });
 

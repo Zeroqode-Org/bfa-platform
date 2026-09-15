@@ -26,17 +26,18 @@ const claims = {
 	actorProfileId: "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e",
 	targetProfileId: "7e8f9a0b-1c2d-4e3f-9a4b-5c6d7e8f9a0b",
 	waterPurveyorId: "9f8e7d6c-5b4a-4938-8271-0a1b2c3d4e5f",
+	authSessionId: "5e55a000-0000-4000-8000-00000000000a",
 };
 
 const issued = new Date("2026-09-14T12:00:00.000Z");
 
 /** Re-signs an arbitrary payload with the real key, to reach the checks after the signature. */
-function signedWith(payload: unknown, secret = SECRET) {
+function signedWith(payload: unknown, secret = SECRET, version = "v2") {
 	const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
 	const signature = createHmac("sha256", secret)
-		.update(`v1.${encoded}`)
+		.update(`${version}.${encoded}`)
 		.digest("base64url");
-	return `v1.${encoded}.${signature}`;
+	return `${version}.${encoded}.${signature}`;
 }
 
 afterEach(() => {
@@ -65,12 +66,12 @@ describe("createImpersonationToken / verifyImpersonationToken", () => {
 		const [version, payload] = token.split(".");
 
 		expect(token.split(".")).toHaveLength(3);
-		expect(version).toBe("v1");
+		expect(version).toBe("v2");
 		expect(
 			Object.keys(
 				JSON.parse(Buffer.from(payload as string, "base64url").toString()),
 			).sort(),
-		).toEqual(["actor", "exp", "iat", "target", "wp"]);
+		).toEqual(["actor", "exp", "iat", "sid", "target", "wp"]);
 		expect(token).not.toContain(SECRET);
 	});
 
@@ -91,6 +92,7 @@ describe("createImpersonationToken / verifyImpersonationToken", () => {
 				actor: claims.actorProfileId,
 				target: "00000000-0000-4000-8000-000000000000",
 				wp: claims.waterPurveyorId,
+				sid: claims.authSessionId,
 				iat: Math.floor(issued.getTime() / 1000),
 				exp: Math.floor(issued.getTime() / 1000) + 60,
 			}),
@@ -132,7 +134,7 @@ describe("createImpersonationToken / verifyImpersonationToken", () => {
 		["missing", undefined],
 		["one part", "garbage"],
 		["four parts", "v1.a.b.c"],
-		["wrong version", "v2.a.b"],
+		["wrong version", "v3.a.b"],
 		["empty payload", "v1..sig"],
 	])("refuses a malformed value (%s)", (_label, value) => {
 		expect(verifyImpersonationToken(value, SECRET, issued)).toEqual({
@@ -150,6 +152,7 @@ describe("createImpersonationToken / verifyImpersonationToken", () => {
 				actor: "not-a-uuid",
 				target: claims.targetProfileId,
 				wp: claims.waterPurveyorId,
+				sid: claims.authSessionId,
 				iat,
 				exp: iat + 60,
 			},
@@ -158,6 +161,7 @@ describe("createImpersonationToken / verifyImpersonationToken", () => {
 				actor: claims.actorProfileId,
 				target: claims.targetProfileId,
 				wp: claims.waterPurveyorId,
+				sid: claims.authSessionId,
 				iat,
 				exp: iat + 60,
 				role: "super_admin",
@@ -167,6 +171,7 @@ describe("createImpersonationToken / verifyImpersonationToken", () => {
 				actor: claims.actorProfileId,
 				target: claims.targetProfileId,
 				wp: claims.waterPurveyorId,
+				sid: claims.authSessionId,
 				iat,
 				exp: iat + IMPERSONATION_TTL_SECONDS + 1,
 			},
@@ -175,6 +180,7 @@ describe("createImpersonationToken / verifyImpersonationToken", () => {
 				actor: claims.actorProfileId,
 				target: claims.targetProfileId,
 				wp: claims.waterPurveyorId,
+				sid: claims.authSessionId,
 				iat: iat + 3600,
 				exp: iat + 3700,
 			},
@@ -183,6 +189,37 @@ describe("createImpersonationToken / verifyImpersonationToken", () => {
 				verifyImpersonationToken(signedWith(payload), SECRET, issued),
 			).toEqual({ ok: false, reason: "malformed" });
 		}
+	});
+
+	it("refuses a signed cookie that names no auth session", () => {
+		const iat = Math.floor(issued.getTime() / 1000);
+		const unbound = {
+			actor: claims.actorProfileId,
+			target: claims.targetProfileId,
+			wp: claims.waterPurveyorId,
+			iat,
+			exp: iat + 60,
+		};
+
+		// A pre-binding `v1` cookie, correctly signed with today's key.
+		expect(
+			verifyImpersonationToken(
+				signedWith(unbound, SECRET, "v1"),
+				SECRET,
+				issued,
+			),
+		).toEqual({ ok: false, reason: "malformed" });
+		// And a `v2` one with the session claim missing or empty.
+		expect(
+			verifyImpersonationToken(signedWith(unbound), SECRET, issued),
+		).toEqual({ ok: false, reason: "malformed" });
+		expect(
+			verifyImpersonationToken(
+				signedWith({ ...unbound, sid: "" }),
+				SECRET,
+				issued,
+			),
+		).toEqual({ ok: false, reason: "malformed" });
 	});
 
 	it("refuses everything when no key is configured", () => {
