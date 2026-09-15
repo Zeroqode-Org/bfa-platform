@@ -115,25 +115,44 @@ describe("InviteCertifierForm", () => {
 
 	it("does not submit without an address", () => {
 		// `required` plus `type="email"` — the browser refuses the submit, so the
-		// mutation is never reached and there is no request to explain away.
+		// mutation is never reached and there is no request to explain away. The
+		// refusal is the app's own inline message, not a browser tooltip.
 		renderForm();
+		const input = screen.getByLabelText("Certifier email") as HTMLInputElement;
+		const form = input.closest("form") as HTMLFormElement;
+
+		expect(form.noValidate).toBe(true);
+		expect(input.required).toBe(false);
+		expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
 		fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
 
 		expect(mutationFn).not.toHaveBeenCalled();
-		const input = screen.getByLabelText("Certifier email") as HTMLInputElement;
-		expect(input.required).toBe(true);
-		expect(input.type).toBe("email");
-		expect(input.checkValidity()).toBe(false);
+		const message = screen.getByRole("alert");
+		expect(message.textContent).toBe("Certifier email is required.");
+		expect(input.getAttribute("aria-invalid")).toBe("true");
+		expect(input.getAttribute("aria-describedby")).toContain(message.id);
+		expect(document.activeElement).toBe(input);
 	});
 
-	it("rejects an address that is not one before it reaches the server", () => {
+	it("rejects an address that is not one before it reaches the server, and clears once fixed", async () => {
+		mutationFn.mockResolvedValue(invitation);
 		renderForm();
-		fireEvent.change(screen.getByLabelText("Certifier email"), {
-			target: { value: "tester@" },
-		});
+		const input = screen.getByLabelText("Certifier email");
+
+		fireEvent.change(input, { target: { value: "tester@" } });
 		fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
 
 		expect(mutationFn).not.toHaveBeenCalled();
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Please enter a valid email address.",
+		);
+
+		fireEvent.change(input, { target: { value: "tester@example.com" } });
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
+		await waitFor(() => expect(mutationFn).toHaveBeenCalledTimes(1));
 	});
 
 	it("closes and confirms that Resend accepted the invitation", async () => {

@@ -9,10 +9,15 @@ import {
 	auditActorFields,
 } from "../lib/audit-actor";
 import {
+	REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE,
+	REPAIR_COMPANY_EMAIL_UNIQUE_INDEX,
+} from "../lib/email-uniqueness";
+import {
 	createRepairCompanyInput,
 	repairCompanyColumns,
 	updateRepairCompanyInput,
 } from "../lib/repair-company-input";
+import { isUniqueViolation } from "../lib/unique-violation";
 
 /**
  * The columns every repair-company procedure returns. Declared once so the
@@ -80,13 +85,19 @@ export const repairCompaniesRouter = router({
 	createRepairCompany: wpProcedure
 		.input(createRepairCompanyInput)
 		.mutation(async ({ ctx, input }) => {
+			// No "is this address taken?" read first: the partial unique index
+			// decides, so two clerks adding the same address at once cannot both
+			// succeed. A company with no email is never a duplicate.
 			const [row] = await db
 				.insert(repairCompanies)
 				.values({
 					...repairCompanyColumns(input),
 					waterPurveyorId: ctx.caller.waterPurveyorId,
 				})
-				.returning(repairCompanySelection);
+				.returning(repairCompanySelection)
+				.catch((error: unknown) => {
+					throw duplicateEmailError(error);
+				});
 
 			if (!row) {
 				throw new TRPCError({
@@ -158,11 +169,17 @@ export const repairCompaniesRouter = router({
 				return existing;
 			}
 
+			// An edit onto another company's address is refused by the same index.
+			// The record's own address never collides with itself, so saving a
+			// company without changing its email is unaffected.
 			const [row] = await db
 				.update(repairCompanies)
 				.set({ ...next, updatedAt: new Date() })
 				.where(tenantScopedRow)
-				.returning(repairCompanySelection);
+				.returning(repairCompanySelection)
+				.catch((error: unknown) => {
+					throw duplicateEmailError(error);
+				});
 
 			if (!row) {
 				throw new TRPCError({
@@ -190,6 +207,25 @@ export const repairCompaniesRouter = router({
 			return row;
 		}),
 });
+
+/**
+ * A duplicate email, as the Email field's error.
+ *
+ * `CONFLICT` is the one code these procedures raise for a field, so the form
+ * can route it by code rather than by matching the sentence. Only a violation
+ * of the email index is translated; anything else is rethrown untouched.
+ */
+function duplicateEmailError(error: unknown) {
+	if (!isUniqueViolation(error, REPAIR_COMPANY_EMAIL_UNIQUE_INDEX)) {
+		return error;
+	}
+
+	return new TRPCError({
+		code: "CONFLICT",
+		message: REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE,
+		cause: error,
+	});
+}
 
 /**
  * Whether every writable column already holds the value being written.

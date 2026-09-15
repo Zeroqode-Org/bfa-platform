@@ -302,12 +302,12 @@ describe("NoticeTemplatesEditor", () => {
 		).toBe(true);
 	});
 
-	it("shows the server's validation message inline rather than as a toast", async () => {
-		upsertFn.mockRejectedValue(new Error("{{nope}} is not a supported value."));
+	it("shows the server's refusal inline rather than as a toast", async () => {
+		upsertFn.mockRejectedValue(new Error("Water Purveyor admin only"));
 		renderEditor();
 
 		const subject = await screen.findByLabelText("Subject");
-		fireEvent.change(subject, { target: { value: "About {{nope}}" } });
+		fireEvent.change(subject, { target: { value: "Our own subject" } });
 		fireEvent.click(screen.getByRole("button", { name: /save template/i }));
 
 		await waitFor(() => {
@@ -315,10 +315,52 @@ describe("NoticeTemplatesEditor", () => {
 				screen
 					.getAllByRole("alert")
 					.some((node) =>
-						node.textContent?.includes("is not a supported value"),
+						node.textContent?.includes("Water Purveyor admin only"),
 					),
 			).toBe(true);
 		});
+	});
+
+	it("reports a blank subject at the field and sends nothing", async () => {
+		renderEditor();
+
+		const subject = await screen.findByLabelText("Subject");
+		fireEvent.change(subject, { target: { value: "   " } });
+		fireEvent.click(screen.getByRole("button", { name: /save template/i }));
+
+		const message = screen.getByText("Subject is required.");
+		expect(subject.getAttribute("aria-invalid")).toBe("true");
+		expect(subject.getAttribute("aria-describedby")).toBe(message.id);
+		expect(document.activeElement).toBe(subject);
+		expect(upsertFn).not.toHaveBeenCalled();
+
+		fireEvent.change(subject, { target: { value: "Due soon" } });
+		expect(screen.queryByText("Subject is required.")).toBeNull();
+	});
+
+	it("refuses an unsupported placeholder at the field before the server sees it", async () => {
+		renderEditor();
+
+		const body = await screen.findByLabelText("Message");
+		fireEvent.change(body, { target: { value: "Hello {{custmer_name}}" } });
+		fireEvent.click(screen.getByRole("button", { name: /save template/i }));
+
+		expect(body.getAttribute("aria-invalid")).toBe("true");
+		expect(upsertFn).not.toHaveBeenCalled();
+	});
+
+	it("counts the message against the server's limit", async () => {
+		renderEditor();
+
+		const body = await screen.findByLabelText("Message");
+		fireEvent.change(body, { target: { value: "x".repeat(5001) } });
+
+		const counter = screen.getByText("5,001 / 5,000 characters");
+		expect(body.getAttribute("aria-describedby")).toContain(counter.id);
+
+		fireEvent.click(screen.getByRole("button", { name: /save template/i }));
+		expect(screen.getByText("Must be 5,000 characters or fewer.")).toBeTruthy();
+		expect(upsertFn).not.toHaveBeenCalled();
 	});
 
 	it("reports saving while the write is in flight", async () => {

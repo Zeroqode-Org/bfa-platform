@@ -8,6 +8,7 @@ import {
 import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import { Card } from "@bfa-platform/ui/components/card";
+import { DateInput } from "@bfa-platform/ui/components/date-input";
 import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
 import {
 	Empty,
@@ -16,6 +17,10 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "@bfa-platform/ui/components/empty";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
@@ -27,6 +32,16 @@ import {
 	SelectValue,
 } from "@bfa-platform/ui/components/select";
 import { Skeleton } from "@bfa-platform/ui/components/skeleton";
+import {
+	useFormValidation,
+	type ValidationRules,
+} from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	isoToUsDate,
+	maxLength,
+	usDate,
+	usDateToIso,
+} from "@bfa-platform/ui/lib/validation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link2, PenLine, Search, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useState } from "react";
@@ -87,7 +102,8 @@ function formStateOf(submission: SubmissionDetail): FormState {
 	return {
 		bfaType: submission.bfaType,
 		submittedBinText: submission.submittedBinText ?? "",
-		testDate: submission.testDate ?? "",
+		// Edited as displayed, `MM/DD/YYYY`; `payloadOf` converts it back.
+		testDate: isoToUsDate(submission.testDate),
 		testResult: submission.testResult ?? NONE,
 		signatureMethod: submission.signatureMethod ?? NONE,
 		signatureData: submission.signatureData,
@@ -102,7 +118,12 @@ function payloadOf(id: string, form: FormState): SubmissionPayload {
 		// Blank collapses to null on the server too; sending the empty string is
 		// how "this field was cleared" is spelled on the wire.
 		submittedBinText: form.submittedBinText,
-		testDate: form.testDate || null,
+		// Blank clears the date. A typed one goes out as the API's `YYYY-MM-DD`;
+		// one that is not a real day is never sent by the Save button, and if it
+		// were, it would go as typed for the server to refuse rather than blanked.
+		testDate: form.testDate.trim()
+			? (usDateToIso(form.testDate) ?? form.testDate)
+			: null,
 		testResult: form.testResult === NONE ? null : (form.testResult as "pass"),
 		signatureMethod:
 			form.signatureMethod === NONE ? null : (form.signatureMethod as "signed"),
@@ -156,12 +177,37 @@ export function SubmissionDocument({
 				toast.success("Correction saved");
 				await onChanged();
 			},
-			onError: (error) => toast.error(error.message),
+			// No toast on failure: a refused correction is reported in the footer,
+			// beside the button that sent it, and stays there while it is fixed.
 		}),
 	);
 
 	const bin = binLabel(submission);
 	const answers = wizardEntries(form.wizardData);
+
+	// The checkable values, flattened: the two typed columns plus every text or
+	// number answer, keyed `answer:<field>` because the wizard's keys vary per
+	// BFA type. Yes/no answers are selects with nothing to get wrong.
+	const checked: Record<string, string> = {
+		submittedBinText: form.submittedBinText,
+		testDate: form.testDate,
+	};
+	const rules: ValidationRules<Record<string, string>> = {
+		submittedBinText: maxLength(SUBMISSION_FIELD_LIMITS.submittedBinText),
+		testDate: usDate(),
+	};
+
+	for (const [key, value] of answers) {
+		if (typeof value === "boolean") continue;
+
+		checked[`answer:${key}`] = wizardValueText(value);
+		rules[`answer:${key}`] = maxLength(
+			SUBMISSION_FIELD_LIMITS.wizardValueLength,
+			{ trim: false },
+		);
+	}
+
+	const validation = useFormValidation({ values: checked, rules });
 
 	function setField<Key extends keyof FormState>(
 		key: Key,
@@ -235,16 +281,18 @@ export function SubmissionDocument({
 
 						<Field
 							label="Test date"
+							id={validation.fieldId("testDate")}
+							error={<FieldError {...validation.errorProps("testDate")} />}
 							flagged={overridden.has("testDate")}
 							readOnly={!canEdit}
 							readOnlyValue={formatSubmissionDate(submission.testDate)}
 						>
-							{(id) => (
-								<Input
-									id={id}
-									type="date"
+							{() => (
+								<DateInput
+									pickerLabel="Choose test date"
+									{...validation.controlProps("testDate")}
 									value={form.testDate}
-									onChange={(event) => setField("testDate", event.target.value)}
+									onValueChange={(value) => setField("testDate", value)}
 								/>
 							)}
 						</Field>
@@ -295,6 +343,10 @@ export function SubmissionDocument({
 									? "BIN as the certifier typed it"
 									: "BIN the certifier typed"
 							}
+							id={validation.fieldId("submittedBinText")}
+							error={
+								<FieldError {...validation.errorProps("submittedBinText")} />
+							}
 							flagged={overridden.has("submittedBinText")}
 							readOnly={!canEdit}
 							readOnlyValue={form.submittedBinText || "—"}
@@ -304,11 +356,10 @@ export function SubmissionDocument({
 									: undefined
 							}
 						>
-							{(id) => (
+							{() => (
 								<Input
-									id={id}
+									{...validation.controlProps("submittedBinText")}
 									value={form.submittedBinText}
-									maxLength={SUBMISSION_FIELD_LIMITS.submittedBinText}
 									onChange={(event) =>
 										setField("submittedBinText", event.target.value)
 									}
@@ -332,6 +383,16 @@ export function SubmissionDocument({
 								<Field
 									key={key}
 									label={humanizeFieldName(key)}
+									id={
+										typeof value === "boolean"
+											? undefined
+											: validation.fieldId(`answer:${key}`)
+									}
+									error={
+										typeof value === "boolean" ? null : (
+											<FieldError {...validation.errorProps(`answer:${key}`)} />
+										)
+									}
 									flagged={overridden.has(key)}
 									readOnly={!canEdit}
 									readOnlyValue={
@@ -361,12 +422,12 @@ export function SubmissionDocument({
 											</Select>
 										) : (
 											<Input
+												{...validation.controlProps(`answer:${key}`)}
 												id={id}
 												value={wizardValueText(value)}
 												inputMode={
 													typeof value === "number" ? "decimal" : "text"
 												}
-												maxLength={SUBMISSION_FIELD_LIMITS.wizardValueLength}
 												onChange={(event) =>
 													setAnswer(
 														key,
@@ -435,6 +496,12 @@ export function SubmissionDocument({
 
 			{canEdit ? (
 				<DialogFooter className="flex-row flex-wrap items-center justify-end border-border border-t pt-4">
+					<FormError
+						className="basis-full"
+						message={
+							saveSubmission.isError ? saveSubmission.error.message : null
+						}
+					/>
 					<p className="mr-auto text-[12px] text-muted-foreground">
 						Saving records you as the last person to correct this test.
 					</p>
@@ -442,16 +509,21 @@ export function SubmissionDocument({
 						variant="secondary"
 						size="sm"
 						disabled={saveSubmission.isPending}
-						onClick={() => setForm(formStateOf(submission))}
+						onClick={() => {
+							setForm(formStateOf(submission));
+							validation.reset();
+						}}
 					>
 						Reset
 					</Button>
 					<Button
 						size="sm"
 						disabled={saveSubmission.isPending}
-						onClick={() =>
-							saveSubmission.mutate(payloadOf(submission.id, form))
-						}
+						onClick={() => {
+							if (!validation.validate()) return;
+
+							saveSubmission.mutate(payloadOf(submission.id, form));
+						}}
 					>
 						<PenLine />
 						{saveSubmission.isPending ? "Saving…" : "Save corrections"}
@@ -721,6 +793,8 @@ function Section({
  */
 function Field({
 	label,
+	id: controlId,
+	error,
 	flagged,
 	readOnly,
 	readOnlyValue,
@@ -728,13 +802,18 @@ function Field({
 	children,
 }: {
 	label: string;
+	/** The control's id when a validation hook owns it; generated otherwise. */
+	id?: string;
+	/** The field's inline error, rendered directly under the control. */
+	error?: React.ReactNode;
 	flagged: boolean;
 	readOnly: boolean;
 	readOnlyValue: string;
 	hint?: string;
 	children: (id: string) => React.ReactNode;
 }) {
-	const id = useId();
+	const generatedId = useId();
+	const id = controlId ?? generatedId;
 
 	return (
 		<div className="flex flex-col gap-1.5">
@@ -753,7 +832,10 @@ function Field({
 			{readOnly ? (
 				<p className="text-[14px] text-foreground">{readOnlyValue || "—"}</p>
 			) : (
-				children(id)
+				<>
+					{children(id)}
+					{error}
+				</>
 			)}
 
 			{hint ? (

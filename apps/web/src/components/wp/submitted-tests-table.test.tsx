@@ -315,12 +315,13 @@ describe("SubmittedTestsTable — the list", () => {
 		await screen.findByText("BIN-10041");
 
 		fireEvent.change(screen.getByLabelText("Tested from"), {
-			target: { value: "2027-03-01" },
+			target: { value: "03/01/2027" },
 		});
 		fireEvent.change(screen.getByLabelText("Tested to"), {
-			target: { value: "2027-03-31" },
+			target: { value: "03/31/2027" },
 		});
 
+		// Typed as MM/DD/YYYY, sent as the ISO days the procedure takes.
 		await waitFor(() =>
 			expect(listFn).toHaveBeenCalledWith(
 				expect.objectContaining({ from: "2027-03-01", to: "2027-03-31" }),
@@ -328,15 +329,33 @@ describe("SubmittedTestsTable — the list", () => {
 		);
 	});
 
+	it("holds the list back while a box holds something that is not a date", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+		const callsBefore = listFn.mock.calls.length;
+
+		const from = screen.getByLabelText("Tested from");
+		fireEvent.change(from, { target: { value: "02/30/2027" } });
+		fireEvent.blur(from);
+
+		const message = await screen.findByText(
+			"Please enter a valid date in MM/DD/YYYY format.",
+		);
+		expect(from.getAttribute("aria-invalid")).toBe("true");
+		expect(from.getAttribute("aria-describedby")).toBe(message.id);
+		// Not quietly widened to "no start date" either.
+		expect(listFn.mock.calls.length).toBe(callsBefore);
+	});
+
 	it("names a backwards range rather than sending it and reporting no results", async () => {
 		renderTable();
 		await screen.findByText("BIN-10041");
 
 		fireEvent.change(screen.getByLabelText("Tested from"), {
-			target: { value: "2027-03-31" },
+			target: { value: "03/31/2027" },
 		});
 		fireEvent.change(screen.getByLabelText("Tested to"), {
-			target: { value: "2027-03-01" },
+			target: { value: "03/01/2027" },
 		});
 
 		expect(

@@ -1,10 +1,17 @@
 "use client";
 
+import { CUSTOMER_FIELD_LIMITS } from "@bfa-platform/api/lib/customer-field-limits";
 import { Button } from "@bfa-platform/ui/components/button";
+import { DateInput } from "@bfa-platform/ui/components/date-input";
 import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
 import {
+	SELECT_PLACEHOLDER,
 	Select,
 	SelectContent,
 	SelectGroup,
@@ -12,8 +19,18 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@bfa-platform/ui/components/select";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import {
+	composeRules,
+	email,
+	isoToUsDate,
+	maxLength,
+	required,
+	usDate,
+	usDateToIso,
+} from "@bfa-platform/ui/lib/validation";
 import { TriangleAlert } from "lucide-react";
-import { useId, useState } from "react";
+import { useState } from "react";
 
 import type { Customer, CustomerPayload } from "./customer-types";
 import { SUSPENSION_WARNING } from "./customer-types";
@@ -33,14 +50,26 @@ export const STATUS_LABELS = {
  * including the two enums and the date, because that is what an input hands
  * back — the conversion to the procedure's shape happens once, in
  * `buildCustomerPayload`.
+ *
+ * The rate category and status may be `""`: a new customer opens with both
+ * unanswered, so neither is a silent default somebody saved without choosing.
+ *
+ * `agRenewalDate` is the date as displayed, `MM/DD/YYYY`; the API's
+ * `YYYY-MM-DD` exists only on the way in and out.
  */
 export type CustomerFormValues = {
 	name: string;
 	accountNumber: string;
 	email: string;
 	address: string;
-	rateCategory: Customer["rateCategory"];
+	rateCategory: Customer["rateCategory"] | "";
 	agRenewalDate: string;
+	status: Customer["status"] | "";
+};
+
+/** Form values in which both selects hold a real choice — the only kind that is sent. */
+export type CompletedCustomerFormValues = CustomerFormValues & {
+	rateCategory: Customer["rateCategory"];
 	status: Customer["status"];
 };
 
@@ -49,35 +78,51 @@ export const emptyCustomerValues: CustomerFormValues = {
 	accountNumber: "",
 	email: "",
 	address: "",
-	rateCategory: "standard",
+	rateCategory: "",
 	agRenewalDate: "",
-	status: "active",
+	status: "",
 };
 
 /** An existing row as form values. Nullable columns become empty strings. */
-export function customerToFormValues(customer: Customer): CustomerFormValues {
+export function customerToFormValues(
+	customer: Customer,
+): CompletedCustomerFormValues {
 	return {
 		name: customer.name,
 		accountNumber: customer.accountNumber ?? "",
 		email: customer.email,
 		address: customer.address ?? "",
 		rateCategory: customer.rateCategory,
-		agRenewalDate: customer.agRenewalDate ?? "",
+		agRenewalDate: isoToUsDate(customer.agRenewalDate),
 		status: customer.status,
 	};
 }
 
+/** Whether both selects have been answered, so the values may become a payload. */
+export function isCompletedCustomer(
+	values: CustomerFormValues,
+): values is CompletedCustomerFormValues {
+	return values.rateCategory !== "" && values.status !== "";
+}
+
 /**
  * Form values as the procedure's input.
+ *
+ * Takes only completed values: an unanswered select is never converted into a
+ * default here, and `""` never reaches the procedure's enum.
  *
  * The renewal date is dropped for a standard customer rather than carried
  * along, which matches what the server stores: switching a customer off the
  * agricultural rate clears the date instead of leaving a stale one behind. The
  * server refuses a date on a standard customer outright, so sending the typed
  * value "just in case" would turn an edit into a validation error.
+ *
+ * An agricultural date goes out as the API's `YYYY-MM-DD`. One that is not a
+ * real day is sent as typed rather than blanked — the form does not submit it,
+ * and if something else does, the server's refusal is the honest answer.
  */
 export function buildCustomerPayload(
-	values: CustomerFormValues,
+	values: CompletedCustomerFormValues,
 ): CustomerPayload {
 	const shared = {
 		name: values.name.trim(),
@@ -91,10 +136,39 @@ export function buildCustomerPayload(
 		? {
 				...shared,
 				rateCategory: "agricultural",
-				agRenewalDate: values.agRenewalDate,
+				agRenewalDate:
+					usDateToIso(values.agRenewalDate) ?? values.agRenewalDate,
 			}
 		: { ...shared, rateCategory: "standard", agRenewalDate: null };
 }
+
+/**
+ * Where a failed customer mutation's message belongs on the form.
+ *
+ * `createCustomer` and `updateCustomer` raise `CONFLICT` for exactly one reason
+ * — the email address is already used by another customer in this purveyor —
+ * so the code is a real signal about which field is at fault, and the message
+ * goes under the Email input rather than into the form-wide banner.
+ */
+export function customerFormErrors(
+	error: { message: string; data?: { code?: string | null } | null } | null,
+) {
+	if (!error) return {};
+
+	return error.data?.code === "CONFLICT"
+		? { emailErrorMessage: error.message }
+		: { errorMessage: error.message };
+}
+
+/** The spelling the server compares addresses in: trimmed and lowercased. */
+function normalizedEmail(value: string) {
+	return value.trim().toLowerCase();
+}
+
+const agRenewalDateRule = composeRules(
+	required("AG renewal date is required."),
+	usDate(),
+);
 
 /**
  * Create and edit are the same form — the only differences are the starting
@@ -108,6 +182,7 @@ export function CustomerForm({
 	initialValues = emptyCustomerValues,
 	pending = false,
 	errorMessage,
+	emailErrorMessage,
 	submitLabel,
 	pendingLabel,
 	onSubmit,
@@ -115,21 +190,52 @@ export function CustomerForm({
 }: {
 	initialValues?: CustomerFormValues;
 	pending?: boolean;
+	/** A server refusal with no field of its own. */
 	errorMessage?: string;
+	/** A server refusal about the email address — shown under that input. */
+	emailErrorMessage?: string;
 	submitLabel: string;
 	pendingLabel: string;
 	onSubmit: (payload: CustomerPayload) => void;
 	onCancel: () => void;
 }) {
-	const nameId = useId();
-	const accountNumberId = useId();
-	const emailId = useId();
-	const addressId = useId();
-	const rateCategoryId = useId();
-	const agRenewalDateId = useId();
-	const statusId = useId();
-
 	const [values, setValues] = useState<CustomerFormValues>(initialValues);
+	// Which address the rejected request carried. The server's "already used"
+	// answer is about that exact address, so it stops applying the moment the
+	// field holds a different one — and comes back if the same address is typed
+	// again in another spelling, because the server would refuse that too.
+	const [rejectedEmail, setRejectedEmail] = useState<string | null>(null);
+
+	const emailTaken =
+		emailErrorMessage && rejectedEmail === normalizedEmail(values.email)
+			? emailErrorMessage
+			: undefined;
+
+	const validation = useFormValidation({
+		values,
+		rules: {
+			name: composeRules(
+				required("Name is required."),
+				maxLength(CUSTOMER_FIELD_LIMITS.name),
+			),
+			email: composeRules(
+				required("Email is required."),
+				email(),
+				maxLength(CUSTOMER_FIELD_LIMITS.email),
+			),
+			accountNumber: maxLength(CUSTOMER_FIELD_LIMITS.accountNumber),
+			address: maxLength(CUSTOMER_FIELD_LIMITS.address),
+			rateCategory: required("Select a rate category."),
+			// Only the agricultural rate carries a renewal date, so only that rate
+			// asks for one — the same condition the field's visibility uses.
+			agRenewalDate: (value, current) =>
+				current.rateCategory === "agricultural"
+					? agRenewalDateRule(value)
+					: undefined,
+			status: required("Select a status."),
+		},
+		externalErrors: { email: emailTaken },
+	});
 
 	function update<Field extends keyof CustomerFormValues>(
 		field: Field,
@@ -142,6 +248,9 @@ export function CustomerForm({
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (!validation.validate() || !isCompletedCustomer(values)) return;
+
+		setRejectedEmail(normalizedEmail(values.email));
 		onSubmit(buildCustomerPayload(values));
 	}
 
@@ -152,27 +261,30 @@ export function CustomerForm({
 			// `DialogBody` scrolls, so the footer stays on screen on a short
 			// viewport instead of being pushed off the bottom of it.
 			className="flex min-h-0 flex-1 flex-col gap-4"
+			noValidate
 		>
 			<DialogBody>
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={nameId}>Name</Label>
+					<Label htmlFor={validation.fieldId("name")}>Name</Label>
 					<Input
-						id={nameId}
+						{...validation.controlProps("name")}
 						name="name"
 						value={values.name}
 						onChange={(event) => update("name", event.target.value)}
 						placeholder="Marta Ellison"
 						autoComplete="off"
 						disabled={pending}
-						required
 					/>
+					<FieldError {...validation.errorProps("name")} />
 				</div>
 
 				<div className="grid gap-4 sm:grid-cols-2">
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={accountNumberId}>Account number</Label>
+						<Label htmlFor={validation.fieldId("accountNumber")}>
+							Account number
+						</Label>
 						<Input
-							id={accountNumberId}
+							{...validation.controlProps("accountNumber")}
 							name="accountNumber"
 							value={values.accountNumber}
 							onChange={(event) => update("accountNumber", event.target.value)}
@@ -180,12 +292,13 @@ export function CustomerForm({
 							autoComplete="off"
 							disabled={pending}
 						/>
+						<FieldError {...validation.errorProps("accountNumber")} />
 					</div>
 
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={emailId}>Email</Label>
+						<Label htmlFor={validation.fieldId("email")}>Email</Label>
 						<Input
-							id={emailId}
+							{...validation.controlProps("email")}
 							name="email"
 							type="email"
 							value={values.email}
@@ -193,15 +306,15 @@ export function CustomerForm({
 							placeholder="marta@example.com"
 							autoComplete="off"
 							disabled={pending}
-							required
 						/>
+						<FieldError {...validation.errorProps("email")} />
 					</div>
 				</div>
 
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={addressId}>Address</Label>
+					<Label htmlFor={validation.fieldId("address")}>Address</Label>
 					<Input
-						id={addressId}
+						{...validation.controlProps("address")}
 						name="address"
 						value={values.address}
 						onChange={(event) => update("address", event.target.value)}
@@ -209,21 +322,30 @@ export function CustomerForm({
 						autoComplete="off"
 						disabled={pending}
 					/>
+					<FieldError {...validation.errorProps("address")} />
 				</div>
 
 				<div className="grid gap-4 sm:grid-cols-2">
 					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={rateCategoryId}>Rate category</Label>
+						<Label htmlFor={validation.fieldId("rateCategory")}>
+							Rate category
+						</Label>
 						<Select
 							items={RATE_CATEGORY_LABELS}
-							value={values.rateCategory}
+							value={values.rateCategory || null}
 							onValueChange={(value) =>
-								update("rateCategory", value as Customer["rateCategory"])
+								update(
+									"rateCategory",
+									(value ?? "") as CustomerFormValues["rateCategory"],
+								)
 							}
 							disabled={pending}
 						>
-							<SelectTrigger id={rateCategoryId} name="rateCategory">
-								<SelectValue />
+							<SelectTrigger
+								{...validation.controlProps("rateCategory")}
+								name="rateCategory"
+							>
+								<SelectValue placeholder={SELECT_PLACEHOLDER} />
 							</SelectTrigger>
 							<SelectContent>
 								<SelectGroup>
@@ -236,40 +358,42 @@ export function CustomerForm({
 								</SelectGroup>
 							</SelectContent>
 						</Select>
+						<FieldError {...validation.errorProps("rateCategory")} />
 					</div>
 
 					{/* Only the agricultural rate has a renewal to notice, so the field
 					    appears with the rate rather than sitting greyed out beside it. */}
 					{isAgricultural ? (
 						<div className="flex flex-col gap-1.5">
-							<Label htmlFor={agRenewalDateId}>AG renewal date</Label>
-							<Input
-								id={agRenewalDateId}
+							<Label htmlFor={validation.fieldId("agRenewalDate")}>
+								AG renewal date
+							</Label>
+							<DateInput
+								pickerLabel="Choose AG renewal date"
+								{...validation.controlProps("agRenewalDate")}
 								name="agRenewalDate"
-								type="date"
 								value={values.agRenewalDate}
-								onChange={(event) =>
-									update("agRenewalDate", event.target.value)
-								}
+								onValueChange={(value) => update("agRenewalDate", value)}
 								disabled={pending}
-								required
+								aria-required="true"
 							/>
+							<FieldError {...validation.errorProps("agRenewalDate")} />
 						</div>
 					) : null}
 				</div>
 
 				<div className="flex flex-col gap-1.5">
-					<Label htmlFor={statusId}>Status</Label>
+					<Label htmlFor={validation.fieldId("status")}>Status</Label>
 					<Select
 						items={STATUS_LABELS}
-						value={values.status}
+						value={values.status || null}
 						onValueChange={(value) =>
-							update("status", value as Customer["status"])
+							update("status", (value ?? "") as CustomerFormValues["status"])
 						}
 						disabled={pending}
 					>
-						<SelectTrigger id={statusId} name="status">
-							<SelectValue />
+						<SelectTrigger {...validation.controlProps("status")} name="status">
+							<SelectValue placeholder={SELECT_PLACEHOLDER} />
 						</SelectTrigger>
 						<SelectContent>
 							<SelectGroup>
@@ -280,6 +404,7 @@ export function CustomerForm({
 							</SelectGroup>
 						</SelectContent>
 					</Select>
+					<FieldError {...validation.errorProps("status")} />
 				</div>
 
 				{/* Suspension is the one field here with a consequence outside this
@@ -294,18 +419,7 @@ export function CustomerForm({
 					</p>
 				) : null}
 
-				{errorMessage ? (
-					<p
-						role="alert"
-						className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-					>
-						<TriangleAlert
-							className="mt-px size-4 shrink-0"
-							aria-hidden="true"
-						/>
-						{errorMessage}
-					</p>
-				) : null}
+				<FormError message={errorMessage} />
 			</DialogBody>
 			<DialogFooter>
 				<Button

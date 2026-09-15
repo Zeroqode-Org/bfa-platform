@@ -5,6 +5,7 @@ import {
 	repairCompanyColumns,
 	updateRepairCompanyInput,
 } from "./repair-company-input";
+import { US_PHONE_MESSAGE } from "./us-phone";
 
 /**
  * The repair-company input rules on their own — no database, no tRPC caller.
@@ -18,10 +19,26 @@ import {
 
 const company = {
 	companyName: "Ridgeline Backflow Repair",
-	phone: "555-0142",
+	phone: "(555) 014-2233",
 	email: "dispatch@ridgeline.example",
 	status: "active" as const,
 };
+
+const ROW_ID = "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607";
+
+/** Both write shapes, so every phone rule is asserted on create and on update. */
+const WRITE_SHAPES = [
+	{
+		name: "createRepairCompanyInput",
+		parse: (phone: unknown) =>
+			createRepairCompanyInput.safeParse({ ...company, phone }),
+	},
+	{
+		name: "updateRepairCompanyInput",
+		parse: (phone: unknown) =>
+			updateRepairCompanyInput.safeParse({ ...company, id: ROW_ID, phone }),
+	},
+] as const;
 
 describe("createRepairCompanyInput", () => {
 	it("accepts a company with nothing but a name, and defaults the status to active", () => {
@@ -97,15 +114,6 @@ describe("createRepairCompanyInput", () => {
 		).toBe("dispatch@ridgeline.example");
 	});
 
-	it("keeps the phone as typed apart from the surrounding space", () => {
-		// No format is imposed: a WP writes extensions, country codes and pager
-		// numbers the way their own records already spell them.
-		expect(
-			createRepairCompanyInput.parse({ ...company, phone: "  (555) 0142 x12 " })
-				.phone,
-		).toBe("(555) 0142 x12");
-	});
-
 	it("takes only the two statuses the screen offers", () => {
 		expect(
 			createRepairCompanyInput.parse({ ...company, status: "inactive" }).status,
@@ -166,6 +174,106 @@ describe("updateRepairCompanyInput", () => {
 		}) as Record<string, unknown>;
 
 		expect(parsed.waterPurveyorId).toBeUndefined();
+	});
+});
+
+describe.each(WRITE_SHAPES)("phone on $name", ({ parse }) => {
+	it("accepts a valid US number however it is punctuated, and stores (XXX) XXX-XXXX", () => {
+		for (const phone of [
+			"(555) 123-4567",
+			"555-123-4567",
+			"5551234567",
+			"555.123.4567",
+			"  555 123 4567 ",
+			"+1 555 123 4567",
+			"+15551234567",
+			"15551234567",
+			"1-555-123-4567",
+		]) {
+			const parsed = parse(phone);
+
+			expect(parsed.success).toBe(true);
+			expect(parsed.data?.phone).toBe("(555) 123-4567");
+		}
+	});
+
+	it("accepts blank, whitespace and null as no phone at all", () => {
+		for (const phone of ["", "   ", null, undefined]) {
+			const parsed = parse(phone);
+
+			expect(parsed.success).toBe(true);
+			expect(parsed.data?.phone).toBeNull();
+		}
+	});
+
+	it("refuses short, long, lettered, extended and malformed numbers without rewriting them", () => {
+		for (const phone of [
+			"555-0142",
+			"555123456",
+			"55512345678",
+			// A `+` is only ever the `+1` country code in front of ten digits.
+			"+5551234567",
+			"+2 555 123 4567",
+			"+44 20 7946 0958",
+			"+1 555",
+			"++15551234567",
+			"1+555 123 4567",
+			"555-123-45678",
+			"555-CALL-NOW",
+			"555-123-4567 x12",
+			"555-123-4567 ext. 12",
+			"(555) 0142 x12",
+			"++1 555 123 4567",
+			"555_123_4567",
+			"555/123/4567",
+			"phone",
+			"1".repeat(51),
+		]) {
+			const parsed = parse(phone);
+
+			expect(parsed.success, phone).toBe(false);
+		}
+	});
+
+	it("says what a phone has to be", () => {
+		const parsed = parse("555-0142");
+
+		expect(parsed.error?.issues.map((issue) => issue.message)).toContain(
+			US_PHONE_MESSAGE,
+		);
+		expect(parsed.error?.issues[0]?.path).toEqual(["phone"]);
+	});
+});
+
+describe("a stored legacy phone", () => {
+	// A row written before the phone rule, exactly as the edit dialog sends it
+	// back: every field, unchanged.
+	const legacyRow = {
+		id: ROW_ID,
+		companyName: "Legacy Backflow Repair",
+		phone: "555-0142",
+		email: "legacy@example.com",
+		status: "active" as const,
+	};
+
+	it("cannot be saved unchanged", () => {
+		const parsed = updateRepairCompanyInput.safeParse(legacyRow);
+
+		expect(parsed.success).toBe(false);
+		expect(parsed.error?.issues[0]?.message).toBe(US_PHONE_MESSAGE);
+	});
+
+	it("saves once the phone is corrected, in the canonical format", () => {
+		expect(
+			updateRepairCompanyInput.parse({ ...legacyRow, phone: "555 014 2000" })
+				.phone,
+		).toBe("(555) 014-2000");
+	});
+
+	it("saves once the phone is cleared", () => {
+		expect(
+			updateRepairCompanyInput.parse({ ...legacyRow, phone: "" }).phone,
+		).toBeNull();
 	});
 });
 

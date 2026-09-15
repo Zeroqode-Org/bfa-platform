@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { CUSTOMER_FIELD_LIMITS } from "./customer-field-limits";
+
 /**
  * Input shapes for the customer procedures.
  *
@@ -30,13 +32,21 @@ function optionalText(max: number) {
 const customerFields = {
 	// Trimmed before the length check, so a name of nothing but spaces is empty
 	// rather than valid.
-	name: z.string().trim().min(1, "Name is required").max(200),
+	name: z
+		.string()
+		.trim()
+		.min(1, "Name is required")
+		.max(CUSTOMER_FIELD_LIMITS.name),
 	// Normalised the same way invitations are: a pasted address with a stray
 	// space or a capitalised domain is accepted, and one address has one
 	// spelling in the table.
-	email: z.string().trim().toLowerCase().pipe(z.email().max(254)),
-	accountNumber: optionalText(100),
-	address: optionalText(500),
+	email: z
+		.string()
+		.trim()
+		.toLowerCase()
+		.pipe(z.email().max(CUSTOMER_FIELD_LIMITS.email)),
+	accountNumber: optionalText(CUSTOMER_FIELD_LIMITS.accountNumber),
+	address: optionalText(CUSTOMER_FIELD_LIMITS.address),
 	status: z.enum(["active", "suspended"]).default("active"),
 };
 

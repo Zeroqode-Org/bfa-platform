@@ -13,6 +13,11 @@ import {
 	customerColumns,
 	updateCustomerInput,
 } from "../lib/customer-input";
+import {
+	CUSTOMER_EMAIL_TAKEN_MESSAGE,
+	CUSTOMER_EMAIL_UNIQUE_INDEX,
+} from "../lib/email-uniqueness";
+import { isUniqueViolation } from "../lib/unique-violation";
 
 /**
  * The columns every customer procedure returns. Declared once so the table, the
@@ -68,13 +73,18 @@ export const customersRouter = router({
 	createCustomer: wpProcedure
 		.input(createCustomerInput)
 		.mutation(async ({ ctx, input }) => {
+			// No "is this address taken?" read first: the unique index decides, so
+			// two clerks adding the same address at once cannot both succeed.
 			const [row] = await db
 				.insert(customers)
 				.values({
 					...customerColumns(input),
 					waterPurveyorId: ctx.caller.waterPurveyorId,
 				})
-				.returning(customerSelection);
+				.returning(customerSelection)
+				.catch((error: unknown) => {
+					throw duplicateEmailError(error);
+				});
 
 			if (!row) {
 				throw new TRPCError({
@@ -146,11 +156,17 @@ export const customersRouter = router({
 				return existing;
 			}
 
+			// An edit onto another customer's address is refused by the same index.
+			// The record's own address never collides with itself, so saving a
+			// customer without changing their email is unaffected.
 			const [row] = await db
 				.update(customers)
 				.set({ ...next, updatedAt: new Date() })
 				.where(tenantScopedRow)
-				.returning(customerSelection);
+				.returning(customerSelection)
+				.catch((error: unknown) => {
+					throw duplicateEmailError(error);
+				});
 
 			if (!row) {
 				throw new TRPCError({
@@ -178,6 +194,23 @@ export const customersRouter = router({
 			return row;
 		}),
 });
+
+/**
+ * A duplicate email, as the Email field's error.
+ *
+ * `CONFLICT` is the one code these procedures raise for a field, so the form
+ * can route it by code rather than by matching the sentence. Only a violation
+ * of the email index is translated; anything else is rethrown untouched.
+ */
+function duplicateEmailError(error: unknown) {
+	if (!isUniqueViolation(error, CUSTOMER_EMAIL_UNIQUE_INDEX)) return error;
+
+	return new TRPCError({
+		code: "CONFLICT",
+		message: CUSTOMER_EMAIL_TAKEN_MESSAGE,
+		cause: error,
+	});
+}
 
 /**
  * Whether every writable column already holds the value being written.

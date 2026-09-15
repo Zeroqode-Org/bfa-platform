@@ -1,12 +1,17 @@
 "use client";
 
 import { Button } from "@bfa-platform/ui/components/button";
+import {
+	FieldError,
+	FormError,
+} from "@bfa-platform/ui/components/field-message";
 import { Input } from "@bfa-platform/ui/components/input";
 import { Label } from "@bfa-platform/ui/components/label";
-import { TriangleAlert } from "lucide-react";
+import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
+import { composeRules, email, required } from "@bfa-platform/ui/lib/validation";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useState } from "react";
 
 import { clearImpersonationCookie } from "@/lib/clear-impersonation";
 import { createClient } from "@/lib/supabase/client";
@@ -21,27 +26,37 @@ import { createClient } from "@/lib/supabase/client";
  * existed. It is validated on the server before it reaches this component.
  * Everyone else goes to `/`, which resolves their role and forwards them to
  * their own dashboard — the role is never asked for, only looked up.
+ *
+ * A failed sign-in is a form-level message, not a field one: Supabase answers
+ * "invalid login credentials" without saying which half was wrong, and
+ * guessing would tell an attacker which addresses have accounts.
  */
 export function LoginForm({ redirectTo }: { redirectTo: Route }) {
-	const emailId = useId();
-	const passwordId = useId();
-	const errorId = useId();
 	const router = useRouter();
 
-	const [email, setEmail] = useState("");
-	const [password, setPassword] = useState("");
+	const [values, setValues] = useState({ email: "", password: "" });
 	const [error, setError] = useState<string | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
+
+	const validation = useFormValidation({
+		values,
+		rules: {
+			email: composeRules(required("Email is required."), email()),
+			password: required("Password is required."),
+		},
+	});
 
 	async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		setError(null);
+		if (!validation.validate()) return;
+
 		setIsSubmitting(true);
 
 		const supabase = createClient();
 		const { error: signInError } = await supabase.auth.signInWithPassword({
-			email: email.trim(),
-			password,
+			email: values.email.trim(),
+			password: values.password,
 		});
 
 		if (signInError) {
@@ -61,44 +76,46 @@ export function LoginForm({ redirectTo }: { redirectTo: Route }) {
 	}
 
 	return (
-		<form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
+		<form
+			onSubmit={handleSubmit}
+			className="mt-6 flex flex-col gap-4"
+			noValidate
+		>
 			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={emailId}>Email</Label>
+				<Label htmlFor={validation.fieldId("email")}>Email</Label>
 				<Input
-					id={emailId}
+					{...validation.controlProps("email")}
 					name="email"
 					type="email"
-					value={email}
-					onChange={(event) => setEmail(event.target.value)}
+					value={values.email}
+					onChange={(event) =>
+						setValues((current) => ({ ...current, email: event.target.value }))
+					}
 					autoComplete="email"
 					placeholder="you@example.com"
-					required
 				/>
+				<FieldError {...validation.errorProps("email")} />
 			</div>
 
 			<div className="flex flex-col gap-1.5">
-				<Label htmlFor={passwordId}>Password</Label>
+				<Label htmlFor={validation.fieldId("password")}>Password</Label>
 				<Input
-					id={passwordId}
+					{...validation.controlProps("password")}
 					name="password"
 					type="password"
-					value={password}
-					onChange={(event) => setPassword(event.target.value)}
+					value={values.password}
+					onChange={(event) =>
+						setValues((current) => ({
+							...current,
+							password: event.target.value,
+						}))
+					}
 					autoComplete="current-password"
-					required
 				/>
+				<FieldError {...validation.errorProps("password")} />
 			</div>
 
-			{error ? (
-				<p
-					id={errorId}
-					role="alert"
-					className="flex items-start gap-1.5 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger"
-				>
-					<TriangleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
-					{error}
-				</p>
-			) : null}
+			<FormError message={error} />
 
 			<Button type="submit" disabled={isSubmitting} className="mt-1 w-full">
 				{isSubmitting ? "Signing in…" : "Sign in"}

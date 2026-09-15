@@ -1,19 +1,24 @@
 // @vitest-environment jsdom
 
+import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
+import { DATE_MESSAGE, EMAIL_MESSAGE } from "@bfa-platform/ui/lib/validation";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	buildCustomerPayload,
 	CustomerForm,
+	customerFormErrors,
 	customerToFormValues,
 	emptyCustomerValues,
+	isCompletedCustomer,
 } from "./customer-form";
 import type { Customer } from "./customer-types";
 
 /**
- * The customer form: what it sends, and when the agricultural renewal date
- * appears at all.
+ * The customer form: what it sends, what it refuses inline before sending, when
+ * the agricultural renewal date appears at all, and where a duplicate email
+ * refusal from the server is shown.
  *
  * The payload builder is exercised directly rather than only through the DOM —
  * it is where the rule that a standard customer carries no renewal date lives
@@ -53,6 +58,40 @@ function renderForm(props: Partial<Parameters<typeof CustomerForm>[0]> = {}) {
 	return { onSubmit, onCancel };
 }
 
+/** Opens a select by its label and commits one option. */
+function choose(label: string, option: string) {
+	fireEvent.click(screen.getByLabelText(label));
+
+	// Base UI commits an option on the pointer sequence, not on a bare click.
+	const item = screen.getByRole("option", { name: option });
+	fireEvent.pointerDown(item);
+	fireEvent.pointerUp(item);
+	fireEvent.click(item);
+}
+
+function fillNewCustomer({
+	name = "Marta Ellison",
+	email = "marta@example.com",
+	rate = "Standard",
+	status = "Active",
+}: {
+	name?: string;
+	email?: string;
+	rate?: string | null;
+	status?: string | null;
+} = {}) {
+	fireEvent.change(screen.getByLabelText("Name"), { target: { value: name } });
+	fireEvent.change(screen.getByLabelText("Email"), {
+		target: { value: email },
+	});
+	if (rate) choose("Rate category", rate);
+	if (status) choose("Status", status);
+}
+
+function submit(label = "Add customer") {
+	fireEvent.click(screen.getByRole("button", { name: label }));
+}
+
 afterEach(() => {
 	cleanup();
 });
@@ -64,21 +103,24 @@ describe("buildCustomerPayload", () => {
 				...emptyCustomerValues,
 				name: "Marta Ellison",
 				email: "marta@example.com",
+				rateCategory: "standard",
+				status: "active",
 				// Left over from a moment on the agricultural rate — dropped, because
 				// the server refuses a date on a standard customer.
-				agRenewalDate: "2027-03-01",
+				agRenewalDate: "03/01/2027",
 			}),
 		).toMatchObject({ rateCategory: "standard", agRenewalDate: null });
 	});
 
-	it("keeps the renewal date for an agricultural customer", () => {
+	it("sends an agricultural customer's MM/DD/YYYY renewal date as the API's ISO day", () => {
 		expect(
 			buildCustomerPayload({
 				...emptyCustomerValues,
 				name: "Ridgeline Orchards",
 				email: "billing@ridgeline.example",
 				rateCategory: "agricultural",
-				agRenewalDate: "2027-03-01",
+				status: "active",
+				agRenewalDate: "03/01/2027",
 			}),
 		).toMatchObject({
 			rateCategory: "agricultural",
@@ -94,6 +136,8 @@ describe("buildCustomerPayload", () => {
 				email: "  marta@example.com ",
 				accountNumber: "   ",
 				address: "",
+				rateCategory: "standard",
+				status: "active",
 			}),
 		).toMatchObject({
 			name: "Marta Ellison",
@@ -106,8 +150,24 @@ describe("buildCustomerPayload", () => {
 	it("never names a water purveyor", () => {
 		// The tenant is the server's to decide, from the caller's own profile.
 		expect(
-			Object.keys(buildCustomerPayload(emptyCustomerValues)),
+			Object.keys(buildCustomerPayload(customerToFormValues(customer()))),
 		).not.toContain("waterPurveyorId");
+	});
+});
+
+describe("isCompletedCustomer", () => {
+	it("is false until both selects hold a real choice", () => {
+		expect(isCompletedCustomer(emptyCustomerValues)).toBe(false);
+		expect(
+			isCompletedCustomer({ ...emptyCustomerValues, rateCategory: "standard" }),
+		).toBe(false);
+		expect(
+			isCompletedCustomer({
+				...emptyCustomerValues,
+				rateCategory: "standard",
+				status: "active",
+			}),
+		).toBe(true);
 	});
 });
 
@@ -119,22 +179,78 @@ describe("customerToFormValues", () => {
 			),
 		).toMatchObject({ accountNumber: "", address: "", agRenewalDate: "" });
 	});
+
+	it("shows a stored renewal date as MM/DD/YYYY", () => {
+		expect(
+			customerToFormValues(
+				customer({ rateCategory: "agricultural", agRenewalDate: "2027-03-01" }),
+			).agRenewalDate,
+		).toBe("03/01/2027");
+	});
+});
+
+describe("customerFormErrors", () => {
+	it("routes a duplicate email to the Email field", () => {
+		expect(
+			customerFormErrors({
+				message: CUSTOMER_EMAIL_TAKEN_MESSAGE,
+				data: { code: "CONFLICT" },
+			}),
+		).toEqual({ emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE });
+	});
+
+	it("routes everything else to the form-wide message", () => {
+		expect(
+			customerFormErrors({
+				message: "Customer not found",
+				data: { code: "NOT_FOUND" },
+			}),
+		).toEqual({ errorMessage: "Customer not found" });
+		expect(customerFormErrors(null)).toEqual({});
+	});
 });
 
 describe("CustomerForm", () => {
-	it("submits the typed values as a standard customer", () => {
+	it("opts out of browser validation and carries no native constraints", () => {
+		renderForm({
+			initialValues: customerToFormValues(
+				customer({ rateCategory: "agricultural", agRenewalDate: "2027-03-01" }),
+			),
+		});
+
+		const form = screen
+			.getByRole("button", { name: "Add customer" })
+			.closest("form") as HTMLFormElement;
+
+		expect(form.noValidate).toBe(true);
+		expect(form.querySelectorAll("[required]")).toHaveLength(0);
+		expect(form.querySelectorAll('input[type="date"]')).toHaveLength(0);
+		expect(form.querySelectorAll("select")).toHaveLength(0);
+	});
+
+	it("opens a new customer with both selects unanswered", () => {
+		renderForm();
+
+		for (const label of ["Rate category", "Status"]) {
+			const trigger = screen.getByLabelText(label);
+			expect(trigger.textContent).toContain("Select…");
+			expect(trigger.hasAttribute("data-placeholder")).toBe(true);
+		}
+		expect(screen.getByLabelText("Rate category").textContent).not.toContain(
+			"Standard",
+		);
+		expect(screen.getByLabelText("Status").textContent).not.toContain("Active");
+		expect(screen.queryAllByRole("alert")).toHaveLength(0);
+	});
+
+	it("submits the typed values once a rate and a status are chosen", () => {
 		const { onSubmit } = renderForm();
 
-		fireEvent.change(screen.getByLabelText("Name"), {
-			target: { value: "Marta Ellison" },
-		});
-		fireEvent.change(screen.getByLabelText("Email"), {
-			target: { value: "marta@example.com" },
-		});
+		fillNewCustomer();
 		fireEvent.change(screen.getByLabelText("Account number"), {
 			target: { value: "AC-4471" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+		submit();
 
 		expect(onSubmit).toHaveBeenCalledWith({
 			name: "Marta Ellison",
@@ -147,40 +263,138 @@ describe("CustomerForm", () => {
 		});
 	});
 
-	it("hides the AG renewal date on the standard rate", () => {
+	it("shows nothing until submitted, then names each missing answer and focuses the first", () => {
+		const { onSubmit } = renderForm();
+
+		expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+		submit();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(
+			screen.getAllByRole("alert").map((node) => node.textContent),
+		).toEqual([
+			"Name is required.",
+			"Email is required.",
+			"Select a rate category.",
+			"Select a status.",
+		]);
+
+		const name = screen.getByLabelText("Name");
+		expect(document.activeElement).toBe(name);
+		expect(name.getAttribute("aria-invalid")).toBe("true");
+		expect(name.getAttribute("aria-describedby")).toBe(
+			screen.getByText("Name is required.").id,
+		);
+	});
+
+	it("blocks an unanswered select at the field and clears the error once a choice is made", () => {
+		const { onSubmit } = renderForm();
+
+		fillNewCustomer({ rate: null, status: "Active" });
+		submit();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		const trigger = screen.getByLabelText("Rate category");
+		const message = screen.getByText("Select a rate category.");
+		expect(trigger.getAttribute("aria-invalid")).toBe("true");
+		expect(trigger.getAttribute("aria-describedby")).toBe(message.id);
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(document.activeElement).toBe(trigger);
+
+		choose("Rate category", "Agricultural");
+
+		expect(screen.queryByText("Select a rate category.")).toBeNull();
+		expect(trigger.getAttribute("aria-invalid")).toBeNull();
+	});
+
+	it("refuses an invalid email and clears the message as soon as it is corrected", () => {
+		const { onSubmit } = renderForm();
+
+		fillNewCustomer({ email: "marta@example" });
+		submit();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText(EMAIL_MESSAGE)).toBeTruthy();
+		expect(document.activeElement).toBe(screen.getByLabelText("Email"));
+
+		fireEvent.change(screen.getByLabelText("Email"), {
+			target: { value: "marta@example.com" },
+		});
+		expect(screen.queryByText(EMAIL_MESSAGE)).toBeNull();
+
+		submit();
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+	});
+
+	it("hides the AG renewal date until the agricultural rate is chosen", () => {
 		renderForm();
 
 		expect(screen.queryByLabelText("AG renewal date")).toBeNull();
+
+		choose("Rate category", "Standard");
+		expect(screen.queryByLabelText("AG renewal date")).toBeNull();
+
+		choose("Rate category", "Agricultural");
+		expect(screen.getByLabelText("AG renewal date")).toBeTruthy();
 	});
 
-	it("reveals the AG renewal date as soon as the agricultural rate is chosen", async () => {
-		renderForm();
-
-		fireEvent.click(screen.getByLabelText("Rate category"));
-
-		// Base UI commits an option on the pointer sequence, not on a bare click.
-		const option = await screen.findByRole("option", { name: "Agricultural" });
-		fireEvent.pointerDown(option);
-		fireEvent.pointerUp(option);
-		fireEvent.click(option);
-
-		expect(await screen.findByLabelText("AG renewal date")).toBeTruthy();
-	});
-
-	it("shows the AG renewal date, required, on the agricultural rate", () => {
+	it("keeps an existing customer's rate and status selected", () => {
 		renderForm({
 			initialValues: customerToFormValues(
 				customer({ rateCategory: "agricultural", agRenewalDate: "2027-03-01" }),
 			),
+			submitLabel: "Save changes",
 		});
 
-		const field = screen.getByLabelText("AG renewal date") as HTMLInputElement;
+		const rate = screen.getByLabelText("Rate category");
+		const status = screen.getByLabelText("Status");
+		expect(rate.textContent).toContain("Agricultural");
+		expect(status.textContent).toContain("Active");
+		expect(rate.textContent).not.toContain("Select…");
+		expect(status.textContent).not.toContain("Select…");
 
-		expect(field.value).toBe("2027-03-01");
-		expect(field.required).toBe(true);
+		const field = screen.getByLabelText("AG renewal date") as HTMLInputElement;
+		expect(field.value).toBe("03/01/2027");
+		expect(field.getAttribute("aria-required")).toBe("true");
 	});
 
-	it("submits an agricultural customer with its renewal date", () => {
+	it("requires the renewal date only once the agricultural rate is chosen", () => {
+		const { onSubmit } = renderForm();
+
+		fillNewCustomer({ rate: "Agricultural" });
+		submit();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText("AG renewal date is required.")).toBeTruthy();
+		expect(document.activeElement).toBe(
+			screen.getByLabelText("AG renewal date"),
+		);
+	});
+
+	it("refuses an impossible renewal date", () => {
+		const { onSubmit } = renderForm();
+
+		fillNewCustomer({ rate: "Agricultural" });
+		const date = screen.getByLabelText("AG renewal date");
+		fireEvent.change(date, { target: { value: "02/30/2026" } });
+		submit();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText(DATE_MESSAGE)).toBeTruthy();
+
+		fireEvent.change(date, { target: { value: "02/28/2027" } });
+		submit();
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				rateCategory: "agricultural",
+				agRenewalDate: "2027-02-28",
+			}),
+		);
+	});
+
+	it("submits an existing agricultural customer with its renewal date", () => {
 		const { onSubmit } = renderForm({
 			initialValues: customerToFormValues(
 				customer({
@@ -193,30 +407,27 @@ describe("CustomerForm", () => {
 			submitLabel: "Save changes",
 		});
 
-		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+		submit("Save changes");
 
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({
 				rateCategory: "agricultural",
 				agRenewalDate: "2027-03-01",
+				status: "active",
 			}),
 		);
 	});
 
 	it("warns what suspension does at the moment it is chosen", () => {
-		renderForm({
-			initialValues: { ...emptyCustomerValues, status: "suspended" },
-		});
+		renderForm();
+
+		expect(screen.queryByText(/pauses all automated email/i)).toBeNull();
+
+		choose("Status", "Suspended");
 
 		expect(
 			screen.getByText(/pauses all automated email/i).textContent,
 		).toContain("currently assigned assets");
-	});
-
-	it("says nothing about paused email while the customer is active", () => {
-		renderForm();
-
-		expect(screen.queryByText(/pauses all automated email/i)).toBeNull();
 	});
 
 	it("disables the controls and relabels the button while the request is in flight", () => {
@@ -232,7 +443,7 @@ describe("CustomerForm", () => {
 		).toBe(true);
 	});
 
-	it("shows the server's message without clearing what was typed", () => {
+	it("shows the server's message inline without clearing what was typed", () => {
 		renderForm({
 			initialValues: customerToFormValues(customer()),
 			errorMessage: "Customer not found",
@@ -244,5 +455,49 @@ describe("CustomerForm", () => {
 		expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
 			"Marta Ellison",
 		);
+	});
+});
+
+describe("CustomerForm — duplicate email refusal", () => {
+	it("shows the refusal under the Email field with the shared inline error, not the form banner", () => {
+		const { onSubmit } = renderForm({
+			initialValues: customerToFormValues(customer()),
+			submitLabel: "Save changes",
+			emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE,
+		});
+
+		// Nothing yet: the refusal is about an address that has been submitted.
+		expect(screen.queryByText(CUSTOMER_EMAIL_TAKEN_MESSAGE)).toBeNull();
+
+		submit("Save changes");
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+
+		const email = screen.getByLabelText("Email");
+		const message = screen.getByText(CUSTOMER_EMAIL_TAKEN_MESSAGE);
+
+		expect(message.getAttribute("role")).toBe("alert");
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(email.getAttribute("aria-invalid")).toBe("true");
+		expect(email.getAttribute("aria-describedby")).toBe(message.id);
+		expect(document.querySelector('[data-slot="form-error"]')).toBeNull();
+	});
+
+	it("clears when the address changes, and returns for the same address in another spelling", () => {
+		renderForm({
+			initialValues: customerToFormValues(customer()),
+			submitLabel: "Save changes",
+			emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE,
+		});
+
+		submit("Save changes");
+		const email = screen.getByLabelText("Email");
+
+		fireEvent.change(email, { target: { value: "marta.ellison@example.com" } });
+		expect(screen.queryByText(CUSTOMER_EMAIL_TAKEN_MESSAGE)).toBeNull();
+		expect(email.getAttribute("aria-invalid")).toBeNull();
+
+		// The server compares trimmed, lowercased addresses — so does the form.
+		fireEvent.change(email, { target: { value: "  MARTA@Example.com " } });
+		expect(screen.getByText(CUSTOMER_EMAIL_TAKEN_MESSAGE)).toBeTruthy();
 	});
 });

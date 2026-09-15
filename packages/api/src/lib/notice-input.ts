@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { NOTICE_TYPES } from "./notice-defaults";
+import { NOTICE_FIELD_LIMITS } from "./notice-field-limits";
 import { BROADCAST_RECIPIENT_FILTERS } from "./notice-recipients";
 import {
 	AUTOMATED_NOTICE_VARIABLES,
@@ -23,16 +24,7 @@ import {
  * sends one is sending a field the server does not read.
  */
 
-/**
- * Not product rules. `subject` and `body` are Postgres `text` and neither the
- * PRD nor the build plan puts a ceiling on either; these are input hygiene —
- * wide enough that no real notice meets them, narrow enough that a pasted
- * document does not become a row or an email.
- */
-export const NOTICE_FIELD_LIMITS = {
-	subject: 200,
-	body: 5000,
-} as const;
+export { NOTICE_FIELD_LIMITS };
 
 /**
  * Subject or body, trimmed, non-empty, and using only the placeholders this
