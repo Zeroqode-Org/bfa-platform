@@ -32,7 +32,7 @@ import { Building2, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { impersonate, useImpersonation } from "@/lib/use-impersonation";
+import { useStartImpersonation } from "@/lib/use-impersonation";
 import { trpc } from "@/utils/trpc";
 
 /** The purveyor a pending block confirmation refers to. */
@@ -45,13 +45,20 @@ const SKELETON_ROWS = 4;
 
 /**
  * Super-Admin cross-tenant list of every water purveyor, with the per-WP counts
- * from `superAdmin.listWaterPurveyors`. "Impersonate" still only flips the
- * local demo state that drives the impersonation banner (Week 4 wires the real
- * one). "Contact" is the purveyor's own WP admin — the only contact the schema
- * exposes — and falls back to an em dash when there is none.
+ * from `superAdmin.listWaterPurveyors`. "Contact" is the purveyor's own WP
+ * admin — the only contact the schema exposes — and falls back to an em dash
+ * when there is none.
+ *
+ * "Impersonate" sends only the row's purveyor id to
+ * `superAdmin.startImpersonation`; the server picks and validates the account,
+ * sets the cookie, and the hook reloads into `/wp` as that purveyor's admin.
  */
 export function WaterPurveyorsTable() {
-	const impersonation = useImpersonation();
+	const startImpersonation = useStartImpersonation();
+	// Busy from the click until the page is replaced — including the moment
+	// after the mutation succeeds and before the navigation lands.
+	const impersonationBusy =
+		startImpersonation.isPending || startImpersonation.isSuccess;
 	const queryClient = useQueryClient();
 	const { data, isPending, isError, error, refetch } = useQuery(
 		trpc.superAdmin.listWaterPurveyors.queryOptions(),
@@ -147,10 +154,10 @@ export function WaterPurveyorsTable() {
 							</StateRow>
 						) : (
 							data.map((wp) => {
-								const viewing =
-									impersonation.isImpersonating &&
-									impersonation.companyName === wp.companyName;
 								const blocked = wp.status === "blocked";
+								const impersonationStarting =
+									impersonationBusy &&
+									startImpersonation.variables?.waterPurveyorId === wp.id;
 								// isPending is shared by the mutation, so scope it to the row
 								// actually being changed.
 								const statusPending =
@@ -210,13 +217,22 @@ export function WaterPurveyorsTable() {
 															? "Unblock"
 															: "Block"}
 												</Button>
+												{/* A blocked purveyor cannot be impersonated — the server
+												    refuses it too; this only saves the round trip. One
+												    impersonation at a time, so every row waits on a
+												    start in flight. */}
 												<Button
 													variant="secondary"
 													size="sm"
-													disabled={viewing}
-													onClick={() => impersonate(wp.companyName)}
+													disabled={blocked || impersonationBusy}
+													aria-busy={impersonationStarting}
+													onClick={() =>
+														startImpersonation.mutate({
+															waterPurveyorId: wp.id,
+														})
+													}
 												>
-													{viewing ? "Viewing" : "Impersonate"}
+													{impersonationStarting ? "Starting…" : "Impersonate"}
 												</Button>
 											</div>
 										</TableCell>

@@ -4,6 +4,11 @@ import { and, asc, eq } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
 import {
+	type AuditActor,
+	auditActor,
+	auditActorFields,
+} from "../lib/audit-actor";
+import {
 	createCustomerInput,
 	customerColumns,
 	updateCustomerInput,
@@ -79,7 +84,7 @@ export const customersRouter = router({
 			}
 
 			logCustomerEvent("customer_created", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				customerId: row.id,
 				waterPurveyorId: ctx.caller.waterPurveyorId,
 				extra: { rate_category: row.rateCategory, status: row.status },
@@ -155,7 +160,7 @@ export const customersRouter = router({
 			}
 
 			logCustomerEvent("customer_updated", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				customerId: row.id,
 				waterPurveyorId: ctx.caller.waterPurveyorId,
 				extra: { rate_category: row.rateCategory, status: row.status },
@@ -163,7 +168,7 @@ export const customersRouter = router({
 
 			if (existing.status !== row.status) {
 				logCustomerEvent("customer_status_changed", {
-					actorId: ctx.caller.profileId,
+					actor: auditActor(ctx),
 					customerId: row.id,
 					waterPurveyorId: ctx.caller.waterPurveyorId,
 					extra: { from: existing.status, to: row.status },
@@ -202,12 +207,12 @@ function isUnchanged(
 function logCustomerEvent(
 	event: string,
 	{
-		actorId,
+		actor,
 		customerId,
 		waterPurveyorId,
 		extra,
 	}: {
-		actorId: string;
+		actor: AuditActor;
 		customerId: string;
 		waterPurveyorId: string;
 		extra?: Record<string, unknown>;
@@ -216,7 +221,7 @@ function logCustomerEvent(
 	console.log(
 		JSON.stringify({
 			event,
-			actor_id: actorId,
+			...auditActorFields(actor),
 			customer_id: customerId,
 			wp_id: waterPurveyorId,
 			...extra,

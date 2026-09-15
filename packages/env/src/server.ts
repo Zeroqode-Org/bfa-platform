@@ -64,6 +64,15 @@ export const env = createEnv({
 		RESEND_REPLY_TO: z
 			.email({ message: "must be an email address" })
 			.optional(),
+		// HMAC-SHA-256 key for the Super-Admin impersonation cookie. Optional so CI
+		// and checkouts that never impersonate need nothing; unset, impersonation
+		// is refused and any cookie is ignored. Set but short fails here. Kept in
+		// sync with IMPERSONATION_SECRET_MIN_LENGTH in
+		// packages/api/src/lib/impersonation-cookie.ts.
+		IMPERSONATION_COOKIE_SECRET: z
+			.string()
+			.min(32, { message: "must be at least 32 characters" })
+			.optional(),
 	},
 	// The Resend variables are optional one at a time and required together
 	// once the provider is switched on — a rule across fields, so it lives on

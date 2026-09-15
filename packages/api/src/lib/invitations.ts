@@ -1,6 +1,6 @@
 import type { globalRole, invitationRole } from "@bfa-platform/db/schema";
 import { TRPCError } from "@trpc/server";
-
+import type { AuditActor } from "./audit-actor";
 import { type EmailSendResult, sendEmail } from "./email";
 import {
 	escapeHtml,
@@ -225,7 +225,8 @@ export type InvitationEmailInput = {
 	expiresAt: Date;
 	waterPurveyorName: string | null;
 	associatedWpId: string | null;
-	invitedByProfileId: string;
+	/** Who sent it — the real account, and the identity it was sent as. */
+	actor: AuditActor;
 };
 
 export const INVITATION_EMAIL_SUBJECT =
@@ -321,7 +322,7 @@ export async function sendInvitationEmail(
 		},
 		{
 			event: "invitation_created",
-			actorId: input.invitedByProfileId,
+			actor: input.actor,
 			wpId: input.associatedWpId,
 			invitationId: input.invitationId,
 		},

@@ -65,7 +65,12 @@ export const queryClient = new QueryClient({
 	}),
 });
 
-const trpcClient = createTRPCClient<AppRouter>({
+/**
+ * The raw client, for the few calls that must not go through React Query —
+ * clearing the impersonation cookie around sign-in and sign-out, from
+ * components that render outside any query provider.
+ */
+export const trpcClient = createTRPCClient<AppRouter>({
 	links: [
 		httpBatchLink({
 			url: "/api/trpc",

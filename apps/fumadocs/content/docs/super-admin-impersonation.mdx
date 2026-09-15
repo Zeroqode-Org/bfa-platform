@@ -1,0 +1,222 @@
+---
+title: Super-Admin Impersonation
+description: How a Super-Admin acts as a water purveyor — the two procedures, the signed cookie, the shared effective-caller helper, the banner, and the open targeting decision
+---
+
+A Super-Admin can act as a water purveyor from the `/admin` list. While
+impersonating, every protected procedure and every server route gate runs as
+that purveyor's admin, a full-width banner sits above the shell, and **Exit
+impersonation** is the only way back.
+
+This page describes the feature as built. It covers the impersonation part of
+PRD § 6.11 and the Week 4 Super-Admin pass in the [build plan](/docs/build-plan).
+Certifier impersonation is **not** built; this release impersonates WP accounts
+only. No audit-log UI is required for v1 (client-confirmed); the structured log
+events below are emitted anyway.
+
+## The flow
+
+1. On `/admin`, **Impersonate** on a purveyor row calls
+   `superAdmin.startImpersonation({ waterPurveyorId })`. The id is the only input
+   — no role, tenant, name or profile comes from the browser.
+2. The server picks the target account (see [Which account](#which-account-a-purveyor-resolves-to)),
+   signs a cookie, sets it on the response, and logs `impersonation_started`.
+3. The browser does a **full load** of `/wp`. That throws away the Super-Admin's
+   React Query and router caches and runs the route gate against the new cookie.
+4. Every request from then on resolves to the purveyor's admin. `/admin` bounces
+   to `/wp`, because the role gate reads the effective role.
+5. **Exit impersonation** calls `superAdmin.endImpersonation()`, which clears the
+   cookie and logs `impersonation_ended`; the browser does a full load of
+   `/admin`.
+
+While impersonating, the Super-Admin has *none* of their own powers:
+`superAdminProcedure` checks the effective caller, so the WP list, blocking and
+invitations are refused until they exit. That also means a second
+`startImpersonation` is refused — exit first.
+
+## Which account a purveyor resolves to
+
+The list is of purveyors, but the cookie must name a `profiles` row.
+`findImpersonationTarget` in `packages/api/src/context.ts` chooses:
+
+- the purveyor's **earliest-created active `wp_admin`** — the same account the
+  list's *Contact* column shows;
+- never a `wp_sub_admin` or `wp_employee`, however old;
+- nobody, if the purveyor is **blocked** (`PRECONDITION_FAILED`), has **no active
+  admin** (`PRECONDITION_FAILED`), or does not exist (`NOT_FOUND`).
+
+The Impersonate button is disabled for blocked rows; the server refuses them
+regardless.
+
+> **Open product decision.** The requirements do not say which account to use
+> when a purveyor has several active admins. Earliest-created is the
+> deterministic default shipped here, not a confirmed answer. Alternatives:
+> refuse when there is more than one, or let the Super-Admin pick the account.
+> Tracked in the [development plan](/docs/dev-plan#open-questions-blocking-phase-completion).
+
+## The cookie
+
+`packages/api/src/lib/impersonation-cookie.ts`.
+
+| Property | Value |
+|---|---|
+| Name | `bfa_impersonation` — separate from the `sb-…` Supabase Auth cookies, which are never touched |
+| Attributes | `HttpOnly; Path=/; SameSite=Lax; Max-Age=3600`, plus `Secure` when `NODE_ENV=production` |
+| Format | `v1.<base64url(JSON claims)>.<base64url(HMAC-SHA-256)>` |
+| Claims | `actor` (Super-Admin profile id), `target` (WP admin profile id), `wp` (purveyor id), `iat`, `exp` — identifiers only, strict schema |
+| Signature | HMAC-SHA-256 over `v1.<claims>` from `node:crypto` (FIPS-approved, no new dependency), compared in constant time before the payload is parsed |
+| Lifetime | One hour, not sliding. An expired cookie is ignored and cleared; the Super-Admin is back to themselves |
+| Key | `IMPERSONATION_COOKIE_SECRET`, server-only |
+
+The cookie is **not** a second session. It is honoured only together with the
+real Supabase session of the Super-Admin it was issued to.
+
+### Configuration
+
+| Variable | Required | Notes |
+|---|---|---|
+| `IMPERSONATION_COOKIE_SECRET` | to use impersonation | At least 32 characters, validated in `packages/env/src/server.ts`. Generate with `openssl rand -base64 48`. Unset: `startImpersonation` returns `PRECONDITION_FAILED` and every cookie is ignored. Rotating it ends every impersonation in progress. |
+
+Never expose it to the browser — it has no `NEXT_PUBLIC_` prefix and is read only
+on the server.
+
+## One helper for the effective identity
+
+`resolveEffectiveCaller(supabase, user, token)` in
+`packages/api/src/context.ts` is the only place impersonation is interpreted. It
+is used by:
+
+- `enforceCaller` in `packages/api/src/index.ts`, which every
+  `protectedProcedure` — and so `wpProcedure`, `superAdminProcedure` and every
+  feature router — runs through;
+- `requireAccount` in `apps/web/src/lib/auth.ts`, which every signed-in route
+  gate runs through.
+
+No feature router contains impersonation code. It resolves in this order:
+
+1. The signed-in account, via `resolveCaller`. A blocked Super-Admin is refused
+   outright, whatever cookie they hold.
+2. No cookie → that account, unchanged. Behaviour outside impersonation is
+   exactly what it was.
+3. Otherwise the cookie is honoured only if **all** of these hold; any failure
+   leaves the signed-in account as the caller and reports a reason:
+
+| Check | Rejection reason |
+|---|---|
+| A key is configured | `not_configured` |
+| Three parts, `v1`, valid claims, lifetime ≤ 1h, not issued in the future | `malformed` |
+| HMAC matches | `bad_signature` |
+| Not expired | `expired` |
+| `actor` is the signed-in profile | `actor_mismatch` |
+| The signed-in profile is still a `super_admin` | `actor_not_super_admin` |
+| `target` still exists, is `active`, is a `wp_admin`, still belongs to `wp`, and `wp` is `active` | `target_invalid` |
+
+The target is re-checked **on every request**, so blocking the admin, demoting
+them, moving them to another purveyor or blocking the purveyor ends the
+impersonation on the next call.
+
+The procedure context carries three fields:
+
+- `ctx.caller` — the effective identity. Every role check and tenant scope reads
+  this.
+- `ctx.actor` — always the real signed-in account.
+- `ctx.impersonation` — `{ targetProfileId, waterPurveyorId, expiresAt }` or
+  `null`.
+
+`superAdminActorProcedure` reads `ctx.actor` instead of `ctx.caller`; only
+`endImpersonation` uses it, since it must work while the effective caller is the
+WP admin.
+
+A rejected cookie is cleared by the next tRPC response. A Server Component cannot
+write cookies, so a route gate simply ignores it.
+
+## Procedures
+
+| Procedure | Guard | Effect |
+|---|---|---|
+| `superAdmin.startImpersonation({ waterPurveyorId })` | `superAdminProcedure` (effective role) | Validates the target, sets the cookie, returns `{ waterPurveyorId, waterPurveyorName, expiresAt }` |
+| `superAdmin.endImpersonation()` | `superAdminActorProcedure` (real role) | Always clears the cookie. Returns `{ ended: true }` and logs only if an impersonation was active; otherwise `{ ended: false }` |
+| `whoami` | `protectedProcedure` | Effective `profileId`, `globalRole`, `waterPurveyorId`, plus `impersonating: boolean`. Nothing about the cookie |
+| `session.clearImpersonation({ reason })` | `publicProcedure` | Always clears the cookie. Logs `impersonation_ended` with the reason only if the cookie verifies and was issued to the account signed in on this request. Grants nothing — it only removes the caller's own cookie |
+
+## Structured logs
+
+Every line is `console.log(JSON.stringify(...))`. None contains the cookie value,
+its signature or the key.
+
+| Event | Fields |
+|---|---|
+| `impersonation_started` | `actor_id`, `target_profile_id`, `target_role`, `wp_id`, `expires_at`, `timestamp` |
+| `impersonation_ended` | `actor_id`, `target_profile_id`, `wp_id`, `reason` (`exit`, `sign_out` or `sign_in`), `timestamp` |
+| `impersonation_cookie_rejected` | `actor_id`, `reason`, `timestamp` |
+| `caller_resolved` (every protected call) | `actor_id` (real account), `effective_profile_id`, `wp_id`, `role`, `impersonating`, `timestamp` |
+
+### Audit attribution in feature routers
+
+Every mutation's structured log carries both identities:
+`bfa_asset_*`, `customer_*`, `repair_company_*`, `test_submission_*`,
+`notice_template_saved`, `general_info_broadcast_*`,
+`certifier_status_changed`, `invitation_created`,
+`water_purveyor_status_changed` and `email_send_attempted`.
+
+- `actor_id` is always the real signed-in account — the Super-Admin, while they
+  impersonate.
+- `effective_profile_id` is the identity the action was performed as — the WP
+  admin while impersonating, otherwise the same as `actor_id`.
+
+Routers build both with `auditActor(ctx)` from `packages/api/src/lib/audit-actor.ts`
+and never from `ctx.caller.profileId`. The structural test
+`packages/api/src/routers/audit-attribution.test.ts` fails if any router or `lib`
+file attributes an action to `ctx.caller`.
+
+Persisted columns are unchanged: `invitations.invited_by_profile_id` and
+`test_submissions.edited_by_wp_profile_id` still record the effective WP profile,
+because they are tenant data read by the purveyor's own screens. Who really made
+the change is in the log line.
+
+## The banner
+
+`apps/web/src/components/shell/impersonation-banner.tsx`, rendered by
+`DashboardShell` as the first child, above the sidebar and header.
+
+- Fed from the server: `requireAccount` returns
+  `account.impersonation = { waterPurveyorName }`. It is in the first paint and
+  there is no client-side state to switch it off.
+- `bg-impersonation-bg` / `text-impersonation-text`, full width, *Viewing as
+  {purveyor}*.
+- One control only: the underlined **Exit impersonation**. No close icon, no
+  menu. It shows *Exiting impersonation…* while the request runs; if the server
+  refuses, a toast explains and the banner stays.
+
+While impersonating, the sidebar shows the WP admin's name and role with no
+email — the only address on hand is the Super-Admin's own, and it must not
+appear under somebody else's name.
+
+## Residual behaviour worth knowing
+
+- **Signing out ends the impersonation.** The logout button calls
+  `session.clearImpersonation({ reason: "sign_out" })` before Supabase
+  `signOut`. The login form calls it again with `sign_in` after a successful
+  sign-in and before navigating, so a sign-out whose clear never reached the
+  server still cannot be resumed. Both calls swallow network errors so neither
+  blocks signing out or in.
+- **Expiry is silent.** After an hour the next request resolves to the
+  Super-Admin again. The `/wp` screen in front of them does not reload by itself.
+
+## Tests
+
+- `packages/api/src/lib/impersonation-cookie.test.ts` — signing, tamper, expiry,
+  malformed values and cookie attributes.
+- `packages/api/src/routers/super-admin-impersonation.test.ts` — the procedure
+  stack against an in-memory database stand-in. Runs in `npm test`.
+- `packages/api/src/routers/super-admin-impersonation.db.test.ts` — target
+  selection and live invalidation against real Postgres. Opt-in via
+  `npm run test:db`.
+- `apps/web/src/lib/auth.test.ts` — the route gate's use of the helper.
+- `packages/api/src/lib/audit-actor.test.ts` and
+  `packages/api/src/routers/audit-attribution.test.ts` — audit attribution.
+- `apps/web/src/components/shell/logout-button.test.tsx` and
+  `apps/web/src/components/auth/login-form.test.tsx` — clearing the cookie
+  around sign-out and sign-in.
+- `apps/web/src/components/admin/water-purveyors-table.test.tsx` and
+  `apps/web/src/components/shell/impersonation-banner.test.tsx` — the UI.

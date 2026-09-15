@@ -9,7 +9,20 @@ import {
 import { and, asc, count, eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { router, superAdminProcedure, TRPCError } from "../index";
+import { findImpersonationTarget } from "../context";
+import {
+	router,
+	superAdminActorProcedure,
+	superAdminProcedure,
+	TRPCError,
+} from "../index";
+import { auditActor, auditActorFields } from "../lib/audit-actor";
+import {
+	createImpersonationToken,
+	impersonationSecret,
+	serializeClearedImpersonationCookie,
+	serializeImpersonationCookie,
+} from "../lib/impersonation-cookie";
 
 /** Rows of `{ wpId, value }` into a lookup, so the merge below stays O(n). */
 function toCountMap(rows: { wpId: string; value: number }[]) {
@@ -147,7 +160,7 @@ export const superAdminRouter = router({
 			console.log(
 				JSON.stringify({
 					event: "water_purveyor_status_changed",
-					actor_id: ctx.caller.profileId,
+					...auditActorFields(auditActor(ctx)),
 					wp_id: row.id,
 					status: row.status,
 					timestamp: new Date().toISOString(),
@@ -156,4 +169,113 @@ export const superAdminRouter = router({
 
 			return row;
 		}),
+
+	/**
+	 * Starts acting as a water purveyor. The client names the purveyor and
+	 * nothing else: which account that means, and whether it may be used, is
+	 * decided here from the database — see `findImpersonationTarget`.
+	 *
+	 * `superAdminProcedure` checks the *effective* caller, so this also refuses a
+	 * Super-Admin who is already impersonating: they exit first, rather than
+	 * stacking one identity on another.
+	 *
+	 * The identity goes into its own signed, `httpOnly` cookie. The Supabase
+	 * session is not touched — the Super-Admin stays signed in as themselves, and
+	 * the cookie is only honoured alongside that session.
+	 */
+	startImpersonation: superAdminProcedure
+		.input(z.object({ waterPurveyorId: z.uuid() }))
+		.mutation(async ({ ctx, input }) => {
+			const secret = impersonationSecret();
+			if (!secret) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "Impersonation is not configured on this server",
+				});
+			}
+
+			const lookup = await findImpersonationTarget(input.waterPurveyorId);
+
+			if (!lookup.ok) {
+				switch (lookup.reason) {
+					case "wp_not_found":
+						throw new TRPCError({
+							code: "NOT_FOUND",
+							message: "Water purveyor not found",
+						});
+					case "wp_blocked":
+						throw new TRPCError({
+							code: "PRECONDITION_FAILED",
+							message: "A blocked water purveyor cannot be impersonated",
+						});
+					case "no_active_admin":
+						throw new TRPCError({
+							code: "PRECONDITION_FAILED",
+							message:
+								"This water purveyor has no active admin account to impersonate",
+						});
+				}
+			}
+
+			const { target } = lookup;
+			// Non-null by construction: the lookup joins through the purveyor.
+			const waterPurveyorId = target.waterPurveyorId as string;
+
+			const { token, expiresAt } = createImpersonationToken(
+				{
+					actorProfileId: ctx.actor.profileId,
+					targetProfileId: target.profileId,
+					waterPurveyorId,
+				},
+				secret,
+			);
+
+			ctx.resHeaders.append("set-cookie", serializeImpersonationCookie(token));
+
+			console.log(
+				JSON.stringify({
+					event: "impersonation_started",
+					actor_id: ctx.actor.profileId,
+					target_profile_id: target.profileId,
+					target_role: target.globalRole,
+					wp_id: waterPurveyorId,
+					expires_at: expiresAt.toISOString(),
+					timestamp: new Date().toISOString(),
+				}),
+			);
+
+			return {
+				waterPurveyorId,
+				waterPurveyorName: target.waterPurveyorName,
+				expiresAt,
+			};
+		}),
+
+	/**
+	 * Ends the impersonation and clears the cookie. Checks the real signed-in
+	 * account (`superAdminActorProcedure`), because while impersonating the
+	 * effective caller is the purveyor's admin.
+	 *
+	 * Idempotent: a Super-Admin with nothing to end still gets the cookie cleared
+	 * and `ended: false`, and no event is logged for an impersonation that did not
+	 * exist.
+	 */
+	endImpersonation: superAdminActorProcedure.mutation(({ ctx }) => {
+		ctx.resHeaders.append("set-cookie", serializeClearedImpersonationCookie());
+
+		if (!ctx.impersonation) return { ended: false };
+
+		console.log(
+			JSON.stringify({
+				event: "impersonation_ended",
+				actor_id: ctx.actor.profileId,
+				target_profile_id: ctx.impersonation.targetProfileId,
+				wp_id: ctx.impersonation.waterPurveyorId,
+				reason: "exit",
+				timestamp: new Date().toISOString(),
+			}),
+		);
+
+		return { ended: true };
+	}),
 });

@@ -8,6 +8,7 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 
+import { clearImpersonationCookie } from "@/lib/clear-impersonation";
 import { createClient } from "@/lib/supabase/client";
 
 /**
@@ -48,6 +49,11 @@ export function LoginForm({ redirectTo }: { redirectTo: Route }) {
 			setIsSubmitting(false);
 			return;
 		}
+
+		// A new session never inherits an impersonation — the backstop for a
+		// sign-out whose own clear never reached the server. Awaited, so the
+		// cookie is gone before the route gate below reads it.
+		await clearImpersonationCookie("sign_in");
 
 		// refresh() so the server re-reads the freshly written session cookies.
 		router.replace(redirectTo);

@@ -15,6 +15,11 @@ import {
 	listAssetsInput,
 	updateAssetInput,
 } from "../lib/asset-input";
+import {
+	type AuditActor,
+	auditActor,
+	auditActorFields,
+} from "../lib/audit-actor";
 
 /**
  * The columns every asset procedure returns. Declared once so the table, the
@@ -182,7 +187,7 @@ export const assetsRouter = router({
 			});
 
 			logAssetEvent("bfa_asset_created", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				assetId: row.id,
 				waterPurveyorId,
 				extra: {
@@ -198,7 +203,7 @@ export const assetsRouter = router({
 			// customer arrived with it or a week afterwards.
 			if (customer) {
 				logAssetEvent("bfa_asset_customer_assigned", {
-					actorId: ctx.caller.profileId,
+					actor: auditActor(ctx),
 					assetId: row.id,
 					waterPurveyorId,
 					extra: {
@@ -265,7 +270,7 @@ export const assetsRouter = router({
 			}
 
 			logAssetEvent("bfa_asset_updated", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				assetId: row.id,
 				waterPurveyorId: ctx.caller.waterPurveyorId,
 				extra: { bin: row.bin },
@@ -278,7 +283,7 @@ export const assetsRouter = router({
 			// the generic update above.
 			if (existing.bin !== row.bin) {
 				logAssetEvent("bfa_asset_bin_changed", {
-					actorId: ctx.caller.profileId,
+					actor: auditActor(ctx),
 					assetId: row.id,
 					waterPurveyorId: ctx.caller.waterPurveyorId,
 					extra: { from: existing.bin, to: row.bin },
@@ -387,7 +392,7 @@ export const assetsRouter = router({
 			});
 
 			logAssetEvent("bfa_asset_customer_assigned", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				assetId: asset.id,
 				waterPurveyorId,
 				extra: {
@@ -685,12 +690,12 @@ function isUnchanged(
 function logAssetEvent(
 	event: string,
 	{
-		actorId,
+		actor,
 		assetId,
 		waterPurveyorId,
 		extra,
 	}: {
-		actorId: string;
+		actor: AuditActor;
 		assetId: string;
 		waterPurveyorId: string;
 		extra?: Record<string, unknown>;
@@ -699,7 +704,7 @@ function logAssetEvent(
 	console.log(
 		JSON.stringify({
 			event,
-			actor_id: actorId,
+			...auditActorFields(actor),
 			asset_id: assetId,
 			wp_id: waterPurveyorId,
 			...extra,

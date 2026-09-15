@@ -23,7 +23,7 @@ Target delivery: **2026-10-02** (~6 weeks from kickoff on 2026-08-24). Team: **L
 
 ## Task tracker
 
-Status as of **2026-09-13**. Update this table as work progresses — this is the source of truth, not the phase table above.
+Status as of **2026-09-14**. Update this table as work progresses — this is the source of truth, not the phase table above.
 
 | Task | PRD § | Owner | Start | End | Status |
 |---|---|---|---|---|---|
@@ -185,7 +185,15 @@ the four platform defaults, so `notice-defaults.ts` carries plain provisional
 copy that makes no compliance claim. Full writeup:
 [WP Notices & Email](/docs/wp-notices).
 
-**Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
+**Super-Admin (6.11)**: stays *in-progress*. The invite-new-WP action is wired and `/admin` is gated to `super_admin`. **WP impersonation has shipped.** `superAdmin.startImpersonation` and `endImpersonation` set and clear a separate `bfa_impersonation` cookie: `httpOnly`, HMAC-SHA-256-signed, one-hour lifetime. Its key is the new optional server variable `IMPERSONATION_COOKIE_SECRET`.
+
+Every protected procedure and every route gate resolves the effective identity through one helper, `resolveEffectiveCaller`. It re-checks both accounts on every request, and no feature router carries impersonation code. The persistent banner and the WP list's Impersonate action now run through the server; the client-only demo store is gone. No migration ships with it.
+
+Still open in this section: feature-flag toggles, and certifier impersonation (not in this pass). Full writeup: [Super-Admin Impersonation](/docs/super-admin-impersonation).
+
+**Carries a new open question.** The WP list names purveyors, and the cookie has to name a profile. The shipped default targets the purveyor's **earliest-created active `wp_admin`**, the account the Contact column shows. It refuses purveyors with no active admin, and blocked purveyors. What should happen when a purveyor has several active admins is unconfirmed.
+
+Every feature router's structured audit line keeps the real Super-Admin in `actor_id` and names the impersonated admin in `effective_profile_id`. Signing out, or signing in again, clears the impersonation cookie.
 
 **Transactional Email Integration (6.14)** stays *in-progress*, now only for its switch-on. The send helper and `consoleDriver` shipped with onboarding, and every mail path in the app runs through them. The Resend account exists, the sender domain `backflowreporter.io` is verified, and `providerDriver` is built and unit-tested, with `EMAIL_DRIVER`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL` and `RESEND_REPLY_TO` in env validation; every Resend send sets `Reply-To` to `info@backflowreporter.io` so replies reach the existing mailbox. The email template design is also done: one shared, responsive layout in `packages/api/src/lib/email-layout.ts` wraps invitations (with a **Set up your account** button, fallback URL and expiry) and general-info broadcasts, and is the path automated notices will use; notice bodies stay escaped plain text, and branding is text-only until the client supplies a logo. What remains: set the variables in the deployment, enable `EMAIL_DRIVER=provider` after review, and confirm one live test send. Console stays the default until then. The automated notice copy is still awaiting client approval; that belongs to the workflows, not to 6.14. See [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer).
 
@@ -199,6 +207,7 @@ Carried from [PRD § 10](/docs/prd#10-open-questions-for-the-client) — resolve
 
 - **Phase 2:** WPAdmin/WPsubAdmin/WPEmployee permission differences — all three currently share identical invitation policies; second-WP-invite notification behavior.
 - **Phase 3:** signature vs. certify-checkbox; legacy PDF/results-document layout match (reference wizard: [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard)).
+- **Phase 6:** which account Super-Admin impersonation should use when a water purveyor has more than one active `wp_admin`. It currently uses the earliest-created one — see [Super-Admin Impersonation](/docs/super-admin-impersonation#which-account-a-purveyor-resolves-to).
 - **Phase 5:** the full list of dynamic variables for notice text (six shipped, and the substitution layer takes a seventh as a list edit); **approved customer-facing copy for the four platform default notices**, which 6.6.7 ships as provisional placeholder text; AG Renewal Date auto-update behavior; monthly CSV export field list.
 
 Resolved since the last pass (no longer blocking): mid-wizard pass/fail handling, scope of "edit submitted test data" for a WP, asset↔customer cardinality, email routing for suspended customers, and BIN reassignment on an existing asset — allowed, and logged with both values, which is what 6.6.2 shipped. See [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log).

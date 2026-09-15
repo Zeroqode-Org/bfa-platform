@@ -9,6 +9,11 @@ import { and, asc, count, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
 import {
+	type AuditActor,
+	auditActor,
+	auditActorFields,
+} from "../lib/audit-actor";
+import {
 	changedSubmissionFields,
 	linkSubmissionAssetInput,
 	listSubmittedTestsInput,
@@ -210,7 +215,9 @@ export const submittedTestsRouter = router({
 	 *
 	 * `edited_by_wp_profile_id` is written from `ctx.caller.profileId` on every
 	 * real correction. It is not on the input shape and never comes from the
-	 * client — an actor a request can name is not an audit trail.
+	 * client — an actor a request can name is not an audit trail. The column
+	 * records the WP profile the edit was made as; the log line's `actor_id` is
+	 * the real signed-in account, which differs while a Super-Admin impersonates.
 	 */
 	updateSubmittedTest: wpSubmissionEditorProcedure
 		.input(updateSubmittedTestInput)
@@ -253,7 +260,7 @@ export const submittedTestsRouter = router({
 			if (!row) throw notFound();
 
 			logSubmissionEvent("test_submission_corrected", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				submissionId: row.id,
 				waterPurveyorId,
 				extra: {
@@ -367,7 +374,7 @@ export const submittedTestsRouter = router({
 			// the BIN it was resolved to — the two values somebody re-checking the
 			// decision needs.
 			logSubmissionEvent("test_submission_asset_linked", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				submissionId: row.id,
 				waterPurveyorId,
 				extra: {
@@ -492,12 +499,12 @@ function notFound() {
 function logSubmissionEvent(
 	event: string,
 	{
-		actorId,
+		actor,
 		submissionId,
 		waterPurveyorId,
 		extra,
 	}: {
-		actorId: string;
+		actor: AuditActor;
 		submissionId: string;
 		waterPurveyorId: string;
 		extra?: Record<string, unknown>;
@@ -506,7 +513,7 @@ function logSubmissionEvent(
 	console.log(
 		JSON.stringify({
 			event,
-			actor_id: actorId,
+			...auditActorFields(actor),
 			submission_id: submissionId,
 			wp_id: waterPurveyorId,
 			...extra,
