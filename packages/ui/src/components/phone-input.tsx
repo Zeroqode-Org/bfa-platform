@@ -54,9 +54,10 @@ const PHONE_MASK: DigitMask = {
  * accepted as typed.
  *
  * A leading `1` country code in front of ten digits (`+1 555 123 4567`,
- * `15551234567`) is dropped, exactly as the server drops it. A `+` that is not
- * that country code in front of a whole number (`+2 555 123 4567`,
- * `+44 20 7946 0958`, `+1 555`) is refused.
+ * `15551234567`) is dropped, exactly as the server drops it. A `+` is accepted
+ * only as that `+1` country code in front of ten digits, so anything else
+ * starting with `+` — `+5551234567`, `+2 555 123 4567`, `+44 20 7946 0958`,
+ * `+1 555` — is refused, as `normalizeUsPhone` refuses it.
  */
 function pastedPhoneDigits(text: string) {
 	const trimmed = text.trim();
@@ -64,14 +65,12 @@ function pastedPhoneDigits(text: string) {
 	if (!US_PHONE_CHARACTERS.test(trimmed)) return null;
 
 	const digits = digitsOf(trimmed);
+	const hasCountryCode =
+		digits.length === PHONE_DIGITS + 1 && digits.startsWith("1");
 
-	if (digits.length === PHONE_DIGITS + 1 && digits.startsWith("1")) {
-		return digits.slice(1);
-	}
+	if (trimmed.startsWith("+") && !hasCountryCode) return null;
 
-	if (trimmed.startsWith("+") && digits.length !== PHONE_DIGITS) return null;
-
-	return digits;
+	return hasCountryCode ? digits.slice(1) : digits;
 }
 
 /**

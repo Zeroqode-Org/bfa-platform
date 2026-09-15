@@ -107,9 +107,27 @@ describe("US phone numbers", () => {
 			"(555) 123-4567",
 			"555.123.4567",
 			"+1 555 123 4567",
+			"+15551234567",
+			"15551234567",
 			"1-555-123-4567",
 		]) {
 			expect(usPhoneDigits(value)).toBe("5551234567");
+		}
+	});
+
+	it("accepts a leading + only as the +1 country code", () => {
+		for (const value of [
+			"+5551234567",
+			"+2 555 123 4567",
+			"+44 20 7946 0958",
+			"+1 555",
+			"++15551234567",
+			"++1 555 123 4567",
+			"1+5551234567",
+			"555+1234567",
+		]) {
+			expect(usPhoneDigits(value), value).toBeNull();
+			expect(formatUsPhone(value), value).toBeNull();
 		}
 	});
 

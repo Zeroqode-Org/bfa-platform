@@ -135,7 +135,7 @@ never through the browser's own validation popups or a toast.
   `(555) 123-4567`; a paste that would exceed ten digits is refused rather than
   cut down. Pasted or autofilled text is held to the server's character rule:
   anything with a letter, an extension (`x12`, `ext. 12`), another character or
-  a malformed country code (`+2 …`, `+44 …`) is refused whole and the field is
+  a `+` that is not the `+1` country code (`+5551234567`, `+2 …`, `+44 …`) is refused whole and the field is
   left unchanged — forbidden characters are never stripped into a valid number. An incomplete number stays as entered with the inline phone error.
   Only phone fields are masked — email and address fields stay free text with
   their existing inline rules.

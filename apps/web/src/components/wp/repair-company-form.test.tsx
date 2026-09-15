@@ -250,9 +250,9 @@ describe("RepairCompanyForm — whole pasted phone values against normalizeUsPho
 		"  (555)123-4567  ",
 		"+1 555 123 4567",
 		"+15551234567",
+		"15551234567",
 		"1-555-123-4567",
 		"1 (555) 123-4567",
-		"+5551234567",
 	];
 
 	const REJECTED = [
@@ -264,9 +264,13 @@ describe("RepairCompanyForm — whole pasted phone values against normalizeUsPho
 		"555-123-4567#12",
 		"555_123_4567",
 		"555/123/4567",
+		// A `+` only ever introduces the `+1` country code.
+		"+5551234567",
 		"+2 555 123 4567",
 		"+44 20 7946 0958",
+		"+1 555",
 		"++1 555 123 4567",
+		"++15551234567",
 		"1+555 123 4567",
 		"55512345678",
 	];

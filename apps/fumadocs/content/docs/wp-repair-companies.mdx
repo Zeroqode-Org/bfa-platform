@@ -46,8 +46,10 @@ The server applies the same rule, so a direct API caller cannot store what the
 form refuses. `createRepairCompanyInput` and `updateRepairCompanyInput` validate
 the phone with `normalizeUsPhone` (`packages/api/src/lib/us-phone.ts`): blank
 or null is no phone; ten digits with ordinary punctuation and an optional `+1`
-or leading `1` are stored in the one canonical spelling `(XXX) XXX-XXXX`; any
-other length, letters, an extension or a malformed value is refused with
+or leading `1` are stored in the one canonical spelling `(XXX) XXX-XXXX`; a `+`
+is accepted only as that `+1` country code, so `+5551234567`, `+2 …`, `+44 …` and
+`+1 555` are refused; any other length, letters, an extension or a malformed
+value is refused with
 *Enter a valid 10-digit US phone number*. A test in `apps/web` holds the form's
 rule and the server's to the same answers.
 

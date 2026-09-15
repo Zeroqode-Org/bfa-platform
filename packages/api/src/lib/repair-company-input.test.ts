@@ -187,6 +187,7 @@ describe.each(WRITE_SHAPES)("phone on $name", ({ parse }) => {
 			"  555 123 4567 ",
 			"+1 555 123 4567",
 			"+15551234567",
+			"15551234567",
 			"1-555-123-4567",
 		]) {
 			const parsed = parse(phone);
@@ -210,7 +211,13 @@ describe.each(WRITE_SHAPES)("phone on $name", ({ parse }) => {
 			"555-0142",
 			"555123456",
 			"55512345678",
+			// A `+` is only ever the `+1` country code in front of ten digits.
+			"+5551234567",
 			"+2 555 123 4567",
+			"+44 20 7946 0958",
+			"+1 555",
+			"++15551234567",
+			"1+555 123 4567",
 			"555-123-45678",
 			"555-CALL-NOW",
 			"555-123-4567 x12",

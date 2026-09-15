@@ -99,16 +99,22 @@ export const US_PHONE_CHARACTERS = /^\+?[\d\s().-]+$/;
  *
  * Accepts the punctuation people actually type — spaces, dots, dashes,
  * parentheses and a leading `+1`/`1` — and nothing else, so a letter or an
- * extension is refused rather than stripped. Never truncates: eleven digits
- * that do not start with the country code are simply not a number.
+ * extension is refused rather than stripped. A `+` is only ever part of the
+ * `+1` country code, so `+5551234567` is refused, the same as the server's
+ * `normalizeUsPhone` refuses it. Never truncates: eleven digits that do not
+ * start with the country code are simply not a number.
  */
 export function usPhoneDigits(value: string): string | null {
 	const trimmed = value.trim();
 	if (!US_PHONE_CHARACTERS.test(trimmed)) return null;
 
 	const digits = trimmed.replace(/\D/g, "");
-	const national =
-		digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+	const hasCountryCode = digits.length === 11 && digits.startsWith("1");
+
+	// A leading `+` must introduce the US country code in front of ten digits.
+	if (trimmed.startsWith("+") && !hasCountryCode) return null;
+
+	const national = hasCountryCode ? digits.slice(1) : digits;
 
 	return national.length === 10 ? national : null;
 }
