@@ -69,6 +69,42 @@ regardless.
 | Lifetime | One hour, not sliding. An expired cookie is ignored and cleared; the Super-Admin is back to themselves |
 | Key | `IMPERSONATION_COOKIE_SECRET`, server-only |
 
+### Cross-site request forgery
+
+Two independent defences stand between a hostile page and any tRPC mutation.
+That includes `startImpersonation`, `endImpersonation`, and anything done while
+impersonating a WP account.
+
+1. **`SameSite=Lax` cookies.** The Supabase session cookies and
+   `bfa_impersonation` are not sent on cross-site POSTs.
+2. **A same-origin `Origin` check on every tRPC POST.** In
+   `apps/web/src/app/api/trpc/[trpc]/route.ts`, `POST` calls `checkSameOrigin`
+   (`apps/web/src/lib/same-origin.ts`) before `fetchRequestHandler`.
+
+   - **What passes:** the `Origin` header must be exactly the request's own
+     origin — scheme, host and port — derived from the incoming request URL.
+     There is no allow-list, wildcard, substring or hostname-only match.
+   - **What is refused:** a missing header, a malformed value (`null`, a path, a
+     trailing slash, credentials, a non-http scheme), and any other origin.
+   - **How it is refused:** a bare `403 Forbidden`, before tRPC creates a
+     context. No Supabase session is read or refreshed, no impersonation is
+     resolved, and no procedure runs. Public procedures are not exempt;
+     `session.clearImpersonation` included.
+   - **Logging:** each refusal logs `csrf_request_rejected` with only `reason`
+     (`missing_origin`, `malformed_origin` or `cross_origin`), `method`, `path`
+     and `timestamp`. The log never includes the Origin value, cookies, tokens or
+     the body.
+
+GET is unchanged. It carries queries only, and tRPC refuses a mutation over GET.
+The app's own client (`httpBatchLink` to `/api/trpc`) always sends a same-origin
+`Origin` on its POSTs, so nothing in the browser changes.
+
+**Deployment requirement.** Next builds the request URL from the `Host` header
+and `X-Forwarded-Proto`. A reverse proxy or load balancer in front of the app —
+including a Docker deployment — must forward both unchanged. Otherwise the
+server computes a different origin from the one the browser sends, and every
+mutation is refused.
+
 The cookie is **not** a second session. It is honoured only together with the
 exact Supabase Auth session it was issued in, for the Super-Admin it was issued
 to.

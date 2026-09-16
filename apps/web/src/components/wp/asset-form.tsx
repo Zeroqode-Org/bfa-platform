@@ -365,10 +365,16 @@ export function AssetForm({
 							className="mt-px size-4 shrink-0"
 							aria-hidden="true"
 						/>
-						Changing a BIN is recorded: this save is logged with{" "}
-						<strong className="font-semibold">{initialValues.bin}</strong> and
-						the new value. Every test, notice and prefill for this assembly is
-						keyed on it.
+						{/* One flex item for the whole message. Bare text either side of
+						    the <strong> would each become their own flex item and lay out
+						    as columns. `overflow-wrap:anywhere` lets a long BIN with no
+						    spaces wrap instead of pushing out of the box. */}
+						<span className="min-w-0 [overflow-wrap:anywhere]">
+							Changing a BIN is recorded: this save is logged with{" "}
+							<strong className="font-semibold">{initialValues.bin}</strong> and
+							the new value. Every test, notice and prefill for this assembly is
+							keyed on it.
+						</span>
 					</p>
 				) : null}
 
