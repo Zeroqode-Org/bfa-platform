@@ -127,3 +127,67 @@ export function platformDefaultTemplate(
 ): NoticeTemplateCopy {
 	return PLATFORM_DEFAULT_NOTICE_TEMPLATES[noticeType];
 }
+
+/**
+ * The heading above the list of testers appended to a reminder.
+ *
+ * The reminder is the one notice that has to be actionable: it tells a customer
+ * a test is due and it has to tell them who can do it (build plan, "the
+ * reminder email carries the list of certifiers the customer can call"). The
+ * list is not a template variable — {@link NOTICE_VARIABLES} is a closed
+ * registry and the client has not settled its final contents — so the block is
+ * appended below whatever the purveyor wrote, in the same plain text, rather
+ * than being a seventh placeholder they have to remember to include.
+ *
+ * Provisional copy, like the four templates above, and for the same reason.
+ */
+export const CERTIFIER_LIST_HEADING =
+	"Certified testers authorized by this water purveyor:";
+
+/**
+ * One tester's line in that list.
+ *
+ * Name, company and licence number, joined with an em dash and skipping
+ * whatever is missing — `certifiers` has no phone or email column, and the
+ * customer's next step is to look the tester up or ask the purveyor, so
+ * inventing a contact field here would be inventing data. A certifier with no
+ * name on their profile is rendered from whatever they do have rather than as a
+ * blank bullet.
+ */
+export type CertifierListEntry = {
+	fullName: string | null;
+	company: string | null;
+	idNumber: string | null;
+};
+
+export function certifierListLine(entry: CertifierListEntry): string {
+	const parts = [entry.fullName, entry.company, entry.idNumber]
+		.map((part) => part?.trim())
+		.filter((part): part is string => Boolean(part));
+
+	return parts.join(" — ");
+}
+
+/**
+ * The whole certifier block as plain text, or `null` when there is nobody to
+ * list.
+ *
+ * `null` rather than an empty heading. A reminder that says "here are the
+ * testers you can call" and then lists none is worse than a reminder that does
+ * not raise the question — the notice itself is the obligation, the list is
+ * help, and a purveyor with no active authorized certifier has a problem the
+ * customer cannot solve. The send goes ahead either way, and the count is on
+ * the scheduler's log line.
+ */
+export function certifierListText(
+	entries: readonly CertifierListEntry[],
+): string | null {
+	const lines = entries
+		.map((entry) => certifierListLine(entry))
+		.filter((line) => line.length > 0)
+		.map((line) => `- ${line}`);
+
+	return lines.length === 0
+		? null
+		: [CERTIFIER_LIST_HEADING, ...lines].join("\n");
+}

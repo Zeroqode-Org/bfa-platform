@@ -103,8 +103,9 @@ customer picker exists on the add form only — see below.
 The column is nullable, and the form still insists on a value. The client's
 [confirmed answer](/docs/prd#9-confirmed-decisions-client-qa-log) is that the
 annual test date is set by the WP *at the moment they assign the BIN* — it is
-what [Workflow 1](/docs/build-plan) schedules the reminder and the three late
-notices against. Every asset created from this screen is created with a BIN, so
+what [Workflow 1](/docs/notice-workflow) schedules the reminder and the three
+late notices against, and the **sole** scheduling source: there is no second
+due-date column anywhere. Every asset created from this screen is created with a BIN, so
 an asset without a date would be one that can never be reminded about,
 discovered months later by a notice that never fired. The column stays nullable
 for rows that reach the table another way.
@@ -116,6 +117,24 @@ schedule. And per flow 3, a WP can register an assembly directly with no
 certifier submission behind it at all — that is what the **Add asset** button
 does.
 
+### Changing the date reschedules the chain
+
+Correcting `annual_test_date` on an existing asset cancels the notice jobs
+computed from the old one and rewrites the reminder from the new date, **in the
+same transaction as the asset write**. Every stage hangs off that one field, so a
+pending late notice left behind would be a notice about a deadline that no longer
+exists.
+
+Two guards keep this from being noisy. The reconciliation runs only when the date
+actually moved — correcting a service address does not touch the schedule — and
+the write itself refuses a job row that already carries the same run time, so a
+redundant reconciliation writes nothing, moves no `updated_at` and emits no
+scheduling line. Same rule as [a save that changes
+nothing](#a-save-that-changes-nothing-writes-nothing).
+
+A date already in the past still schedules a reminder, which is what lets a
+long-overdue assembly catch up through the escalation rather than stay silent.
+
 ### Why the status is not on the form
 
 `asset_status` is derived from `annual_test_date`: active, due soon, past due.
@@ -124,6 +143,15 @@ and the badge is the one people read. The form has no control for it, the two
 mutations do not accept one, and — because a row policy cannot allow one column
 and refuse another — `authenticated` was never granted the column at all. The
 scheduler runs through the privileged connection and is unaffected.
+
+It is now genuinely recomputed, on every scheduler tick, from the date on the
+row: `past_due` once the due date has passed, `due_soon` from the reminder day up
+to **and including** the due date, `active` otherwise — including an asset with
+no date at all. The due date itself is not past due, because that is the last day
+the test can still be done, which is why late notice 1 is due the day after. The
+statement writes only the rows whose status is wrong, so an ordinary day changes
+nothing. See [`asset_status` is
+scheduler-owned](/docs/notice-workflow#asset_status-is-scheduler-owned).
 
 ### The customer picker is on the add form and nowhere else
 
@@ -249,6 +277,14 @@ and is cleared when the dialog closes.
 
 An assignment made this way logs `to_customer_suspended: true` — the line that
 explains why an asset's notices went quiet from that date.
+
+Attaching an **active** customer is what ends the hold, and the same transaction
+resumes the pipeline: the one stage that was waiting becomes due again, and
+nothing already sent is replayed. A customer attached three months into an
+escalation therefore receives the stage that was held, not the reminder and two
+late notices the previous occupant's suspension swallowed. That resume point was
+not specified by the plan and is a stated decision — see [the resume
+point](/docs/notice-workflow#the-resume-point-stated).
 
 The history table below the control is read-only. Nothing in the app edits a
 `start_date` or an `end_date`: no procedure accepts one, and the row policies
@@ -394,6 +430,7 @@ primitives.
 | `apps/web/src/components/wp/assets-table.test.tsx` | `npm test` | Status wording, the suspended-occupant note, both empty states, search, paging |
 | `packages/api/src/routers/assets.test.ts` | `npm run test:db` | Tenant isolation, BIN uniqueness and logging, the assignment transaction, the no-op guards |
 | `packages/db/src/bfa-assets-rls.test.ts` | `npm run test:db` | The row policies and column grants, as the `authenticated` role |
+| `packages/api/src/scheduler/notice-workflow.db.test.ts` | `npm run test:db` | What creating an asset, changing its date and attaching a customer do to the notice chain, and the `asset_status` recomputation |
 
 The two database suites seed two purveyors with deliberately interchangeable
 assets — same BIN, same service address — so a leak between them looks like a
@@ -407,5 +444,7 @@ uniqueness is per purveyor.
   customer cardinality.
 - [WP Customers](/docs/wp-customers) — the other side of the assignment, and
   what suspension does.
+- [Notice Workflow & Scheduler](/docs/notice-workflow) — what the annual test
+  date schedules, and what `asset_status` is recomputed from.
 - [Build Plan](/docs/build-plan) — the task list this page closes.
 - [Design System](/docs/design-system) — the tokens the screen is built from.

@@ -23,7 +23,7 @@ Target delivery: **2026-10-02** (~6 weeks from kickoff on 2026-08-24). Team: **L
 
 ## Task tracker
 
-Status as of **2026-09-16**. Update this table as work progresses — this is the source of truth, not the phase table above.
+Status as of **2026-09-18**. Update this table as work progresses — this is the source of truth, not the phase table above.
 
 | Task | PRD § | Owner | Start | End | Status |
 |---|---|---|---|---|---|
@@ -42,7 +42,8 @@ Status as of **2026-09-16**. Update this table as work progresses — this is th
 | Certifier WP Selector | 6.4 | Lina | 09/07 | 09/11 | done |
 | WP Dashboard — Submitted Tests | 6.6.6 | Lina | 09/14 | 09/18 | done |
 | WP Dashboard — Notices & Email Settings | 6.6.7 | Daniil | 09/14 | 09/18 | planned |
-| Workflow 1: Reminder + Late Notices | 6.7 | Daniil | 09/14 | 09/18 | planned |
+| Node-native scheduler | — | Daniil | 09/14 | 09/18 | done |
+| Workflow 1: Reminder + Late Notices | 6.7 | Daniil | 09/14 | 09/18 | done |
 | Workflow 2: AG Rate Renewal Notice | 6.9 | Daniil | 09/14 | 09/18 | planned |
 | Workflow 3: Failure Notice + 30-Day Fail List | 6.8 | Daniil | 09/14 | 09/18 | planned |
 | Certifier Test Wizard (all 8 BFA types) | 6.5 | Lina | 09/21 | 09/25 | planned |
@@ -90,9 +91,9 @@ list. Full writeup: [WP Dashboard — Core & Analytics](/docs/wp-dashboard).
 **WP Dashboard — Customers (6.6.4)**: shipped. `/wp/customers` creates, edits
 and suspends customers through three WP-scoped procedures, `customers` has row
 policies for the first time, and suspension states plainly that it pauses
-automated email for the customer's currently assigned assets. The scheduler that
-will honour that hold is Workflow 1 and is still planned. Full writeup:
-[WP Customers](/docs/wp-customers).
+automated email for the customer's currently assigned assets. Workflow 1 now
+honours that hold: a suspended customer stops the asset's notices without
+advancing the chain. Full writeup: [WP Customers](/docs/wp-customers).
 
 **WP Dashboard — BFA Assets (6.6.2)**: shipped. `/wp/assets` registers, lists
 and corrects assets through five WP-scoped procedures, and `bfa_assets` and
@@ -100,9 +101,9 @@ and corrects assets through five WP-scoped procedures, and `bfa_assets` and
 corrected and every change is logged with both values; attaching a customer
 closes the outgoing occupancy row and opens a new one in one transaction, so the
 asset detail view can show the whole history rather than only the current
-occupant. The annual test date entered here is what Workflow 1 will schedule
-against — that scheduler is still planned, and nothing yet recomputes
-`asset_status`, which the screen therefore shows read-only. Full writeup:
+occupant. The annual test date entered here is what Workflow 1 schedules
+against, and `asset_status` — read-only on the screen — is now recomputed from
+it on every scheduler tick. Full writeup:
 [WP BFA Assets](/docs/wp-bfa-assets).
 
 **WP Dashboard — Repair Companies (6.6.5)**: shipped. `/wp/repair-companies`
@@ -171,8 +172,8 @@ approved repair companies read-only. `0010_notice_template_policies` gives
 `notice_templates` its first row policies. `listNoticeTemplates` always returns
 four entries and fills a missing row with the platform default, so an untouched
 type never sends blank and the screen has no "not set" branch. The four stored
-templates are not sent by anything yet — the reminder workflow that sends them
-is Workflow 1.
+templates are now sent by Workflow 1, which applies the same per-column fallback
+so what a purveyor previews is what a customer receives.
 
 **Carries two product decisions and one open question.** The broadcast ships
 *with* personalisation, limited to `{{customer_name}}` and `{{wp_name}}`,
@@ -184,6 +185,48 @@ release of this section: the client has not supplied customer-facing text for
 the four platform defaults, so `notice-defaults.ts` carries plain provisional
 copy that makes no compliance claim. Full writeup:
 [WP Notices & Email](/docs/wp-notices).
+
+**Node-native scheduler + Workflow 1: Reminder and Late Notices (6.7)**: shipped
+together, because neither is testable without the other. `packages/api/src/scheduler/`
+is a Node timer over `scheduled_jobs` — no Vercel Cron, no OS cron, no provider
+queue — switched on by `apps/web/src/instrumentation.ts` behind the new
+`SCHEDULER_ENABLED` variable, which defaults to **off** so a checkout and CI never
+mail anybody on a timer. `0012_scheduled_job_policies` adds a `sent_at` column, a
+partial unique index that makes "one live job per stage per assembly" a database
+fact, and the table's first row policies: read-only for every role, with **no
+write grant at all**, Super-Admin included.
+
+The four stages are computed from `bfa_assets.annual_test_date` alone — reminder
+two calendar months before, then +1, +32 and +63 days — and evaluated in
+**Pacific/Honolulu**, so a stage's `run_at` is 10:00 UTC rather than midnight UTC,
+which would fire a day early on the islands. `lib/honolulu-dates.ts` is the one
+place a zone is consulted. Each *successful* notice schedules exactly one
+successor, so the chain is never pre-created and at most one live job exists per
+assembly. `asset_status` is now genuinely recomputed on every tick and is
+scheduler-owned: the asset screen's read-only status column finally means
+something.
+
+Three things are resolved at send time and nothing is trusted from queue time:
+the recipient (the asset's *current* customer, scoped to the asset's own
+purveyor), the `automated_notices` feature flag, and the reminder's list of
+authorized active certifiers. A job that finds the flag off is `cancelled`, not
+`failed` — switching off a paid add-on is not a delivery problem. A missing or
+suspended customer holds the stage without advancing the chain, and a submitted
+passing test cancels every remaining stage, including one a handler is mid-send
+on. Delivery goes through the existing `renderTemplate → renderTextEmail →
+sendEmail` path; nothing here touches Resend and no HTML notice template exists.
+The six registered variables are unchanged.
+
+**Carries three product decisions, all stated rather than assumed.** *(1)* "~2
+months" is implemented as two calendar months clamped to the end of the target
+month, in one constant the `asset_status` SQL shares. *(2)* A held pipeline
+resumes at **the single unsent stage, replaying nothing already sent**, when
+`assignCustomer` attaches an active customer — the plan did not define the resume
+point, and the alternatives (restart from the reminder; skip to whichever stage is
+now due) are named in the docs. *(3)* A stage that exhausts its five delivery
+attempts stops the chain rather than escalating past a notice the customer never
+received. Still blocking a production release: the client's own copy for the four
+notices. Full writeup: [Notice Workflow & Scheduler](/docs/notice-workflow).
 
 **Super-Admin (6.11)**: stays *in-progress*. The invite-new-WP action is wired and `/admin` is gated to `super_admin`. **WP impersonation has shipped.** `superAdmin.startImpersonation` and `endImpersonation` set and clear a separate `bfa_impersonation` cookie: `httpOnly`, HMAC-SHA-256-signed, one-hour lifetime. Its key is the new optional server variable `IMPERSONATION_COOKIE_SECRET`.
 
@@ -265,7 +308,7 @@ Carried from [PRD § 10](/docs/prd#10-open-questions-for-the-client) — resolve
 - **Phase 2:** WPAdmin/WPsubAdmin/WPEmployee permission differences — all three currently share identical invitation policies; second-WP-invite notification behavior.
 - **Phase 3:** signature vs. certify-checkbox; legacy PDF/results-document layout match (reference wizard: [bfr-temi-wiz-final.bubbleapps.io](https://bfr-temi-wiz-final.bubbleapps.io/version-test/wizard)).
 - **Phase 6:** which account Super-Admin impersonation should use when a water purveyor has more than one active `wp_admin`. It currently uses the earliest-created one — see [Super-Admin Impersonation](/docs/super-admin-impersonation#which-account-a-purveyor-resolves-to).
-- **Phase 5:** the full list of dynamic variables for notice text (six shipped, and the substitution layer takes a seventh as a list edit); **approved customer-facing copy for the four platform default notices**, which 6.6.7 ships as provisional placeholder text; AG Renewal Date auto-update behavior; monthly CSV export field list.
+- **Phase 5:** the full list of dynamic variables for notice text (six shipped, and the substitution layer takes a seventh as a list edit); **approved customer-facing copy for the four platform default notices**, which 6.6.7 ships as provisional placeholder text and Workflow 1 now actually sends; **where a held notice pipeline resumes**, shipped on the narrowest reading — see [the resume point](/docs/notice-workflow#the-resume-point-stated); **whether a terminally failed notice should stop the escalation**, shipped stopping it; monthly CSV export field list.
 
 Resolved since the last pass (no longer blocking): mid-wizard pass/fail handling, scope of "edit submitted test data" for a WP, asset↔customer cardinality, email routing for suspended customers, and BIN reassignment on an existing asset — allowed, and logged with both values, which is what 6.6.2 shipped. See [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log).
 

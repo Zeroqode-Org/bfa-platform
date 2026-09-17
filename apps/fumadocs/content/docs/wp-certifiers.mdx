@@ -210,7 +210,7 @@ so independently:
 | `packages/db/src/schema/certifiers.ts` | `// blocked prevents login`, on the column itself |
 | [Build plan](/docs/build-plan), *WP dashboard — certifiers* | **Done when:** "blocking a certifier prevents their login" |
 | [PRD](/docs/prd) § 5, `certifiers` | WP Admin and SubAdmin "update `status` only" — the global column is the one handed to the WP |
-| [Build plan](/docs/build-plan), Workflow 1 step 3 | The reminder email filters on `authorization_status = 'active'` **and** `certifiers.status = 'active'` — two columns, deliberately distinct |
+| [Notice Workflow & Scheduler](/docs/notice-workflow#the-certifier-list-on-the-reminder) | The shipped reminder filters on `authorization_status = 'active'` **and** `certifiers.status = 'active'` — two columns, deliberately distinct, resolved at send time |
 
 That last row is the important one. The per-purveyor alternative already exists:
 `wp_certifier_authorizations.authorization_status` has `pending`, `active` and
@@ -247,7 +247,8 @@ If the answer comes back "per-WP", the change is contained and known:
 
 Nothing outside those five points depends on the choice. The screen, the table,
 the invite path, the audit line and the tenant scoping are all the same either
-way.
+way — and the reminder's tester list needs no change at all, because it already
+requires both columns.
 
 ### What the screen does about it meanwhile
 

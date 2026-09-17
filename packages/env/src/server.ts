@@ -64,6 +64,17 @@ export const env = createEnv({
 		RESEND_REPLY_TO: z
 			.email({ message: "must be an email address" })
 			.optional(),
+		// Whether this process runs the notice scheduler's tick loop. Off by
+		// default, and deliberately: the schedule lives in `scheduled_jobs`, so a
+		// process that does not tick is not a process with a broken schedule —
+		// it simply is not the one doing the work. Left off, a developer's
+		// checkout and CI never send mail on a timer, and a deployment switches
+		// exactly one instance on. Set it on more than one and nothing breaks
+		// either; the claim query is atomic.
+		SCHEDULER_ENABLED: z
+			.enum(["true", "false"])
+			.default("false")
+			.transform((value) => value === "true"),
 		// HMAC-SHA-256 key for the Super-Admin impersonation cookie. Optional so CI
 		// and checkouts that never impersonate need nothing; unset, impersonation
 		// is refused and any cookie is ignored. Set but short fails here. Kept in

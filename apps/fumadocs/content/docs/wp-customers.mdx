@@ -96,9 +96,19 @@ Reactivating goes straight through with no confirmation — restoring email is n
 the destructive direction. Nothing is deleted either way, and assignments are
 untouched, so the switch is reversible from the same button.
 
-This release does not change the notice scheduler. It sets the flag the
-scheduler will read; [Workflow 1](/docs/build-plan) is where the hold is
-enforced at send time.
+This screen sets the flag; the hold itself is enforced at send time by
+[Workflow 1](/docs/notice-workflow#hold-and-resume). The notice handler resolves
+the asset's current customer when the job runs, and a suspended one means it
+sends nothing **and does not advance the escalation** — so nothing later in the
+chain is consumed by a notice that was never delivered.
+
+Two things end a hold, and they are not equally quick. Attaching a different
+**active** customer to the BIN resumes the waiting stage immediately, in the same
+transaction as the assignment. Reactivating *this* customer from this screen is
+picked up by the held job's own recheck, which runs a day out — the hold is not a
+retry, and there is nothing to retry until a person acts, so it is deliberately
+coarse. Either way the stage that resumes is the one that was waiting; nothing
+already sent is replayed.
 
 ## Procedures
 

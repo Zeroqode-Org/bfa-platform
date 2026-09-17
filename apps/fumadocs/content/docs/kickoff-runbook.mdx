@@ -165,7 +165,7 @@ The build and any container image must supply `DATABASE_URL`, `NEXT_PUBLIC_SUPAB
 
 **Portability guardrails** — avoid these Vercel-specific features (per the client's FedRAMP-readiness discussion; full list also lives in the `bfa-requirements` skill):
 
-- Vercel Cron Jobs — use the Node-native scheduler pattern instead.
+- Vercel Cron Jobs — use the Node-native scheduler instead. It is built: `packages/api/src/scheduler/`, started from `apps/web/src/instrumentation.ts` and gated on `SCHEDULER_ENABLED` (default off, so set it to `true` on exactly one deployment). All schedule state is in `scheduled_jobs`, so the process is disposable and the same file runs under `next start` in a container. See [Notice Workflow & Scheduler](/docs/notice-workflow#the-scheduler).
 - Vercel KV, Vercel Blob, Vercel Postgres — not used; Supabase covers storage and data.
 - Vercel Edge Middleware/Edge Runtime — stick to standard Node.js runtime unless there's a clear, justified performance reason.
 

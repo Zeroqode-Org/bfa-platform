@@ -20,6 +20,10 @@ import {
 	auditActor,
 	auditActorFields,
 } from "../lib/audit-actor";
+import {
+	reconcileAssetNoticeChain,
+	resumeHeldNoticeChain,
+} from "../scheduler/notice-chain";
 
 /**
  * The columns every asset procedure returns. Declared once so the table, the
@@ -151,6 +155,12 @@ export const assetsRouter = router({
 	 *
 	 * The customer is checked against the caller's own purveyor before anything
 	 * is written, so a cross-tenant id leaves no asset behind either.
+	 *
+	 * An asset registered with an annual test date is put on the reminder
+	 * schedule in the same transaction. Inside it deliberately: a job scheduled
+	 * against an asset whose insert then rolled back would be a reminder about an
+	 * assembly that was never registered, addressed to a customer who does not
+	 * own it.
 	 */
 	createAsset: wpProcedure
 		.input(createAssetInput)
@@ -182,6 +192,15 @@ export const assetsRouter = router({
 						startDate: sql`current_date`,
 					});
 				}
+
+				await reconcileAssetNoticeChain({
+					executor: tx,
+					assetId: inserted.id,
+					waterPurveyorId,
+					annualTestDate: inserted.annualTestDate,
+					actor: auditActor(ctx),
+					trigger: "asset_created",
+				});
 
 				return inserted;
 			});
@@ -263,11 +282,37 @@ export const assetsRouter = router({
 				return withCurrentCustomer(ctx.caller.waterPurveyorId, existing);
 			}
 
-			const [row] = await updateAssetRow(next, tenantScopedRow);
+			// The write and the rescheduling go together or not at all. An asset
+			// left carrying a new due date while `scheduled_jobs` still holds the
+			// chain computed from the old one is the one failure this feature must
+			// not have: a late notice sent against a deadline that moved.
+			const row = await db.transaction(async (tx) => {
+				const [updated] = await updateAssetRow(tx, next, tenantScopedRow);
 
-			if (!row) {
-				throw new TRPCError({ code: "NOT_FOUND", message: "Asset not found" });
-			}
+				if (!updated) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Asset not found",
+					});
+				}
+
+				// Only when the date actually moved. Correcting a service address
+				// does not touch the schedule, and reconciling anyway would rewrite
+				// a job row — and emit a scheduling line — for a schedule nobody
+				// changed.
+				if (existing.annualTestDate !== updated.annualTestDate) {
+					await reconcileAssetNoticeChain({
+						executor: tx,
+						assetId: updated.id,
+						waterPurveyorId: ctx.caller.waterPurveyorId,
+						annualTestDate: updated.annualTestDate,
+						actor: auditActor(ctx),
+						trigger: "annual_test_date_changed",
+					});
+				}
+
+				return updated;
+			});
 
 			logAssetEvent("bfa_asset_updated", {
 				actor: auditActor(ctx),
@@ -389,6 +434,24 @@ export const assetsRouter = router({
 							eq(bfaAssets.waterPurveyorId, waterPurveyorId),
 						),
 					);
+
+				// Attaching an *active* customer is what ends a hold. A suspended
+				// one continues it, which is the confirmed rule (PRD § 9): the
+				// asset's notices stop entirely until somebody who can be written
+				// to is attached to the BIN.
+				//
+				// What resumes is the single stage that was waiting, and nothing
+				// already sent is replayed — see `resumeHeldNoticeChain` for why
+				// that reading was chosen over restarting the chain or skipping to
+				// whichever stage the calendar now says is due.
+				if (customer.status === "active") {
+					await resumeHeldNoticeChain({
+						executor: tx,
+						assetId: asset.id,
+						waterPurveyorId,
+						actor: auditActor(ctx),
+					});
+				}
 			});
 
 			logAssetEvent("bfa_asset_customer_assigned", {
@@ -614,12 +677,17 @@ async function insertAsset(
 	}
 }
 
+/**
+ * Takes its executor, like `insertAsset`, so the update can sit in the same
+ * transaction as the notice-chain reconciliation a changed due date triggers.
+ */
 async function updateAssetRow(
+	executor: Pick<typeof db, "update">,
 	values: ReturnType<typeof assetColumns>,
 	where: ReturnType<typeof and>,
 ) {
 	try {
-		return await db
+		return await executor
 			.update(bfaAssets)
 			.set(values)
 			.where(where)

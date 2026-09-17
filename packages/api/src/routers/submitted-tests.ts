@@ -21,6 +21,7 @@ import {
 	submissionIdInput,
 	updateSubmittedTestInput,
 } from "../lib/submission-input";
+import { cancelNoticeChainForPassingTest } from "../scheduler/notice-chain";
 
 /**
  * The two administrative WP roles, for the write half of this screen.
@@ -251,13 +252,38 @@ export const submittedTestsRouter = router({
 				return readSubmission(waterPurveyorId, input.id);
 			}
 
-			const [row] = await db
-				.update(testSubmissions)
-				.set({ ...next, editedByWpProfileId: ctx.caller.profileId })
-				.where(tenantScopedRow)
-				.returning({ id: testSubmissions.id });
+			const row = await db.transaction(async (tx) => {
+				const [updated] = await tx
+					.update(testSubmissions)
+					.set({ ...next, editedByWpProfileId: ctx.caller.profileId })
+					.where(tenantScopedRow)
+					.returning({ id: testSubmissions.id });
 
-			if (!row) throw notFound();
+				if (!updated) throw notFound();
+
+				// A passing test is what the escalation exists to produce, so a
+				// correction that leaves this submitted row a pass ends the chain
+				// for its assembly. Every query in this router pins
+				// `status = 'submitted'`, so a draft cannot reach here at all —
+				// which is the rule, not a side effect: an unattested working copy
+				// must not stop a purveyor's notices.
+				//
+				// Run unconditionally for a passing row rather than only when the
+				// result changed *to* pass. Cancelling a chain that is already
+				// cancelled writes nothing, and the alternative leaves a chain
+				// running whenever the pass was recorded before the asset link.
+				if (next.testResult === "pass" && existing.bfaAssetId) {
+					await cancelNoticeChainForPassingTest({
+						executor: tx,
+						assetId: existing.bfaAssetId,
+						waterPurveyorId,
+						actor: auditActor(ctx),
+						submissionId: updated.id,
+					});
+				}
+
+				return updated;
+			});
 
 			logSubmissionEvent("test_submission_corrected", {
 				actor: auditActor(ctx),
@@ -301,6 +327,10 @@ export const submittedTestsRouter = router({
 					id: testSubmissions.id,
 					bfaAssetId: testSubmissions.bfaAssetId,
 					certifierId: testSubmissions.certifierId,
+					// Read for the notice chain: linking a passing test to an assembly
+					// is the moment that pass becomes a fact about that assembly, and
+					// therefore the moment its escalation ends.
+					testResult: testSubmissions.testResult,
 					submittedBinText: testSubmissions.submittedBinText,
 				})
 				.from(testSubmissions)
@@ -347,27 +377,46 @@ export const submittedTestsRouter = router({
 			// read and the write, another clerk may have linked the same submission.
 			// Without it the second request would quietly overwrite the first
 			// answer; with it, it matches no row and is reported as a conflict.
-			const [row] = await db
-				.update(testSubmissions)
-				.set({
-					bfaAssetId: asset.id,
-					editedByWpProfileId: ctx.caller.profileId,
-				})
-				.where(
-					and(
-						eq(testSubmissions.id, submission.id),
-						isNull(testSubmissions.bfaAssetId),
-						submittedRowsOf(waterPurveyorId),
-					),
-				)
-				.returning({ id: testSubmissions.id });
+			const row = await db.transaction(async (tx) => {
+				const [linked] = await tx
+					.update(testSubmissions)
+					.set({
+						bfaAssetId: asset.id,
+						editedByWpProfileId: ctx.caller.profileId,
+					})
+					.where(
+						and(
+							eq(testSubmissions.id, submission.id),
+							isNull(testSubmissions.bfaAssetId),
+							submittedRowsOf(waterPurveyorId),
+						),
+					)
+					.returning({ id: testSubmissions.id });
 
-			if (!row) {
-				throw new TRPCError({
-					code: "PRECONDITION_FAILED",
-					message: "This test was linked to an asset while you were working",
-				});
-			}
+				if (!linked) {
+					throw new TRPCError({
+						code: "PRECONDITION_FAILED",
+						message: "This test was linked to an asset while you were working",
+					});
+				}
+
+				// The assembly now has a passing test on file, so its escalation is
+				// over. In the same transaction as the link, because a link that
+				// committed without the cancellation would leave a late notice
+				// queued against an assembly the purveyor has just recorded as
+				// tested and passed.
+				if (submission.testResult === "pass") {
+					await cancelNoticeChainForPassingTest({
+						executor: tx,
+						assetId: asset.id,
+						waterPurveyorId,
+						actor: auditActor(ctx),
+						submissionId: linked.id,
+					});
+				}
+
+				return linked;
+			});
 
 			// The sensitive one. This is the write that decides which physical valve
 			// a test belongs to, so it carries what the certifier typed alongside
