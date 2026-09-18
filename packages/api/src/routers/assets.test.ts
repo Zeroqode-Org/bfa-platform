@@ -210,6 +210,13 @@ describeDb("asset procedures", () => {
 	afterAll(async () => {
 		if (!pool) return;
 
+		// Before the assets: `createAsset` now schedules a reminder for every
+		// asset it registers with an annual test date, and `scheduled_jobs` holds
+		// a foreign key to `bfa_assets`.
+		await pool.query(
+			"delete from scheduled_jobs where water_purveyor_id = any($1::uuid[])",
+			[[wpA, wpB]],
+		);
 		await pool.query(
 			`delete from customer_assignments
 			 where bfa_asset_id in (select id from bfa_assets where water_purveyor_id = any($1::uuid[]))`,

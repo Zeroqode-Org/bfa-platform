@@ -7,7 +7,8 @@ description: The notices screen — four notice templates with platform-default 
 things share the screen and share almost nothing else:
 
 - **Notice templates** — the stored subject and message for each of the four
-  automated notices. A future scheduler sends them, about one assembly.
+  automated notices. The scheduler sends them, about one assembly — see
+  [Notice Workflow & Scheduler](/docs/notice-workflow).
 - **General info broadcast** — a one-off message composed and sent now, to a
   filtered set of customers. It does not touch `notice_templates`.
 - **Repair companies** — read-only, because a failure notice names them.
@@ -22,10 +23,16 @@ One row per purveyor per type in `notice_templates`, keyed on
 
 | Type | When it is sent |
 |---|---|
-| `reminder` | Ahead of the annual test due date |
-| `late_notice_1` | The first notice after the due date passed |
-| `late_notice_2` | The second, while the assembly is still untested |
-| `final_notice` | The last notice in the escalation chain |
+| `reminder` | Two calendar months before the assembly's `annual_test_date` |
+| `late_notice_1` | The due date **+ 1 day** |
+| `late_notice_2` | The due date **+ 32 days** — 31 after late notice 1 |
+| `final_notice` | The due date **+ 63 days** — 31 after late notice 2 |
+
+Those dates are computed from `bfa_assets.annual_test_date` and evaluated in
+Pacific/Honolulu; the intervals are platform constants and not purveyor
+configuration (PRD § 9). The reminder additionally carries the list of testers
+the customer can call, appended below the purveyor's own text. See
+[Notice Workflow & Scheduler](/docs/notice-workflow).
 
 ### A missing row is a meaning, not an absence
 
@@ -49,8 +56,11 @@ the purveyor's own records supply, and makes no compliance claim, quotes no
 regulation, names no penalty and threatens no interruption of service, because
 inventing any of those would put words in a purveyor's mouth that they are
 answerable for. The client must supply or approve customer-facing text for all
-four types before a production tenant uses them. Replacing it is an edit to that
-one file; nothing else in the feature contains notice copy.
+four types — and the one-line heading above the reminder's tester list — before a
+production tenant uses them. **Workflow 1 now sends this copy**, so the approval
+blocks switching `automated_notices` on for a real purveyor, not only this
+screen. Replacing it is an edit to that one file; nothing else in the feature
+contains notice copy.
 </Callout>
 
 ### There is no enable/disable toggle, deliberately
@@ -65,7 +75,9 @@ so a per-type switch would be a control with undefined behaviour. The refusal is
 enforced in three places rather than one: the field is absent from
 `upsertNoticeTemplateInput`, absent from the mutation's `set`, and absent from
 the UPDATE grant in `0010_notice_template_policies`, so nothing reaching the
-table through PostgREST can flip it either.
+table through PostgREST can flip it either. Workflow 1's handler is the fourth:
+it resolves a template without reading the column, so switching automated
+notices on or off is the feature flag and nothing else.
 
 ## Dynamic values
 
@@ -300,8 +312,21 @@ Every attempt emits `email_send_attempted` carrying the event, status, recipient
 `recipient_filter=<filter>` so delivery logs can be filtered by campaign.
 Switching `EMAIL_DRIVER` changes nothing in this feature.
 
-The four notice templates are **stored** here and not yet sent by anything —
-the reminder workflow that sends them is Workflow 1.
+The four notice templates are **stored** here and **sent** by the scheduler,
+through the same three calls with one substitution each rather than one per
+recipient:
+
+```
+scheduler notice handler
+  → renderTemplate (the purveyor's row, or the platform default, per column)
+  → renderTextEmail
+  → sendEmail   (tagged type=<notice_type>, wp_id, asset_id)
+```
+
+The handler reads `notice_templates` at send time and applies exactly the
+fallback rule described above, so what a purveyor previews here is what a
+customer receives. It does not read `is_enabled`. See
+[Notice Workflow & Scheduler](/docs/notice-workflow#4-the-text).
 
 ### The email shell
 
@@ -325,12 +350,11 @@ What the shell does **not** do matters as much:
 - **No logo.** Branding is text-only until the client supplies a logo asset they
   own; nothing in a message is carried by an image.
 
-`renderTextEmail({ subject, text })` is the function to call, and it is already
-the path for **automated notices**: when Workflow 1 sends a notice template, its
-rendered text goes through the same call, so a notice and a broadcast share one
-shell and one escaping rule. That makes the templates *compatible* with the
-layout — it does not approve their words. The platform-default copy is still
-provisional, as the warning above says.
+`renderTextEmail({ subject, text })` is the function to call, and it is also the
+path for **automated notices**: Workflow 1 sends every notice template through
+the same call, so a notice and a broadcast share one shell and one escaping rule.
+That makes the templates *compatible* with the layout — it does not approve their
+words. The platform-default copy is still provisional, as the warning above says.
 
 The on-screen preview shows the substituted text, not the email shell.
 
@@ -435,5 +459,6 @@ anything about whether the policies work.
 - [Product Requirements Document](/docs/prd) — § 6.6.7, § 6.8 and the § 9 email-routing rule.
 - [Build Plan](/docs/build-plan) — the task list this page closes.
 - [WP Repair Companies](/docs/wp-repair-companies) — the list this screen shows read-only.
+- [Notice Workflow & Scheduler](/docs/notice-workflow) — what sends these four templates, when, and to whom.
 - [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer) — the send helper every mail path uses.
 - [Design System](/docs/design-system) — the tokens the screen is built from.
