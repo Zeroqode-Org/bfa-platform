@@ -8,6 +8,7 @@ import {
 	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "@bfa-platform/ui/components/dropdown-menu";
+import { Skeleton } from "@bfa-platform/ui/components/skeleton";
 import { cn } from "@bfa-platform/ui/lib/utils";
 import { ChevronsUpDown } from "lucide-react";
 
@@ -25,7 +26,34 @@ export function WpSwitcher({
 	compact?: boolean;
 	className?: string;
 }) {
-	const { active, list, setActiveWp } = useActiveWp();
+	const { active, list, setActiveWp, isLoading, isError } = useActiveWp();
+
+	if (isLoading) {
+		return <Skeleton className={cn("h-8 w-40 rounded-md", className)} />;
+	}
+
+	// No usable WP either because the list failed to load or because it
+	// genuinely came back empty — a certifier mid-onboarding may hold only a
+	// `pending` authorization, which `listAuthorizedWps` does not surface.
+	// Either way there is nothing to switch to, so the trigger says so and
+	// does not open.
+	if (isError || !active) {
+		return (
+			<div
+				className={cn(
+					"flex min-w-0 items-center gap-2 rounded-md border border-input bg-muted px-2.5 py-1.5 text-[13px] text-muted-foreground",
+					className,
+				)}
+			>
+				{isError ? "Couldn't load purveyors" : "No purveyors yet"}
+			</div>
+		);
+	}
+
+	// The open dropdown lists the *other* authorized WPs (§ 6.4) — the active
+	// one is already named on the trigger, so repeating it as a selectable
+	// option would be the one item in the list that does nothing.
+	const otherWps = list.filter((wp) => wp.id !== active.id);
 
 	return (
 		<DropdownMenu>
@@ -50,11 +78,17 @@ export function WpSwitcher({
 			>
 				<DropdownMenuRadioGroup value={active.id} onValueChange={setActiveWp}>
 					<DropdownMenuLabel>Switch water purveyor</DropdownMenuLabel>
-					{list.map((wp) => (
-						<DropdownMenuRadioItem key={wp.id} value={wp.id} closeOnClick>
-							{wp.name}
-						</DropdownMenuRadioItem>
-					))}
+					{otherWps.length > 0 ? (
+						otherWps.map((wp) => (
+							<DropdownMenuRadioItem key={wp.id} value={wp.id} closeOnClick>
+								{wp.name}
+							</DropdownMenuRadioItem>
+						))
+					) : (
+						<div className="px-2 py-1.5 text-[12px] text-muted-foreground">
+							No other purveyors
+						</div>
+					)}
 				</DropdownMenuRadioGroup>
 			</DropdownMenuContent>
 		</DropdownMenu>

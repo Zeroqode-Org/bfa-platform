@@ -162,4 +162,32 @@ export const wpProcedure = protectedProcedure.use(({ ctx, next }) => {
 	});
 });
 
+/**
+ * Certifier-scoped procedures. Same reasoning as `wpProcedure`: the Drizzle
+ * connection is privileged, so the role check and the narrowing both belong
+ * here, not in a row policy. A certifier account without a `certifiers` row is
+ * a broken invite/redemption, not a caller this task's queries can serve — every
+ * query below scopes by `certifierId`, so letting a null through would turn
+ * that data problem into an unscoped read, exactly as `wpProcedure` reasons for
+ * `waterPurveyorId`.
+ */
+export const certifierProcedure = protectedProcedure.use(({ ctx, next }) => {
+	const { globalRole, certifierId } = ctx.caller;
+
+	if (globalRole !== "certifier") {
+		throw new TRPCError({ code: "FORBIDDEN", message: "Certifier only" });
+	}
+
+	if (!certifierId) {
+		throw new TRPCError({
+			code: "FORBIDDEN",
+			message: "No certifier record on this account",
+		});
+	}
+
+	return next({
+		ctx: { ...ctx, caller: { ...ctx.caller, certifierId } },
+	});
+});
+
 export { TRPCError };

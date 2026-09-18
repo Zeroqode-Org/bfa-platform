@@ -66,7 +66,8 @@ export const testSubmissions = pgTable(
 	},
 	(table) => [
 		index("test_submissions_water_purveyor_id_idx").on(table.waterPurveyorId),
-		// the certifier dashboard's two queries
+		// The certifier dashboard's two equality filters — narrows but does not
+		// sort; superseded for its own two list queries by the pair below.
 		index("test_submissions_certifier_id_status_idx").on(
 			table.certifierId,
 			table.status,
@@ -77,6 +78,20 @@ export const testSubmissions = pgTable(
 		// the tenant. The `water_purveyor_id` index above narrows but cannot sort.
 		index("test_submissions_wp_status_test_date_idx").on(
 			table.waterPurveyorId,
+			table.status,
+			table.testDate.desc().nullsLast(),
+			table.createdAt.desc(),
+		),
+		// listDrafts — same equality predicates as the index above, sorted by
+		// last-saved instead of test date, since a draft has no test date yet.
+		index("test_submissions_certifier_status_updated_idx").on(
+			table.certifierId,
+			table.status,
+			table.updatedAt.desc(),
+		),
+		// listSubmissions — the certifier's own archive, same sort as the WP list.
+		index("test_submissions_certifier_status_test_date_idx").on(
+			table.certifierId,
 			table.status,
 			table.testDate.desc().nullsLast(),
 			table.createdAt.desc(),

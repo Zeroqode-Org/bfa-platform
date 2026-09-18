@@ -97,6 +97,7 @@ export type Caller = {
 	globalRole: (typeof profiles.$inferSelect)["globalRole"];
 	waterPurveyorId: string | null;
 	waterPurveyorName: string | null;
+	certifierId: string | null;
 };
 
 /**
@@ -134,6 +135,7 @@ export async function resolveCaller(
 			waterPurveyorId: profiles.waterPurveyorId,
 			waterPurveyorName: waterPurveyors.companyName,
 			status: profiles.status,
+			certifierId: certifiers.id,
 			certifierStatus: certifiers.status,
 		})
 		.from(profiles)
@@ -161,6 +163,7 @@ export async function resolveCaller(
 		globalRole: row.globalRole,
 		waterPurveyorId: row.waterPurveyorId,
 		waterPurveyorName: row.waterPurveyorName,
+		certifierId: row.certifierId,
 	};
 }
 
@@ -246,6 +249,7 @@ export async function loadImpersonationTarget(
 		globalRole: row.globalRole,
 		waterPurveyorId: row.waterPurveyorId,
 		waterPurveyorName: row.waterPurveyorName,
+		certifierId: null,
 	};
 }
 
@@ -303,6 +307,7 @@ export async function findImpersonationTarget(
 			globalRole: row.globalRole,
 			waterPurveyorId: row.waterPurveyorId,
 			waterPurveyorName: row.waterPurveyorName,
+			certifierId: null,
 		},
 	};
 }

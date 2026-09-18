@@ -568,6 +568,12 @@ Lina 10h · Daniil 13h. The widest week — six features, no hard ordering betwe
 
 **Done when:** a certifier sees only their own rows, resume opens the wizard at the saved step with saved values intact, and a second certifier logged in simultaneously sees a completely different list.
 
+**Status: done**, with one line of the "done when" verifiable only once the wizard (6.5) ships. `0012_certifier_dashboard_policies` gives `test_submissions` a certifier's own read/write path for the first time — SELECT at any status, UPDATE and DELETE scoped to `certifier_id` and `status = 'draft'`, mirroring `0008`'s WP-side shape with the tenant column swapped for the certifier one. `listDrafts`, `listSubmissions`, `getDraft` and `deleteDraft` all read through the privileged Drizzle connection behind a new `certifierProcedure`, and `deleteDraft` gives one identical not-found for a missing, foreign, or already-submitted draft — the same no-information-leak shape `getSubmittedTest` uses. `getDraft` and `certifier.updateProfile` go beyond the eight steps above: `getDraft` closes the resume half of "done when" for 6.5 to consume, and `updateProfile` picks up the profile-editing write path `0006` deferred as its own feature. Full writeup: [Certifier Dashboard](/docs/certifier-dashboard).
+
+**Steps 5–7 shipped against the actual nav, not the prototype's literal layout.** Week 1 built four leaf tabs (Wizard, Drafts, Submitted PDFs, Profile), not a fifth root "Dashboard" route. The prototype's two stat cards briefly sat atop `/certifier/drafts` in its place; removed on review — with a table right below showing the same rows, a count above it was redundant rather than useful — so `/certifier/drafts` is the table alone, matching `/certifier/submitted`.
+
+**Opening DELETE surfaced a gap in an existing policy, closed without touching it.** `test_submissions` never had a DELETE grant before this migration — `0008` reasoned "a submitted test is evidence... nothing in the product removes one." Granting DELETE at all (for the certifier's own draft) makes `0008`'s Super-Admin `FOR ALL` policy newly apply to DELETE too, which would let a Super-Admin remove a submitted test. A RESTRICTIVE policy, `test_submissions_delete_draft_only`, ANDs `status = 'draft'` onto every permissive DELETE policy on the table — `0008`'s policy is untouched; the restriction sits beside it.
+
 ### WP dashboard — submitted tests
 
 **Owner:** Lina.
@@ -697,6 +703,8 @@ Lina 22h · Daniil finishes super-admin. The wizard is the largest module in the
 5. Wire the selection into draft creation: the selected WP becomes `water_purveyor_id` on the new `test_submissions` row. The procedure re-validates that the caller is actually authorized for that WP — never trust the client value.
 
 **Done when:** switching WPs re-filters the whole dashboard and changes which WP a new draft is created against, the dropdown never offers the active WP, and a forged WP id in the request is rejected server-side.
+
+**Status: done.** Steps 1–4 shipped as written. Step 5 (wiring the selection into draft *creation*) is not this task's to finish — draft creation is the still-unbuilt wizard (§ Certifier test wizard) — but the reusable piece it will need, `assertAuthorizedWp(certifierId, waterPurveyorId)`, shipped here so every WP-scoped procedure (`listDrafts`, `listSubmissions`, `getDraft`, `deleteDraft`) already validates the client-supplied WP id the same way the wizard's own create procedure will.
 
 ### Certifier test wizard
 

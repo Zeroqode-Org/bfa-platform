@@ -476,10 +476,11 @@ function DatePicker({
 							</tbody>
 						</table>
 
-						<p
-							id={hintId}
-							className="max-w-[224px] pt-2 text-[11px] text-muted-foreground"
-						>
+						{/* Visually hidden, not deleted: `aria-describedby` on the day
+						    grid (below) still points at it, so a screen reader still
+						    announces the keyboard shape on focus. Sighted users get the
+						    same information from the grid itself. */}
+						<p id={hintId} className="sr-only">
 							Arrow keys move between days. Page Up and Page Down change the
 							month.
 						</p>

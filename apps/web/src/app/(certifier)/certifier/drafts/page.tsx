@@ -1,4 +1,6 @@
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { PageTitle } from "@bfa-platform/ui/components/page-title";
+
+import { DraftsTable } from "@/components/certifier/drafts-table";
 import { requireGlobalRole } from "@/lib/auth";
 
 export default async function Page() {
@@ -12,5 +14,10 @@ export default async function Page() {
 	// certifier shell, which carries no impersonation banner.
 	await requireGlobalRole(["certifier"]);
 
-	return <PlaceholderPage title="Drafts" route="/certifier/drafts" />;
+	return (
+		<div className="flex flex-col gap-5">
+			<PageTitle>Drafts</PageTitle>
+			<DraftsTable />
+		</div>
+	);
 }

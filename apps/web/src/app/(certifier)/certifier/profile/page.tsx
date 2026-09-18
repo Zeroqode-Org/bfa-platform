@@ -1,4 +1,6 @@
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { PageTitle } from "@bfa-platform/ui/components/page-title";
+
+import { ProfileForm } from "@/components/certifier/profile-form";
 import { requireGlobalRole } from "@/lib/auth";
 
 export default async function Page() {
@@ -10,7 +12,12 @@ export default async function Page() {
 	// signed in and part-way through a session.
 	// Certifiers only — an impersonated WP admin goes to `/wp`, never into the
 	// certifier shell, which carries no impersonation banner.
-	await requireGlobalRole(["certifier"]);
+	const account = await requireGlobalRole(["certifier"]);
 
-	return <PlaceholderPage title="Profile" route="/certifier/profile" />;
+	return (
+		<div className="flex flex-col gap-5">
+			<PageTitle>Profile</PageTitle>
+			<ProfileForm email={account.email} />
+		</div>
+	);
 }

@@ -572,6 +572,7 @@ describe("effective caller while impersonating", () => {
 				globalRole: "wp_admin",
 				waterPurveyorId: WP_A,
 				waterPurveyorName: "Riverside Water District",
+				certifierId: null,
 			},
 			actorProfileId: ids.superAdmin,
 			impersonating: true,
