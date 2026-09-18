@@ -16,6 +16,8 @@
 
 import { Resend } from "resend";
 
+import { type AuditActor, auditActorFields } from "./audit-actor";
+
 /** Provider-agnostic label attached to a send, for filtering delivery logs. */
 export type EmailTag = { name: string; value: string };
 
@@ -48,7 +50,8 @@ export type EmailDriver = {
 export type EmailContext = {
 	/** Why this mail was sent, e.g. `invitation_created`. */
 	event: string;
-	actorId?: string | null;
+	/** Who sent it: the real account, and the identity it acted as. */
+	actor?: AuditActor | null;
 	recipientId?: string | null;
 	wpId?: string | null;
 	assetId?: string | null;
@@ -221,7 +224,7 @@ function logSendAttempt(
 			error: outcome.status === "failed" ? outcome.error : null,
 			recipient: message.to,
 			subject: message.subject,
-			actor_id: context.actorId ?? null,
+			...auditActorFields(context.actor),
 			recipient_id: context.recipientId ?? null,
 			wp_id: context.wpId ?? null,
 			asset_id: context.assetId ?? null,

@@ -4,9 +4,11 @@ import "server-only";
  * Server-side gates for every signed-in route. Anonymous visitors are sent to
  * `/login` instead of being shown a shell that cannot be filled with data.
  *
- * Everything here uses `getUser()`, which re-validates the JWT against the
- * Auth server — `getSession()` would trust a cookie the browser could have
- * forged.
+ * Everything here goes through `readVerifiedAuthSession`, which sends the
+ * session's access token to the Auth server with `getUser(jwt)` — a bare
+ * `getSession()` would trust a cookie the browser could have forged. The same
+ * verified token yields the auth session id the impersonation cookie is bound
+ * to.
  *
  * Deliberately not `middleware.ts`: Next runs middleware on the Edge runtime,
  * which the project's portability guardrails rule out. The trade-off is that
@@ -18,40 +20,70 @@ import "server-only";
  */
 
 import { callerRefusal } from "@bfa-platform/api/caller-refusal";
-import { type Caller, resolveCaller } from "@bfa-platform/api/context";
+import { type Caller, resolveEffectiveCaller } from "@bfa-platform/api/context";
+import { readVerifiedAuthSession } from "@bfa-platform/api/lib/auth-session";
+import { IMPERSONATION_COOKIE_NAME } from "@bfa-platform/api/lib/impersonation-cookie";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { landingRouteFor } from "@/lib/landing-route";
 import { signInNoticeRoute } from "@/lib/sign-in-notice";
 import { createClient } from "@/lib/supabase/server";
+import type { ImpersonationState } from "@/lib/use-impersonation";
 
 /**
- * Who is signed in, as the shells need to render it: the resolved `profiles`
- * row plus the one identifying field that lives on the auth account rather
- * than the profile. `profiles.full_name` is optional and an invited account
- * may never have filled it in, so the email is what guarantees the sidebar can
- * always name somebody.
- */
-export type Account = Caller & { email: string | null };
-
-/**
- * The caller's resolved `profiles` row plus their sign-in email, or a redirect
- * to sign-in.
+ * Who is signed in, as the shells need to render it: the resolved *effective*
+ * `profiles` row plus the one identifying field that lives on the auth account
+ * rather than the profile. `profiles.full_name` is optional and an invited
+ * account may never have filled it in, so the email is what guarantees the
+ * sidebar can always name somebody.
  *
- * Goes through the same helper every protected procedure uses, so a route and
- * its procedures cannot disagree about who somebody is.
+ * While a Super-Admin impersonates, the caller fields are the impersonated WP
+ * admin's, `email` is null — the only address on hand is the Super-Admin's own,
+ * and showing it under somebody else's name would misstate the session — and
+ * `impersonation` carries what the banner needs. Otherwise it is null.
+ */
+export type Account = Caller & {
+	email: string | null;
+	impersonation: ImpersonationState | null;
+};
+
+/**
+ * The caller's resolved effective `profiles` row plus their sign-in email, or a
+ * redirect to sign-in.
+ *
+ * Goes through the same helper every protected procedure uses — including its
+ * impersonation handling — so a route and its procedures cannot disagree about
+ * who somebody is. A Server Component cannot write cookies, so an invalid
+ * impersonation cookie is simply ignored here; the next tRPC response clears it.
  */
 export async function requireAccount(): Promise<Account> {
 	const supabase = await createClient();
-	const {
-		data: { user },
-	} = await supabase.auth.getUser();
+	const { user, sessionId } = await readVerifiedAuthSession(supabase);
 
 	if (!user) redirect("/login");
 
+	const cookieStore = await cookies();
+
 	try {
-		const caller = await resolveCaller(supabase, user);
-		return { ...caller, email: user.email ?? null };
+		const { caller, impersonation } = await resolveEffectiveCaller(
+			supabase,
+			user,
+			cookieStore.get(IMPERSONATION_COOKIE_NAME)?.value,
+			sessionId,
+		);
+
+		if (impersonation) {
+			return {
+				...caller,
+				email: null,
+				impersonation: {
+					waterPurveyorName: caller.waterPurveyorName ?? "Water Purveyor",
+				},
+			};
+		}
+
+		return { ...caller, email: user.email ?? null, impersonation: null };
 	} catch (error) {
 		// Signed in with no usable profile — blocked, or an account whose
 		// redemption never completed. There is nothing in the app for them, but

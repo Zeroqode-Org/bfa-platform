@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { protectedProcedure, router, TRPCError } from "../index";
+import { auditActor, auditActorFields } from "../lib/audit-actor";
 import { INVITATION_FIELD_LIMITS } from "../lib/invitation-field-limits";
 import {
 	createInvitationToken,
@@ -118,7 +119,7 @@ export const invitationsRouter = router({
 			console.log(
 				JSON.stringify({
 					event: "invitation_created",
-					actor_id: ctx.caller.profileId,
+					...auditActorFields(auditActor(ctx)),
 					invitation_id: invitation.id,
 					recipient: invitation.email,
 					role: invitation.role,
@@ -140,7 +141,7 @@ export const invitationsRouter = router({
 					expiresAt: invitation.expiresAt,
 					waterPurveyorName: purveyorName,
 					associatedWpId: invitation.associatedWpId,
-					invitedByProfileId: ctx.caller.profileId,
+					actor: auditActor(ctx),
 				});
 				// The browser needs the user-facing outcome, not the configured driver
 				// name. A provider accepted the message for delivery; console has the

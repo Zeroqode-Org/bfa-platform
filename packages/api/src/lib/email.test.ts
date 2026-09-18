@@ -242,7 +242,7 @@ describe("sendEmail", () => {
 
 		await sendEmail(message, {
 			event: "invitation_created",
-			actorId: "actor-1",
+			actor: { actorId: "actor-1", effectiveProfileId: "wp-admin-1" },
 			wpId: "wp-1",
 			invitationId: "invite-1",
 		});
@@ -255,6 +255,7 @@ describe("sendEmail", () => {
 			status: "sent",
 			recipient: "invitee@example.com",
 			actor_id: "actor-1",
+			effective_profile_id: "wp-admin-1",
 			wp_id: "wp-1",
 			invitation_id: "invite-1",
 			asset_id: null,

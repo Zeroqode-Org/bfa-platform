@@ -4,6 +4,11 @@ import { and, asc, eq } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
 import {
+	type AuditActor,
+	auditActor,
+	auditActorFields,
+} from "../lib/audit-actor";
+import {
 	REPAIR_COMPANY_EMAIL_TAKEN_MESSAGE,
 	REPAIR_COMPANY_EMAIL_UNIQUE_INDEX,
 } from "../lib/email-uniqueness";
@@ -102,7 +107,7 @@ export const repairCompaniesRouter = router({
 			}
 
 			logRepairCompanyEvent("repair_company_created", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				repairCompanyId: row.id,
 				waterPurveyorId: ctx.caller.waterPurveyorId,
 				extra: { status: row.status },
@@ -184,7 +189,7 @@ export const repairCompaniesRouter = router({
 			}
 
 			logRepairCompanyEvent("repair_company_updated", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				repairCompanyId: row.id,
 				waterPurveyorId: ctx.caller.waterPurveyorId,
 				extra: { status: row.status },
@@ -192,7 +197,7 @@ export const repairCompaniesRouter = router({
 
 			if (existing.status !== row.status) {
 				logRepairCompanyEvent("repair_company_status_changed", {
-					actorId: ctx.caller.profileId,
+					actor: auditActor(ctx),
 					repairCompanyId: row.id,
 					waterPurveyorId: ctx.caller.waterPurveyorId,
 					extra: { from: existing.status, to: row.status },
@@ -249,12 +254,12 @@ function isUnchanged(
 function logRepairCompanyEvent(
 	event: string,
 	{
-		actorId,
+		actor,
 		repairCompanyId,
 		waterPurveyorId,
 		extra,
 	}: {
-		actorId: string;
+		actor: AuditActor;
 		repairCompanyId: string;
 		waterPurveyorId: string;
 		extra?: Record<string, unknown>;
@@ -263,7 +268,7 @@ function logRepairCompanyEvent(
 	console.log(
 		JSON.stringify({
 			event,
-			actor_id: actorId,
+			...auditActorFields(actor),
 			repair_company_id: repairCompanyId,
 			wp_id: waterPurveyorId,
 			...extra,

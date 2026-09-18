@@ -1,8 +1,12 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 
 import { refusalErrorData } from "./caller-refusal";
-import type { Caller, Context } from "./context";
-import { resolveCaller } from "./context";
+import type { Context } from "./context";
+import { resolveEffectiveCaller } from "./context";
+import {
+	IMPERSONATION_COOKIE_NAME,
+	serializeClearedImpersonationCookie,
+} from "./lib/impersonation-cookie";
 
 /**
  * A refused caller carries its reason onto the wire.
@@ -24,20 +28,63 @@ export const router = t.router;
 export const middleware = t.middleware;
 export const publicProcedure = t.procedure;
 
+/**
+ * Resolves who the request runs as, through the one shared helper.
+ *
+ * `ctx.caller` is the *effective* identity — the impersonated WP admin while a
+ * Super-Admin is impersonating, otherwise the signed-in account — and is what
+ * every role check and tenant scope below reads. `ctx.actor` is always the real
+ * signed-in account, for the few places that must know who is really acting.
+ *
+ * A cookie that was sent but ignored is cleared on the response, so a tampered,
+ * expired or orphaned value is logged once rather than on every request.
+ *
+ * Once per response, not once per procedure: a batched HTTP request shares one
+ * `resHeaders` across all of its procedures, and this middleware runs for each.
+ * The guard also keeps a clear from landing *after* a `startImpersonation` in
+ * the same batch has set a fresh cookie, which would silently undo it.
+ */
 const enforceCaller = t.middleware(async ({ ctx, next }) => {
-	const caller: Caller = await resolveCaller(ctx.supabase, ctx.user);
+	const { caller, actor, impersonation, rejection } =
+		await resolveEffectiveCaller(
+			ctx.supabase,
+			ctx.user,
+			ctx.impersonationToken,
+			ctx.authSessionId,
+		);
 
+	const responseAlreadySetsCookie = ctx.resHeaders
+		.getSetCookie()
+		.some((line) => line.startsWith(`${IMPERSONATION_COOKIE_NAME}=`));
+
+	if (rejection && !responseAlreadySetsCookie) {
+		ctx.resHeaders.append("set-cookie", serializeClearedImpersonationCookie());
+		// The reason only — never the cookie value.
+		console.log(
+			JSON.stringify({
+				event: "impersonation_cookie_rejected",
+				actor_id: actor.profileId,
+				reason: rejection,
+				timestamp: new Date().toISOString(),
+			}),
+		);
+	}
+
+	// `actor_id` stays the real signed-in account, so this line attributes every
+	// impersonated request to the Super-Admin behind it.
 	console.log(
 		JSON.stringify({
 			event: "caller_resolved",
-			actor_id: caller.profileId,
+			actor_id: actor.profileId,
+			effective_profile_id: caller.profileId,
 			wp_id: caller.waterPurveyorId,
 			role: caller.globalRole,
+			impersonating: impersonation !== null,
 			timestamp: new Date().toISOString(),
 		}),
 	);
 
-	return next({ ctx: { ...ctx, caller } });
+	return next({ ctx: { ...ctx, caller, actor, impersonation } });
 });
 
 /** Every procedure that touches tenant data. Resolves the caller server-side. */
@@ -48,6 +95,10 @@ export const protectedProcedure = t.procedure.use(enforceCaller);
  * left to a row policy: the Drizzle connection is privileged, so the procedure
  * layer is the authorization boundary. Declared with an inline middleware so it
  * inherits `ctx.caller` from `protectedProcedure`.
+ *
+ * Checks the effective caller, so a Super-Admin who is impersonating a purveyor
+ * has none of these powers until they exit — they see exactly what that
+ * purveyor's admin sees.
  */
 export const superAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
 	if (ctx.caller.globalRole !== "super_admin") {
@@ -55,6 +106,21 @@ export const superAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
 	}
 	return next({ ctx });
 });
+
+/**
+ * Procedures only the real, signed-in Super-Admin may call *whatever identity
+ * they are currently acting as* — in practice, ending an impersonation, which
+ * by definition runs while the effective caller is somebody else. Reads
+ * `ctx.actor`, never `ctx.caller`.
+ */
+export const superAdminActorProcedure = protectedProcedure.use(
+	({ ctx, next }) => {
+		if (ctx.actor.globalRole !== "super_admin") {
+			throw new TRPCError({ code: "FORBIDDEN", message: "Super-Admin only" });
+		}
+		return next({ ctx });
+	},
+);
 
 /** The three roles that belong to a water purveyor. Certifiers do not. */
 const WP_ROLES = ["wp_admin", "wp_sub_admin", "wp_employee"] as const;

@@ -9,6 +9,11 @@ import {
 import { and, asc, eq, exists, sql } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
+import {
+	type AuditActor,
+	auditActor,
+	auditActorFields,
+} from "../lib/audit-actor";
 import { sendEmail } from "../lib/email";
 import { renderTextEmail } from "../lib/email-layout";
 import {
@@ -222,7 +227,7 @@ export const noticesRouter = router({
 			}
 
 			logNoticeEvent("notice_template_saved", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				waterPurveyorId: ctx.caller.waterPurveyorId,
 				extra: {
 					notice_type: row.noticeType,
@@ -296,7 +301,7 @@ export const noticesRouter = router({
 			);
 
 			logNoticeEvent("general_info_broadcast_started", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				waterPurveyorId: ctx.caller.waterPurveyorId,
 				extra: {
 					recipient_filter: input.recipientFilter,
@@ -339,7 +344,7 @@ export const noticesRouter = router({
 						},
 						{
 							event: "general_info_broadcast",
-							actorId: ctx.caller.profileId,
+							actor: auditActor(ctx),
 							recipientId: recipient.id,
 							wpId: ctx.caller.waterPurveyorId,
 						},
@@ -354,7 +359,7 @@ export const noticesRouter = router({
 			}
 
 			logNoticeEvent("general_info_broadcast_finished", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				waterPurveyorId: ctx.caller.waterPurveyorId,
 				extra: {
 					recipient_filter: input.recipientFilter,
@@ -534,11 +539,11 @@ async function recipientsFor(
 function logNoticeEvent(
 	event: string,
 	{
-		actorId,
+		actor,
 		waterPurveyorId,
 		extra,
 	}: {
-		actorId: string;
+		actor: AuditActor;
 		waterPurveyorId: string;
 		extra?: Record<string, unknown>;
 	},
@@ -546,7 +551,7 @@ function logNoticeEvent(
 	console.log(
 		JSON.stringify({
 			event,
-			actor_id: actorId,
+			...auditActorFields(actor),
 			wp_id: waterPurveyorId,
 			...extra,
 			timestamp: new Date().toISOString(),
