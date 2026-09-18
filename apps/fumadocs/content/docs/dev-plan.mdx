@@ -23,7 +23,7 @@ Target delivery: **2026-10-02** (~6 weeks from kickoff on 2026-08-24). Team: **L
 
 ## Task tracker
 
-Status as of **2026-09-13**. Update this table as work progresses — this is the source of truth, not the phase table above.
+Status as of **2026-09-16**. Update this table as work progresses — this is the source of truth, not the phase table above.
 
 | Task | PRD § | Owner | Start | End | Status |
 |---|---|---|---|---|---|
@@ -33,13 +33,13 @@ Status as of **2026-09-13**. Update this table as work progresses — this is th
 | Invitation & Onboarding Flow | 6.2 | Daniil | 08/24 | 08/28 | done |
 | Transactional Email Integration | 6.14 | Daniil | 08/24 | 10/02 | in-progress |
 | Data Model, Auth & Backend Setup | 6.1 | Lina | 08/31 | 09/04 | in-progress |
-| Certifier Dashboard | 6.3 | Lina | 08/31 | 09/04 | planned |
+| Certifier Dashboard | 6.3 | Lina | 08/31 | 09/04 | done |
 | WP Dashboard — Core & Analytics | 6.6.1 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — BFA Assets | 6.6.2 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Certifiers | 6.6.3 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Customers | 6.6.4 | Daniil | 09/07 | 09/11 | done |
 | WP Dashboard — Repair Companies | 6.6.5 | Daniil | 09/07 | 09/11 | done |
-| Certifier WP Selector | 6.4 | Lina | 09/07 | 09/11 | planned |
+| Certifier WP Selector | 6.4 | Lina | 09/07 | 09/11 | done |
 | WP Dashboard — Submitted Tests | 6.6.6 | Lina | 09/14 | 09/18 | done |
 | WP Dashboard — Notices & Email Settings | 6.6.7 | Daniil | 09/14 | 09/18 | planned |
 | Workflow 1: Reminder + Late Notices | 6.7 | Daniil | 09/14 | 09/18 | planned |
@@ -188,6 +188,63 @@ copy that makes no compliance claim. Full writeup:
 **Super-Admin (6.11)**: the Week 4 invite-new-WP action is wired — the dialog creates a real invitation, and `/admin` is gated to `super_admin`. The rest of the Week 4 pass (impersonation procedures, feature-flag toggles, the wired WP list actions) is still open.
 
 **Transactional Email Integration (6.14)** stays *in-progress*, now only for its switch-on. The send helper and `consoleDriver` shipped with onboarding, and every mail path in the app runs through them. The Resend account exists, the sender domain `backflowreporter.io` is verified, and `providerDriver` is built and unit-tested, with `EMAIL_DRIVER`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL` and `RESEND_REPLY_TO` in env validation; every Resend send sets `Reply-To` to `info@backflowreporter.io` so replies reach the existing mailbox. The email template design is also done: one shared, responsive layout in `packages/api/src/lib/email-layout.ts` wraps invitations (with a **Set up your account** button, fallback URL and expiry) and general-info broadcasts, and is the path automated notices will use; notice bodies stay escaped plain text, and branding is text-only until the client supplies a logo. What remains: set the variables in the deployment, enable `EMAIL_DRIVER=provider` after review, and confirm one live test send. Console stays the default until then. The automated notice copy is still awaiting client approval; that belongs to the workflows, not to 6.14. See [Invitations and Onboarding](/docs/invitations-onboarding#the-email-layer).
+
+**Certifier Dashboard (6.3)**: shipped. The four leaf routes under the
+certifier shell (`/certifier/drafts`, `/certifier/submitted`,
+`/certifier/wizard`, `/certifier/profile` — the shell itself and its nav were
+already built in 6.15) now have real screens: a `DraftsTable` (resume, delete),
+a read-only `SubmissionsTable` with a document dialog, and a `ProfileForm`
+covering contact/licence fields plus a password change. `test_submissions`
+gets a certifier's own read/write path for the first time —
+`0012_certifier_dashboard_policies` — a certifier reads their own rows at any
+status and writes or deletes only their own drafts, mirroring 6.6.6's WP-side
+policies with `certifier_id` in place of `water_purveyor_id`. A new
+`certifierProcedure` (`packages/api/src/index.ts`) resolves and narrows
+`ctx.caller.certifierId`, the same shape `wpProcedure` uses for
+`waterPurveyorId`. Full writeup: [Certifier Dashboard](/docs/certifier-dashboard).
+
+**Two deviations from the eight build-plan steps, both scope this task
+absorbed rather than deferred.** First, the prototype's single "Dashboard"
+screen (two stat cards, a two-column Drafts/Submitted grid) has no home in the
+shipped nav — Week 1 built four leaf tabs (Wizard, Drafts, Submitted PDFs,
+Profile), not a fifth root route. A stat-card strip briefly sat atop
+`/certifier/drafts` in its place; dropped on review as a redundant summary of
+what the table beneath it already shows, so `/certifier/drafts` is just the
+table now, same as `/certifier/submitted`. Second, "view and edit own profile fields" (step
+8) needed a write path `0006_certifier_policies` explicitly deferred as its
+own feature; `0012` adds it (`profiles.full_name` already had one from 0001),
+alongside a new `certifier.updateProfile` procedure and a `getDraft` read that
+the wizard (6.5) will need for "resume opens the wizard with saved values
+intact" — that half of the "Done when" line is not verifiable until 6.5 ships.
+
+**Certifier WP Selector (6.4)**: shipped. The mock `use-active-wp.ts` store
+6.3 flagged as a non-goal is now real: a new `certifier.listAuthorizedWps`
+procedure returns the caller's own `active` authorizations, and `WpSwitcher`
+in the certifier shell header switches between them, omitting whichever is
+currently active. `0013_certifier_wp_authorization_policies` gives
+`wp_certifier_authorizations` its first policy — a certifier reads their own
+rows, any status, nothing else yet exists for it. The one change that reaches
+back into 6.3's own procedures: `listDrafts`, `listSubmissions`, `getDraft`
+and `deleteDraft` now take `waterPurveyorId` and scope by it alongside
+`certifier_id`, so a certifier authorized for more than one purveyor sees only
+the active one's rows — switching re-filters the whole dashboard, it does not
+merge. Unlike `wpProcedure`, this id is a validated client input rather than
+something resolved server-side, because a certifier's active WP has no single
+source of truth on their profile; a new `assertAuthorizedWp` helper checks it
+against the caller's own `active` rows before every use and is what a forged
+id gets refused by. Selection itself lives in `sessionStorage`, per the
+build-plan's own "client state for the session" wording — no cookie, no
+server-side resolution. Left for the wizard (6.5): `assertAuthorizedWp` is
+ready for the draft-creation procedure that doesn't exist yet.
+
+**A Super-Admin DELETE gap 0012 finds and closes on the way in.** Granting
+DELETE on `test_submissions` at all — needed for a certifier's own draft —
+makes 0008's pre-existing `FOR ALL` Super-Admin policy newly cover DELETE too,
+which would let a Super-Admin remove a submitted test that 0008 explicitly
+said nothing removes. A RESTRICTIVE policy,
+`test_submissions_delete_draft_only` (`status = 'draft'`), closes it by ANDing
+against every permissive DELETE policy including that one, without touching
+0008 itself.
 
 ## Known deviation from the kickoff runbook
 

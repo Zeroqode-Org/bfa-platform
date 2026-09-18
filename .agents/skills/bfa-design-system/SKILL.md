@@ -32,7 +32,7 @@ Source: the client-approved HTML prototype (layout/components) plus the client's
 
 ## Layout
 
-- Certifier: mobile-first, bottom tab bar under 780px; switches to the same 216px sidebar as WP/Admin at desktop width. Forms max-width 480px centered.
+- Certifier: mobile-first, bottom tab bar under 780px; switches to the same 216px sidebar as WP/Admin at desktop width. Forms max-width 480px centered. Exception: Profile — left-aligned (not centered), capped 640px, Contact info pairs its fields into a two-column grid.
 - WP / Super-Admin: fixed 216px white left sidebar, icon+label nav, active item = `#D9F0FC` bg + `#0E5A81` text/icon. Desktop-oriented.
 - Impersonation state: full-width `#FEF3C7` banner, `#92400E` text, always visible (never in a menu) with an "Exit impersonation" link.
 

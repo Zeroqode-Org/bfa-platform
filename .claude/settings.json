@@ -19,7 +19,26 @@
 			"Bash(node --env-file=.env.local /private/tmp/claude-501/-Users-elinaagovkina-Desktop-ZQ-Projects-bfa-platform/a0481a9f-0265-4678-b859-6f361f4a30df/scratchpad/whoami-check.mjs)",
 			"Bash(echo \"exit: $?\")",
 			"Bash(PATH=/usr/bin:/bin sh -c 'husky || true; echo \"exit: $?\"')",
-			"Bash(git config *)"
+			"Bash(git config *)",
+			"Bash(node -e ' *)",
+			"Bash(break)",
+			"Bash(npm test *)",
+			"Bash(echo \"started with pid $!\")",
+			"Bash(npx tsc *)",
+			"Bash(ps -o pid,etime,pcpu,pmem,command -p 14308,13610)",
+			"mcp__playwright__browser_navigate",
+			"mcp__playwright__browser_take_screenshot",
+			"mcp__playwright__browser_snapshot",
+			"mcp__playwright__browser_click",
+			"mcp__playwright__browser_type",
+			"mcp__playwright__browser_fill_form",
+			"mcp__playwright__browser_resize",
+			"Bash(rm -rf .playwright-mcp)",
+			"Bash(npm run *)",
+			"Read(//Users/elinaagovkina/Desktop/ZQ\\\\\\\\ Projects/bfa-platform/**)",
+			"Bash(tee /tmp/test_output.txt)",
+			"Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3001)",
+			"mcp__playwright__browser_close"
 		]
 	}
 }

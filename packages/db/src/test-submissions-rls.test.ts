@@ -7,8 +7,9 @@ import { DB_TESTS_ENABLED, requireDatabaseUrl } from "./testing/db-tests";
 
 /**
  * Multi-tenant isolation tests for the `test_submissions` policies added in
- * `0008_test_submission_policies` and corrected in
- * `0009_test_submission_asset_tenancy`.
+ * `0008_test_submission_policies`, corrected in
+ * `0009_test_submission_asset_tenancy`, and given a certifier's own read/write
+ * path in `0012_certifier_dashboard_policies`.
  *
  * Same shape as `bfa-assets-rls.test.ts`: every statement runs as the
  * `authenticated` Postgres role with `request.jwt.claims` set to a fixture
@@ -21,7 +22,9 @@ import { DB_TESTS_ENABLED, requireDatabaseUrl } from "./testing/db-tests";
  * same typed BIN, same day — so a leak looks like a leak rather than like a
  * plausible row. Each also holds a draft, because the draft rule is not a
  * filter this suite could satisfy by not asking: a WP naming a draft's id
- * directly must still get nothing.
+ * directly must still get nothing. A second certifier holds a draft and a
+ * submitted row of their own, for the same reason on the certifier side —
+ * proving isolation needs two certifiers, not one reading nothing.
  *
  * Opt-in: this suite writes to a real database, so it runs only under
  * `npm run test:db`. Every statement runs inside a transaction that is rolled
@@ -39,15 +42,20 @@ const ids = {
 	employeeA: randomUUID(),
 	adminB: randomUUID(),
 	certifierProfileA: randomUUID(),
+	certifierProfileB: randomUUID(),
 	blockedAdminA: randomUUID(),
 };
 const certifierA = randomUUID();
+const certifierB = randomUUID();
 const assetA = randomUUID();
 const assetB = randomUUID();
 const submittedA = randomUUID();
 const submittedB = randomUUID();
 const draftA = randomUUID();
 const unresolvedA = randomUUID();
+/** A second certifier's own rows, for cross-certifier isolation. */
+const draftC = randomUUID();
+const submittedC = randomUUID();
 
 let pool: pg.Pool;
 
@@ -102,6 +110,7 @@ describeDb("RLS — test_submissions", () => {
 				[ids.employeeA, wpA, "wp_employee"],
 				[ids.adminB, wpB, "wp_admin"],
 				[ids.certifierProfileA, null, "certifier"],
+				[ids.certifierProfileB, null, "certifier"],
 				[ids.blockedAdminA, wpA, "wp_admin"],
 			];
 
@@ -118,8 +127,9 @@ describeDb("RLS — test_submissions", () => {
 			// through the certifier who filed it.
 			await client.query(
 				`insert into certifiers (id, profile_id, company, status)
-				 values ($1, $2, 'Submission RLS Testing', 'active')`,
-				[certifierA, ids.certifierProfileA],
+				 values ($1, $2, 'Submission RLS Testing', 'active'),
+				        ($3, $4, 'Submission RLS Testing B', 'active')`,
+				[certifierA, ids.certifierProfileA, certifierB, ids.certifierProfileB],
 			);
 
 			await client.query(
@@ -129,22 +139,39 @@ describeDb("RLS — test_submissions", () => {
 				[assetA, wpA, assetB, wpB],
 			);
 
-			const submissions: [string, string | null, string, string, string][] = [
-				[submittedA, assetA, wpA, "submitted", "RP"],
-				[submittedB, assetB, wpB, "submitted", "RP"],
-				[draftA, assetA, wpA, "draft", "RP"],
+			const submissions: [
+				string,
+				string | null,
+				string,
+				string,
+				string,
+				string,
+			][] = [
+				[submittedA, assetA, wpA, "submitted", "RP", certifierA],
+				[submittedB, assetB, wpB, "submitted", "RP", certifierA],
+				[draftA, assetA, wpA, "draft", "RP", certifierA],
 				// The no-BIN flow: submitted, but attached to no assembly.
-				[unresolvedA, null, wpA, "submitted", "DC"],
+				[unresolvedA, null, wpA, "submitted", "DC", certifierA],
+				// Certifier B's own rows, for cross-certifier isolation.
+				[draftC, null, wpA, "draft", "RP", certifierB],
+				[submittedC, null, wpA, "submitted", "RP", certifierB],
 			];
 
-			for (const [id, assetId, wp, status, bfaType] of submissions) {
+			for (const [
+				id,
+				assetId,
+				wp,
+				status,
+				bfaType,
+				certifierId,
+			] of submissions) {
 				await client.query(
 					`insert into test_submissions
 					   (id, bfa_asset_id, certifier_id, water_purveyor_id, status, bfa_type,
 					    wizard_data, submitted_bin_text, test_date, test_result)
 					 values ($1, $2, $3, $4, $5::submission_status, $6::bfa_type,
 					         '{"fixtureKey":"submission-rls"}'::jsonb, 'SHARED-SUB-BIN', '2027-04-01', 'pass')`,
-					[id, assetId, certifierA, wp, status, bfaType],
+					[id, assetId, certifierId, wp, status, bfaType],
 				);
 			}
 
@@ -170,7 +197,9 @@ describeDb("RLS — test_submissions", () => {
 				"delete from bfa_assets where water_purveyor_id = any($1::uuid[])",
 				[[wpA, wpB]],
 			);
-			await client.query("delete from certifiers where id = $1", [certifierA]);
+			await client.query("delete from certifiers where id = any($1::uuid[])", [
+				[certifierA, certifierB],
+			]);
 			await client.query("delete from profiles where id = any($1::uuid[])", [
 				Object.values(ids),
 			]);
@@ -235,15 +264,28 @@ describeDb("RLS — test_submissions", () => {
 			expect(rows.map((row) => row.id)).toEqual([unresolvedA]);
 		});
 
-		it("hides every submission from a certifier, including their own", async () => {
-			// The certifier read path — their own drafts and their own submitted
-			// archive, § 6.3 — belongs with the wizard that creates those rows.
-			// Until it exists the table is invisible to them, which is the
-			// failing-closed direction. Every row here was filed by this certifier.
+		it("shows a certifier their own rows at either status", async () => {
+			// § 6.3's read path, added in 0012: a certifier reads their own drafts
+			// and their own submitted archive alike — unlike the WP screens, there
+			// is no status filter on this one.
+			const rows = await rowsFor(
+				ids.certifierProfileA,
+				"select id from test_submissions where id = any($1::uuid[]) order by id",
+				[[submittedA, submittedB, draftA, unresolvedA]],
+			);
+
+			// submittedB belongs to certifier A too (one certifier, two purveyors is
+			// the normal case), so all four are theirs.
+			expect(rows.map((row) => row.id).sort()).toEqual(
+				[submittedA, submittedB, draftA, unresolvedA].sort(),
+			);
+		});
+
+		it("hides another certifier's rows completely, both states", async () => {
 			const rows = await rowsFor(
 				ids.certifierProfileA,
 				"select id from test_submissions where id = any($1::uuid[])",
-				[[submittedA, submittedB, draftA, unresolvedA]],
+				[[draftC, submittedC]],
 			);
 
 			expect(rows).toHaveLength(0);
@@ -307,14 +349,119 @@ describeDb("RLS — test_submissions", () => {
 			}
 		});
 
-		it("refuses a certifier writing a submitted record at all", async () => {
+		it("refuses a certifier writing their own submitted record", async () => {
 			// The rule the whole table exists to hold: a certifier's record locks
 			// at submit, and their only path to change one is filing a new test.
+			// submittedA is certifier A's own row — this is the "right certifier,
+			// wrong status" case, not a tenancy refusal.
 			const rows = await rowsFor(ids.certifierProfileA, correctResult, [
 				submittedA,
 			]);
 
 			expect(rows).toHaveLength(0);
+		});
+
+		describe("certifier writes (0012)", () => {
+			it("lets a certifier correct their own draft", async () => {
+				const rows = await rowsFor(
+					ids.certifierProfileA,
+					"update test_submissions set current_step = 3 where id = $1 returning current_step",
+					[draftA],
+				);
+
+				expect(rows).toEqual([{ current_step: 3 }]);
+			});
+
+			it("refuses a certifier writing another certifier's draft", async () => {
+				const rows = await rowsFor(
+					ids.certifierProfileA,
+					"update test_submissions set current_step = 3 where id = $1",
+					[draftC],
+				);
+
+				expect(rows).toHaveLength(0);
+			});
+
+			it("lets a certifier delete their own draft", async () => {
+				await asUser(ids.certifierProfileB, async (client) => {
+					const result = await client.query(
+						"delete from test_submissions where id = $1",
+						[draftC],
+					);
+
+					expect(result.rowCount).toBe(1);
+				});
+			});
+
+			it("refuses a certifier deleting their own submitted record", async () => {
+				await asUser(ids.certifierProfileB, async (client) => {
+					const result = await client.query(
+						"delete from test_submissions where id = $1",
+						[submittedC],
+					);
+
+					expect(result.rowCount).toBe(0);
+				});
+			});
+
+			it("refuses a certifier deleting another certifier's draft", async () => {
+				await asUser(ids.certifierProfileA, async (client) => {
+					const result = await client.query(
+						"delete from test_submissions where id = $1",
+						[draftC],
+					);
+
+					expect(result.rowCount).toBe(0);
+				});
+			});
+
+			it("still refuses a certifier attaching an asset to their own draft", async () => {
+				// `bfa_asset_id` is already in the UPDATE grant for the WP's own
+				// `linkSubmissionAsset` — 0012's column-permission trigger is what
+				// keeps a certifier from using the same grant to resolve their own
+				// BIN, which stays the WP's job (§ 7).
+				//
+				// Cleared to NULL rather than set to `assetB`: draftA already carries
+				// `assetA` from the shared fixture, and the trigger only fires on a
+				// value that actually changes — setting it to what it already is
+				// would prove nothing.
+				await expect(
+					rowsFor(
+						ids.certifierProfileA,
+						"update test_submissions set bfa_asset_id = null where id = $1",
+						[draftA],
+					),
+				).rejects.toThrow(/cannot attach an asset/i);
+			});
+		});
+
+		/**
+		 * `test_submissions_all_super_admin` (0008) is `FOR ALL`, which now that
+		 * 0012 grants DELETE at all would include it — closed by
+		 * `test_submissions_delete_draft_only`, a RESTRICTIVE policy that ANDs
+		 * `status = 'draft'` onto every DELETE regardless of which permissive
+		 * policy matched. This is the direct proof, at the row-policy layer, that
+		 * a submitted test still cannot be deleted by anyone.
+		 */
+		describe("the Super-Admin DELETE gap 0012 closes", () => {
+			it("refuses a Super-Admin deleting a submitted test", async () => {
+				await asUser(ids.superAdmin, async (client) => {
+					const result = await client.query(
+						"delete from test_submissions where id = $1",
+						[submittedA],
+					);
+
+					expect(result.rowCount).toBe(0);
+				});
+			});
+
+			it("still lets a Super-Admin read and correct a submitted test", async () => {
+				// The restrictive policy is scoped to DELETE alone — SELECT and
+				// UPDATE under the same FOR ALL policy are untouched.
+				const rows = await rowsFor(ids.superAdmin, correctResult, [submittedB]);
+
+				expect(rows).toEqual([{ id: submittedB }]);
+			});
 		});
 
 		it("lets a WP Admin link an unresolved submission to an asset", async () => {
@@ -442,13 +589,19 @@ describeDb("RLS — test_submissions", () => {
 		it("gives nobody a way to clear the certifier's overridden-field flags", async () => {
 			// The marker exists so the WP can see what the certifier typed over. A
 			// WP able to rewrite it could clear the flags rather than answer them.
+			//
+			// Refused by the column-permission trigger (0012) rather than by a
+			// missing grant, now that `overridden_fields` is granted table-wide for
+			// the certifier's own draft-save — see
+			// `enforce_test_submission_column_permissions`'s WP branch, which is
+			// what a WP session actually hits here.
 			await expect(
 				rowsFor(
 					ids.adminA,
 					"update test_submissions set overridden_fields = '[]'::jsonb where id = $1",
 					[submittedA],
 				),
-			).rejects.toThrow(/permission denied/i);
+			).rejects.toThrow(/draft-resume state/i);
 		});
 
 		it("gives nobody a way to attribute an edit to somebody else", async () => {
@@ -555,15 +708,23 @@ describeDb("RLS — test_submissions", () => {
 			}
 		});
 
-		it("gives nobody a way to delete a submission, Super-Admin included", async () => {
+		it("gives no WP role or Super-Admin a way to delete a submitted test", async () => {
 			// A submitted test is evidence of a backflow test. Nothing in the
-			// product removes one.
+			// product removes one. Grant-level DELETE now exists for `authenticated`
+			// (0012, for the certifier's own draft), so a WP role or Super-Admin
+			// no longer fails this statement with a permission error the way an
+			// ungranted column write still does above — RLS is what refuses it now,
+			// silently matching zero rows, the same shape every other row-policy
+			// refusal in this file takes.
 			for (const deleter of [ids.adminA, ids.superAdmin]) {
-				await expect(
-					rowsFor(deleter, "delete from test_submissions where id = $1", [
-						submittedA,
-					]),
-				).rejects.toThrow(/permission denied/i);
+				await asUser(deleter, async (client) => {
+					const result = await client.query(
+						"delete from test_submissions where id = $1",
+						[submittedA],
+					);
+
+					expect(result.rowCount).toBe(0);
+				});
 			}
 		});
 	});

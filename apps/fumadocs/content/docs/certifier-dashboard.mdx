@@ -1,0 +1,181 @@
+---
+title: Certifier Dashboard
+description: A certifier's own drafts and submitted archive — the read/write policy that mirrors the WP submitted-tests screen with certifier_id in place of water_purveyor_id, the WP scoping § 6.4 added on top, and what this task left for the wizard
+---
+
+The certifier shell's four tabs — Wizard, Drafts, Submitted PDFs, Profile —
+were built in Week 1 (App Shell, 6.15). This page covers the three that got
+real screens in § 6.3: `/certifier/drafts`, `/certifier/submitted`, and
+`/certifier/profile`. `/certifier/wizard` (§ 6.5) still renders a placeholder;
+this task defined the URL contract it will read from, and no more.
+
+## The mirror image of the WP submitted-tests screen
+
+[WP Submitted Tests](/docs/wp-submitted-tests) is a purveyor's cross-certifier
+inbox, scoped by `water_purveyor_id` and pinned to `status = 'submitted'` —
+drafts are invisible to a WP, anywhere, by any route. This screen is the same
+table read from the other side: scoped by `certifier_id` instead, and —
+unlike the WP screens — reachable at *either* status, because a certifier is
+entitled to their own drafts as well as their own archive.
+
+`0008_test_submission_policies` deliberately left the certifier out:
+
+> "The certifier read path — their own drafts and their own submitted
+> archive — belongs with the wizard that creates those rows and gets its own
+> migration."
+
+`0012_certifier_dashboard_policies` is that migration. It is additive —
+nothing in it touches the Super-Admin or WP policies `0008`/`0009` already
+shipped.
+
+## Who gets what
+
+| Actor | SELECT | UPDATE | DELETE |
+|---|---|---|---|
+| Certifier (own rows) | any status | own draft only | own draft only |
+| Certifier (another certifier's rows) | nothing | nothing | nothing |
+| WP roles | unchanged from `0008` | unchanged | none |
+| Super-Admin | unchanged | unchanged | **none — see below** |
+
+`private.current_certifier_id()` is the new caller-resolution helper this
+adds — the same `STABLE`/`SECURITY DEFINER` shape as `current_wp_id()`
+(`0006`): it resolves to NULL for anybody without an active `certifiers` row,
+including a blocked profile or a blocked certifier, so every policy below
+inherits the schema's usual failing-closed behavior.
+
+## The column grant is shared, so a trigger narrows it back per role
+
+A Postgres grant is held by the `authenticated` role, which every signed-in
+caller shares — `0007` hit this exact trap on `certifiers` and fixed it the
+same way this migration does. Two columns needed for a certifier's draft save
+— `current_step`, `overridden_fields` — are newly granted, and granting them
+widens a WP session's reach too, since a WP row policy's `WITH CHECK` says
+nothing about columns. `bfa_asset_id` has the opposite problem: it was
+already granted for the WP's own `linkSubmissionAsset`, and without a check a
+certifier could now use that same grant to resolve their own BIN — which
+stays the WP's job (PRD § 7).
+
+`private.enforce_test_submission_column_permissions()` (a `BEFORE UPDATE`
+trigger) closes both: a WP session touching `current_step` or
+`overridden_fields` is refused, and a certifier session touching
+`bfa_asset_id` is refused. Super-Admin is unrestricted, matching its existing
+`FOR ALL` policy.
+
+## Opening DELETE reopened a question `0008` had already closed
+
+`test_submissions` never had a DELETE grant before this migration —
+evidence of a backflow test, nothing removes one. Granting DELETE at all (for
+a certifier's own draft) makes `0008`'s pre-existing Super-Admin `FOR ALL`
+policy newly cover DELETE too, since `FOR ALL` includes every command a grant
+allows.
+
+A permissive policy can only widen access — multiple permissive policies for
+one command OR together. Narrowing needs the other kind: a **RESTRICTIVE**
+policy ANDs against every permissive one for the same command.
+`test_submissions_delete_draft_only` (`USING (status = 'draft')`,
+`AS RESTRICTIVE`, `FOR DELETE`) is exactly that: no matter which permissive
+policy says yes to a DELETE, the row still has to be a draft. `0008`'s
+Super-Admin policy is untouched — the fix lives entirely in `0012`, beside it.
+
+## A correction to `stamp_submission_editor` this task's new write path required
+
+`0009_test_submission_asset_tenancy` redefined
+`private.stamp_submission_editor()` to `RETURN NULL` on a no-op UPDATE —
+suppressing the row version entirely so `updated_at` and
+`edited_by_wp_profile_id` stay untouched when nothing actually changed. That
+function also stamps `edited_by_wp_profile_id` from `auth.uid()` on any
+changed row, which was safe while only a WP session could reach an UPDATE at
+all. This task gives a certifier a second write path onto the same table —
+saving their own draft — and an unguarded stamp would misattribute a
+certifier's own save as a WP edit.
+
+`0012` redefines the function again, adding a role check around the stamp
+(`IF ... IN ('wp_admin', 'wp_sub_admin') THEN ...`) while carrying `0009`'s
+`RETURN NULL` no-op suppression forward unchanged — the fix is additive to
+`0009`'s, not a re-derivation of it.
+
+## Procedures (`packages/api/src/routers/certifier.ts`)
+
+All six run behind `certifierProcedure` — the same shape `wpProcedure` uses:
+checks `globalRole === "certifier"`, requires a non-null `certifierId`, and
+narrows it onto `ctx.caller` so downstream code cannot forget the null case.
+
+- **`listAuthorizedWps`** — the caller's own `active` WPs, for the switcher
+  (§ 6.4, see above).
+- **`listDrafts`** — one page of the caller's own drafts under the given
+  `waterPurveyorId` (§ 6.4), `updated_at` descending. The
+  `(certifier_id, status, updated_at desc)` index serves the sort.
+- **`listSubmissions`** — one page of the caller's own submitted archive under
+  the given `waterPurveyorId` (§ 6.4), reusing `newestSubmittedTestFirst` from
+  `submitted-tests.ts` so a certifier and the purveyor who received a test
+  find it in the same relative order.
+- **`getDraft`** — one draft, scoped by certifier, `waterPurveyorId` (§ 6.4)
+  *and* `status = 'draft'`, so a foreign draft id and the caller's own
+  submitted id both get the same `"Draft not found"` — no information leak
+  either way. This is the read the wizard's resume path (§ 6.5) will call.
+- **`deleteDraft`** — a single atomic `DELETE ... RETURNING`, not a
+  read-then-delete: there is no "before" row a delete needs for a no-op
+  comparison, so there is no race to guard against the way `updateSubmittedTest`
+  has to.
+- **`updateProfile`** — writes `profiles.full_name` and the three `certifiers`
+  columns (`company`, `id_number`, `license_expiration_date`) in one
+  transaction. No-op-safe: a save that changes nothing skips the write and
+  the log line, the same judgement `updateSubmittedTest` makes.
+
+Both writable-row column grants already had a self-write RLS policy before
+this task — `profiles.full_name` from `0001`, the three `certifiers` columns
+from `0006`/`0007`. `updateProfile` is the tRPC side of a permission the
+schema already had.
+
+Password changes do not go through this router. They are Supabase Auth's own
+write path (`supabase.auth.updateUser`), called directly from the browser
+client — already gated by the caller's own session, with nothing this
+application connection has special standing to add.
+
+## The resume contract, for the wizard to pick up
+
+`/certifier/wizard?draftId=<id>` is the URL a draft's **Resume** link
+produces. The wizard itself is § 6.5 and is not built here; `certifier.getDraft`
+already exists to serve it, scoped exactly as everything else on this router
+is. Until the wizard consumes it, `/certifier/wizard` renders a placeholder
+that documents the contract in a comment — the "resume opens the wizard at
+the saved step with saved values intact" half of § 6.3's "done when" line is
+not verifiable until then.
+
+## WP scoping (§ 6.4)
+
+A certifier can be authorized by more than one water purveyor, so "which WP"
+has no single source of truth on their profile the way `wpProcedure` reads
+`waterPurveyorId` off a WP role's own row. § 6.4 added `waterPurveyorId` as a
+required *input* instead, on `listDrafts`, `listSubmissions`, `getDraft` and
+`deleteDraft` alike — scoping every one of them by `certifier_id` **and**
+`water_purveyor_id` together, so a certifier authorized for two purveyors sees
+only the currently active one's rows. Switching re-filters, it does not merge.
+
+Taking a tenant id from the client breaks the rule every other WP-scoped
+procedure in this codebase follows — so it is validated, not trusted. Each of
+those four procedures calls `assertAuthorizedWp(certifierId, waterPurveyorId)`
+first, which checks the pair against the caller's own `active` row in
+`wp_certifier_authorizations` and throws `FORBIDDEN` if none exists. A forged
+or no-longer-authorized WP id fails there, before the query that would have
+scoped rows by it ever runs.
+
+`listAuthorizedWps` (also `certifierProcedure`, no input) is what populates
+the switcher: the caller's own `active` authorizations, joined to
+`water_purveyors` for a display name. `0013_certifier_wp_authorization_policies`
+gives `wp_certifier_authorizations` its first policy — a certifier reads their
+own rows, at any status, and nothing else has a grant on the table yet.
+
+The selection itself is client-only — `sessionStorage`, not a cookie — per
+the build-plan's own "persists the selection in client state for the
+session" wording. `use-impersonation.ts` documents a *later* week's signed
+httpOnly cookie for a different concept; nothing here asks for that.
+
+## Explicit non-goals
+
+- **No certifier-level analytics.** PRD § 6.3 excludes it explicitly — WP and
+  Super-Admin get analytics, certifiers do not, for v1.
+- **The submitted-test detail view reads generically.** The per-BFA-type
+  field set inside `wizard_data` is the wizard's to define (§ 6.5) and does
+  not exist yet, so the dialog iterates whatever keys are actually present
+  rather than assuming the client prototype's hardcoded field list.

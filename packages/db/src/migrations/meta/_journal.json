@@ -85,6 +85,20 @@
 			"when": 1791200000000,
 			"tag": "0011_tenant_email_uniqueness",
 			"breakpoints": true
+		},
+		{
+			"idx": 12,
+			"version": "7",
+			"when": 1791400000000,
+			"tag": "0012_certifier_dashboard_policies",
+			"breakpoints": true
+		},
+		{
+			"idx": 13,
+			"version": "7",
+			"when": 1791600000000,
+			"tag": "0013_certifier_wp_authorization_policies",
+			"breakpoints": true
 		}
 	]
 }

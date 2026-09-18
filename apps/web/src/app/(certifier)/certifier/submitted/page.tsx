@@ -1,16 +1,26 @@
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { PageTitle } from "@bfa-platform/ui/components/page-title";
+
+import { SubmissionsTable } from "@/components/certifier/submissions-table";
 import { requireAccount } from "@/lib/auth";
 
-export default async function Page() {
-	// Gated here, not only in the group's layout. A layout renders once and is
-	// reused across client-side navigations — only the changed page is
-	// re-rendered on the server — so a session that stopped being usable after
-	// the layout ran would sail straight through. `certifiers.status` is
-	// exactly that case: a purveyor can block a certifier who is already
-	// signed in and part-way through a session.
+export default async function Page({
+	searchParams,
+}: {
+	searchParams: Promise<{ submission?: string | string[] }>;
+}) {
 	await requireAccount();
 
+	// `?submission=<id>` opens that record on arrival, the same deep-link
+	// contract `/wp/tests` uses for `?test=`. A repeated param arrives as an
+	// array and is ignored rather than guessed at.
+	const { submission } = await searchParams;
+	const initialSubmissionId =
+		typeof submission === "string" ? submission : undefined;
+
 	return (
-		<PlaceholderPage title="Submitted PDFs" route="/certifier/submitted" />
+		<div className="flex flex-col gap-5">
+			<PageTitle>Submitted PDFs</PageTitle>
+			<SubmissionsTable initialSubmissionId={initialSubmissionId} />
+		</div>
 	);
 }

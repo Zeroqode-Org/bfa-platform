@@ -1,4 +1,6 @@
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { PageTitle } from "@bfa-platform/ui/components/page-title";
+
+import { DraftsTable } from "@/components/certifier/drafts-table";
 import { requireAccount } from "@/lib/auth";
 
 export default async function Page() {
@@ -10,5 +12,10 @@ export default async function Page() {
 	// signed in and part-way through a session.
 	await requireAccount();
 
-	return <PlaceholderPage title="Drafts" route="/certifier/drafts" />;
+	return (
+		<div className="flex flex-col gap-5">
+			<PageTitle>Drafts</PageTitle>
+			<DraftsTable />
+		</div>
+	);
 }

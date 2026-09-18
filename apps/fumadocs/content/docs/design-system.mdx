@@ -58,7 +58,7 @@ Two font families, split by role — not by section:
 
 ## Layout shell
 
-- **Certifier (mobile-first):** phone width uses a bottom tab bar (Dashboard / Profile); desktop width (≥780px) switches to the same 216px left sidebar used by WP/Admin. Content max-width `480px` centered on desktop for forms, full-width for tables.
+- **Certifier (mobile-first):** phone width uses a bottom tab bar (Dashboard / Profile); desktop width (≥780px) switches to the same 216px left sidebar used by WP/Admin. Content max-width `480px` centered on desktop for a single-card form, full-width for tables. **Exception: Profile** (§ 6.3) — its two cards (Contact info, Change password) are left-aligned rather than centered, and each capped at `640px` instead of `480px`, since Contact info pairs its related fields into a two-column grid (`sm:grid-cols-2`, matching the WP customer form's pattern) rather than stacking every field on its own row.
 - **WP / Super-Admin (desktop-oriented):** fixed 216px left sidebar (white, `1px solid #E1E6EA` right border), icon + label nav items, active item gets `#D9F0FC` background + `#0E5A81` text/icon. Top header bar (white, bottom border) shows the current WP/company name and a "Switch role" or contextual action on the right.
 - **Impersonation banner:** full-width `#FEF3C7` bar above the shell, `#92400E` text, with an underlined "Exit impersonation" link — always visible while impersonating, never folded into a menu.
 
