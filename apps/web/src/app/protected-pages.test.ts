@@ -27,12 +27,23 @@ import { describe, expect, it } from "vitest";
 
 const APP = fileURLToPath(new URL(".", import.meta.url));
 
-/** The signed-in route groups, and the gate each one's pages must call. */
-const PROTECTED_GROUPS = {
-	"(certifier)": "requireAccount",
-	"(wp)": "requireAccount",
-	"(admin)": "requireGlobalRole",
-} as const;
+/**
+ * The signed-in route groups, the gate each one's pages must call, and — for a
+ * role-gated group — the exact call. The certifier group is role-gated because
+ * its shell has no impersonation banner: an impersonated WP admin must be sent
+ * to `/wp` rather than drawn inside it.
+ */
+const PROTECTED_GROUPS: Record<string, { gate: string; call?: string }> = {
+	"(certifier)": {
+		gate: "requireGlobalRole",
+		call: 'await requireGlobalRole(["certifier"])',
+	},
+	"(wp)": { gate: "requireAccount" },
+	"(admin)": {
+		gate: "requireGlobalRole",
+		call: 'await requireGlobalRole(["super_admin"])',
+	},
+};
 
 /**
  * Every `page.tsx` under a group, walked by hand rather than globbed — the repo
@@ -59,7 +70,7 @@ function pagesIn(group: string): string[] {
 }
 
 describe("protected pages", () => {
-	for (const [group, gate] of Object.entries(PROTECTED_GROUPS)) {
+	for (const [group, { gate, call }] of Object.entries(PROTECTED_GROUPS)) {
 		describe(group, () => {
 			const pages = pagesIn(group);
 
@@ -78,6 +89,8 @@ describe("protected pages", () => {
 					// Awaited, not called and dropped: the redirect it throws has to
 					// unwind the render.
 					expect(source).toMatch(new RegExp(`await\\s+${gate}\\(`));
+					// A role gate with the wrong role list is no gate at all.
+					if (call) expect(source).toContain(call);
 				});
 			}
 		});
@@ -90,6 +103,7 @@ describe("protected pages", () => {
 			expect(layout).toMatch(
 				/await\s+(requireAccount|requireGlobalRole|requireCaller)\(/,
 			);
+			if (call) expect(layout).toContain(call);
 		});
 	}
 });

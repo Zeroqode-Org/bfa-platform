@@ -292,7 +292,7 @@ describe("sendInvitationEmail", () => {
 			expiresAt: new Date("2026-06-08T00:00:00.000Z"),
 			waterPurveyorName: "Harbor Water Works",
 			associatedWpId: WP_A,
-			invitedByProfileId: "profile-1",
+			actor: { actorId: "profile-1", effectiveProfileId: "profile-1" },
 		});
 
 		const delivery = lines.find(
@@ -329,7 +329,7 @@ describe("sendInvitationEmail", () => {
 			expiresAt: new Date("2026-06-08T00:00:00.000Z"),
 			waterPurveyorName: '<script>alert("x")</script>',
 			associatedWpId: WP_A,
-			invitedByProfileId: "profile-1",
+			actor: { actorId: "profile-1", effectiveProfileId: "profile-1" },
 		});
 
 		const html = String(
@@ -354,7 +354,7 @@ describe("sendInvitationEmail", () => {
 			expiresAt: new Date("2026-06-08T00:00:00.000Z"),
 			waterPurveyorName: null,
 			associatedWpId: null,
-			invitedByProfileId: "profile-1",
+			actor: { actorId: "profile-1", effectiveProfileId: "profile-1" },
 		});
 
 		const delivery = lines.find(

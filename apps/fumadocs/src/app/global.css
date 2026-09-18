@@ -7,6 +7,8 @@ html {
 }
 
 html > body[data-scroll-locked] {
+  /* biome-ignore lint/complexity/noImportantStyles: Override Fumadocs' inline scroll-lock compensation so opening a dialog does not shift the documentation layout. */
   margin-right: 0px !important;
+  /* biome-ignore lint/complexity/noImportantStyles: Keep Fumadocs' scrollbar-size custom property in sync with the intentional zero margin above. */
   --removed-body-scroll-bar-size: 0px !important;
 }

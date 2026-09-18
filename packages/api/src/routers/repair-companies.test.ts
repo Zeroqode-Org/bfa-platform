@@ -363,6 +363,7 @@ describeDb("repair company procedures", () => {
 			expect(entry).toMatchObject({
 				event: "repair_company_created",
 				actor_id: ids.adminA,
+				effective_profile_id: ids.adminA,
 				repair_company_id: created.id,
 				wp_id: wpA,
 			});
@@ -809,6 +810,7 @@ describeDb("repair company procedures", () => {
 				lines.find((line) => line.event === "repair_company_status_changed"),
 			).toMatchObject({
 				actor_id: ids.adminA,
+				effective_profile_id: ids.adminA,
 				repair_company_id: created.id,
 				wp_id: wpA,
 				from: "active",

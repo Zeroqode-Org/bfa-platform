@@ -1,7 +1,7 @@
 import { PageTitle } from "@bfa-platform/ui/components/page-title";
 
 import { DraftsTable } from "@/components/certifier/drafts-table";
-import { requireAccount } from "@/lib/auth";
+import { requireGlobalRole } from "@/lib/auth";
 
 export default async function Page() {
 	// Gated here, not only in the group's layout. A layout renders once and is
@@ -10,7 +10,9 @@ export default async function Page() {
 	// the layout ran would sail straight through. `certifiers.status` is
 	// exactly that case: a purveyor can block a certifier who is already
 	// signed in and part-way through a session.
-	await requireAccount();
+	// Certifiers only — an impersonated WP admin goes to `/wp`, never into the
+	// certifier shell, which carries no impersonation banner.
+	await requireGlobalRole(["certifier"]);
 
 	return (
 		<div className="flex flex-col gap-5">

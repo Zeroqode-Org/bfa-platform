@@ -13,7 +13,15 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { clearImpersonationCookie } from "@/lib/clear-impersonation";
 import { createClient } from "@/lib/supabase/client";
+
+/**
+ * Shown when the password was accepted but the session could not be finished
+ * safely. Says nothing about cookies or impersonation — only what to do.
+ */
+export const SIGN_IN_INCOMPLETE_MESSAGE =
+	"We couldn't finish signing you in. Check your connection and try again.";
 
 /**
  * Minimal email/password sign-in. `createBrowserClient` persists the session in
@@ -60,6 +68,23 @@ export function LoginForm({ redirectTo }: { redirectTo: Route }) {
 
 		if (signInError) {
 			setError(signInError.message);
+			setIsSubmitting(false);
+			return;
+		}
+
+		// Tidy away any impersonation cookie left by an earlier session before
+		// entering the app. This is housekeeping, not what keeps an old
+		// impersonation from resuming: the server binds that cookie to the auth
+		// session it was issued in, and this sign-in has a new one, so the route
+		// gate ignores the cookie regardless (`resolveEffectiveCaller`).
+		//
+		// If the clear did not go through, the form still does not navigate. It
+		// says so and lets the person retry, and drops the new session locally
+		// so a retry starts clean. Neither step is load-bearing for security —
+		// both can fail without an old impersonation coming back.
+		if (!(await clearImpersonationCookie("sign_in"))) {
+			await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+			setError(SIGN_IN_INCOMPLETE_MESSAGE);
 			setIsSubmitting(false);
 			return;
 		}

@@ -8,6 +8,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { router, TRPCError, wpProcedure } from "../index";
+import { auditActor, auditActorFields } from "../lib/audit-actor";
 
 /**
  * The columns the certifiers screen reads. Declared once so the list and the
@@ -212,7 +213,7 @@ export const certifiersRouter = router({
 			console.log(
 				JSON.stringify({
 					event: "certifier_status_changed",
-					actor_id: ctx.caller.profileId,
+					...auditActorFields(auditActor(ctx)),
 					certifier_id: existing.id,
 					wp_id: ctx.caller.waterPurveyorId,
 					from: existing.status,

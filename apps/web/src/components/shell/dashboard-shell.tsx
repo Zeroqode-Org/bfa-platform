@@ -41,7 +41,7 @@ export function DashboardShell({
 }) {
 	return (
 		<div className="flex h-svh flex-col overflow-hidden">
-			<ImpersonationBanner />
+			<ImpersonationBanner impersonation={account.impersonation} />
 			<div className="flex min-h-0 flex-1 bg-background">
 				<SidebarNav
 					variant={variant}
