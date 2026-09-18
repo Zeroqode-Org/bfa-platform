@@ -171,7 +171,10 @@ describe("certifier area gate", () => {
 		});
 
 		for (const [route, Page] of Object.entries(pages)) {
-			expect(await redirectFrom(() => Page()), route).toBeNull();
+			expect(
+				await redirectFrom(() => Page({ searchParams: Promise.resolve({}) })),
+				route,
+			).toBeNull();
 		}
 	});
 
@@ -182,7 +185,10 @@ describe("certifier area gate", () => {
 			"/wp",
 		);
 		for (const [route, Page] of Object.entries(pages)) {
-			expect(await redirectFrom(() => Page()), route).toBe("/wp");
+			expect(
+				await redirectFrom(() => Page({ searchParams: Promise.resolve({}) })),
+				route,
+			).toBe("/wp");
 		}
 	});
 
@@ -206,7 +212,10 @@ describe("certifier area gate", () => {
 			"/wp",
 		);
 		for (const [route, Page] of Object.entries(pages)) {
-			expect(await redirectFrom(() => Page()), route).toBe("/wp");
+			expect(
+				await redirectFrom(() => Page({ searchParams: Promise.resolve({}) })),
+				route,
+			).toBe("/wp");
 		}
 		// The gate read the impersonation cookie through the shared helper — the
 		// redirect is decided by the effective role, not the Super-Admin's own.

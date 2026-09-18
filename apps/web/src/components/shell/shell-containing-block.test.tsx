@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -50,6 +51,13 @@ function Page() {
 	);
 }
 
+function withQueryClient(ui: React.ReactNode) {
+	const queryClient = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	return <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>;
+}
+
 afterEach(() => {
 	cleanup();
 });
@@ -66,11 +74,12 @@ describe("shell scroll container", () => {
 		],
 		[
 			"CertifierShell",
-			() => (
-				<CertifierShell account={account}>
-					<Page />
-				</CertifierShell>
-			),
+			() =>
+				withQueryClient(
+					<CertifierShell account={account}>
+						<Page />
+					</CertifierShell>,
+				),
 		],
 	])(
 		"%s contains absolutely positioned page content in <main>",

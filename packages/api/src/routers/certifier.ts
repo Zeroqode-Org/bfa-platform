@@ -11,6 +11,11 @@ import { and, asc, count, desc, eq, type SQL } from "drizzle-orm";
 
 import { certifierProcedure, router, TRPCError } from "../index";
 import {
+	type AuditActor,
+	auditActor,
+	auditActorFields,
+} from "../lib/audit-actor";
+import {
 	draftIdInput,
 	listDraftsInput,
 	listSubmissionsInput,
@@ -161,7 +166,7 @@ export const certifierRouter = router({
 			if (!row) throw notFound();
 
 			logCertifierEvent("draft_deleted", {
-				actorId: ctx.caller.profileId,
+				actor: auditActor(ctx),
 				certifierId: ctx.caller.certifierId,
 				extra: { submission_id: row.id },
 			});
@@ -235,7 +240,7 @@ export const certifierRouter = router({
 			});
 
 			logCertifierEvent("profile_updated", {
-				actorId: profileId,
+				actor: auditActor(ctx),
 				certifierId,
 				extra: { changed_fields: changed },
 			});
@@ -411,11 +416,11 @@ async function readOwnProfile(profileId: string) {
 function logCertifierEvent(
 	event: string,
 	{
-		actorId,
+		actor,
 		certifierId,
 		extra,
 	}: {
-		actorId: string;
+		actor: AuditActor;
 		certifierId: string;
 		extra?: Record<string, unknown>;
 	},
@@ -423,7 +428,7 @@ function logCertifierEvent(
 	console.log(
 		JSON.stringify({
 			event,
-			actor_id: actorId,
+			...auditActorFields(actor),
 			certifier_id: certifierId,
 			...extra,
 			timestamp: new Date().toISOString(),
