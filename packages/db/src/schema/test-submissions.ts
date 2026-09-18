@@ -95,7 +95,7 @@ export const testSubmissions = pgTable(
 			table.certifierId,
 			table.status,
 			table.testDate.desc().nullsLast(),
-			 table.createdAt.desc(),
+			table.createdAt.desc(),
 		),
 		// One asset's submitted, resulted history in submission-event order — the
 		// shape the fail list and the failure-notice handler both walk: "the fails

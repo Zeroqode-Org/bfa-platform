@@ -775,7 +775,12 @@ for the other. `packages/db/src/scheduled-jobs-rls.test.ts` covers the second.
 | `packages/db/src/scheduled-jobs-rls.test.ts` | the row policies: cross-tenant reads (failure-notice rows and their `test_submission_id` included), a certifier, a blocked admin, and every write path refused for want of the privilege |
 
 The unit suites run under `npm test`. The database-backed ones write real rows
-and run under `npm run test:db`.
+and run under `npm run test:db` — which requires a dedicated
+`TEST_DATABASE_URL` and refuses the development database, precisely because
+this scheduler is the reason a shared one is unusable for tests: a dev server
+ticking `SCHEDULER_ENABLED=true` claims due jobs (test fixtures included) and
+recomputes `asset_status` table-wide while suites run. See
+[Database Baseline & Test Isolation](/docs/database-baseline).
 
 ## Remaining product decisions
 
