@@ -173,41 +173,126 @@ anything.
 status is `pending` or `running`. Two pending reminders for one asset are not two
 reminders — they are two copies of the same one, and they would both fire; two
 clerks saving a date change at the same instant is enough to create them. The
-index makes that unrepresentable and gives the reconciler an `ON CONFLICT` target,
-so scheduling is an upsert rather than a read-then-write race.
+index makes that unrepresentable. It is also the `ON CONFLICT` target that makes
+scheduling a stage's successor an upsert, so a retried completion cannot queue it
+twice.
 
 It is partial on two counts: on the non-terminal statuses, so a completed
 reminder and next cycle's pending one coexist; and on `bfa_asset_id is not null`,
 so the customer-scoped `ag_renewal` job of Workflow 2 is not squeezed into an
 asset-shaped rule.
 
-### Idempotency — why `sent_at` is written *before* the send
+### Delivery guarantee — provider idempotency keys
 
-An email is not enrollable in a Postgres transaction, so one of the two possible
-orders has to lose something when a process dies between marking and sending:
+An email cannot join a Postgres transaction, so the database alone cannot know
+whether a request the process sent just before dying was accepted. The pipeline
+therefore does not try to know. It asks the provider again, in a way the
+provider guarantees is safe to repeat.
 
-- **send, then mark** loses uniqueness — a crash in the window re-queues a job
-  whose mail already went out, and the customer receives a second overdue warning
-  in the purveyor's name;
-- **mark, then send** loses at most one notice out of a chain of four that
-  continues regardless.
+**The mechanism.** Resend de-duplicates `POST /emails` requests that carry the
+same `Idempotency-Key` header for 24 hours: a repeat returns the *original* email
+id and sends nothing, and a repeat whose payload differs is refused with 409
+`invalid_idempotent_request`. The installed SDK (`resend` 6.28.0) exposes it as
+the `idempotencyKey` option on `emails.send`, which sets that header.
+`providerDriver` passes it through; nothing in the notice handler calls Resend.
 
-The second is the smaller harm, so the handler claims the send with
+**How the handler uses it** (`0013_scheduled_job_delivery_outcome`):
 
-```
-update scheduled_jobs set sent_at = now() where id = $1 and sent_at is null
-```
+1. **One key per job.** `bfa-notice/<scheduled_jobs.id>`. A job row is one stage
+   of one assembly's chain in one cycle, so its key names exactly one email. A
+   date change creates a new row, and therefore a new key.
+2. **Freeze the whole request, then send.** Everything Resend sees in the
+   request body is written to `delivery_payload` once, with
+   `delivery_attempted_at`, before the first provider call:
 
-and sends only if that statement matched a row. A crash after the send leaves the
-marker set, so the retry skips the send and carries on to scheduling the
-successor. A send the provider *refuses* clears the marker again before the error
-propagates, so a genuine delivery failure still retries — `providerDriver` turns
-a Resend error and a response with no id into thrown errors precisely so that
-distinction is available.
+   | Body field | Source at the first attempt |
+   |---|---|
+   | `to`, `subject`, `html`, `tags` | rendered from the template and the asset's current customer |
+   | `from`, `replyTo` | the provider's configured sender (`RESEND_FROM_EMAIL`, `RESEND_REPLY_TO`), read once through `resolveSenderIdentity` |
 
-The consequence is stated rather than hidden: a process killed between the marker
-and the send loses that one notice. The chain still advances and the customer
-still hears from the purveyor at the next stage.
+   Every retry sends exactly that stored body. Nothing is re-rendered and
+   nothing is re-read from the environment: a template edited, a customer
+   reassigned, **or the sender variables rotated** between attempts would each
+   change the body, and the provider would refuse the key with 409 instead of
+   returning the original id. The sender travels to the driver as
+   `EmailMessage.sender`; `providerDriver` uses it in place of the environment
+   only when it is present, so ordinary mail — invitations, broadcasts — still
+   sends as the current configuration.
+
+   Every payload this version freezes has a `sender` key, in one of two forms:
+   `{ from, replyTo }` for the provider driver, or an explicit `null` for a
+   driver with no sender to pin (the console driver), which is safe to replay.
+   A payload with **no `sender` key at all** is something else — see
+   [legacy payloads](#legacy-payloads-without-a-frozen-sender). The handler tells
+   the three apart by whether the key is present, never by treating absent as
+   `null`.
+3. **Record only what the provider confirmed.** `provider_message_id` and
+   `delivered_at` are written after the provider answers with an id, and only
+   then. The frozen payload is cleared in the same statement.
+4. **Advance only after the record is durable.** The next stage is scheduled in
+   the completion transaction, which runs after the delivery record has
+   committed.
+
+**What that gives, crash by crash:**
+
+| The process dies… | On restart | Result |
+|---|---|---|
+| before the payload is frozen | nothing was attempted; the job is retried from the start | one email |
+| after freezing, before the request leaves | the retry sends the frozen body with the job's key; the provider has never seen it | one email |
+| after the provider accepted, before its answer was recorded | the retry sends the identical body — sender included — with the same key; the provider returns the original id and sends nothing | **one email** |
+| after the answer was recorded, before completion | `provider_message_id` is on the row; the retry sends nothing and completes | one email, one successor |
+
+A **refusal** — the provider throws, or returns no id — records nothing, keeps the
+payload frozen, and puts the job back on the retry schedule with no successor.
+The next attempt uses the same key.
+
+**The one bound, stated.** The provider's window is 24 hours. A retry after that
+could not be de-duplicated, and the outcome of the first attempt could no longer
+be learned. The handler does not guess either way: if a job's first attempt is
+more than 23 hours old (an hour's margin for clock skew) and no outcome is
+recorded, the job is marked `failed` with *"delivery outcome unknown"*, a
+`scheduler_delivery_unconfirmed` line is logged with the idempotency key, and no
+next stage is scheduled. Ordinary retries finish in about a quarter of an hour;
+this is reached only if the process is down for most of a day between an attempt
+and its retry. It is a visible row for a person to check against the provider's
+log, not a silent loss and not a silent duplicate.
+
+#### Legacy payloads without a frozen sender
+
+A job frozen by the earlier version of this handler stored the content but not
+the sender: its `delivery_payload` has no `sender` key. The `from` and `replyTo`
+of its first provider request were read from `RESEND_FROM_EMAIL` and
+`RESEND_REPLY_TO` at the time and never recorded, so that request body **cannot
+be rebuilt**. If the provider accepted it and the answer was lost, a replay
+would either carry the current sender — a different body under the same key,
+refused with 409 if the variables have changed — or a guess. Neither is a safe
+retry, and this does not depend on age: such a row is unsafe to replay a minute
+after its attempt, not only after 24 hours.
+
+So when the handler finds an unsettled legacy payload (no `provider_message_id`,
+no `sender` key), it:
+
+- makes **no provider call**;
+- marks the `running` job `failed` with *"delivery outcome unknown"* and a
+  reason naming the missing sender identity;
+- logs `scheduler_delivery_unconfirmed` with the job id, the idempotency key and
+  `cause: "legacy_sender_not_frozen"`;
+- schedules **no next stage** — the same rule as any unconfirmed delivery.
+
+A person can check the provider's log for that idempotency key and resend if
+nothing went out. Legacy rows already settled (`provider_message_id` recorded)
+are unaffected: they have nothing left to send.
+
+**After an attempt, recipient and sender are fixed.** Once a payload is frozen,
+the attempt is settled by replaying it to the customer it was rendered for, from
+the sender it was first sent as. A reassignment or a sender change made in
+between takes effect from the next stage — a new job, a new key, a new body. The asset, the
+feature flag and cancellation are still checked on every pass, so a passing test
+or a switched-off flag still stops a retry.
+
+**The console driver** honours the key the same way within its own process, so
+local development and the test suite exercise the same retry path without a
+provider account.
 
 ### Retries
 
@@ -415,20 +500,34 @@ was never registered.
 | Mutation | What happens |
 |---|---|
 | `assets.createAsset` | schedules the reminder for the new asset's annual test date |
-| `assets.updateAsset` | on a **changed** `annual_test_date`: cancels the obsolete late stages and rewrites the reminder from the new date |
+| `assets.updateAsset` | on a **changed** `annual_test_date`: cancels every live stage — the reminder included, `pending` or `running` — and inserts one fresh reminder for the new date |
 | `assets.assignCustomer` | on an **active** customer: resumes the waiting stage |
 | `submittedTests.updateSubmittedTest` | on a submitted passing test: cancels every remaining stage |
 | `submittedTests.linkSubmissionAsset` | on a submitted passing test: cancels every remaining stage |
 
 ### Correcting the date reschedules the chain
 
-Every stage hangs off one date, so a pending late notice computed from the old
-one is not merely early or late — it is a notice about a deadline that no longer
-exists. On a date change the late stages are cancelled with the reason recorded,
-and the reminder is rewritten in place for the new date (one write rather than a
-cancel-and-insert pair, which keeps the row's history readable). If the previous
-reminder already completed, a fresh one is inserted — the old row is not in the
-live-job index.
+Every stage hangs off one date, so any live job computed from the old one is a
+notice about a deadline that no longer exists. On a date change **every** live
+stage is cancelled with the reason recorded — the reminder included, whether it
+is `pending` or already `running` — and exactly one fresh reminder is inserted for
+the new date.
+
+The `running` case is the one that matters. A reminder the loop has already
+claimed may be mid-send; a running row is deliberately never rewritten, so the
+only way to stop it is to cancel it. Its handler then finds the row taken: if it
+had not sent yet it sends nothing, and if the email was already in flight the
+provider's answer is still recorded as the fact it is — but the completion is
+refused and **no late notice is scheduled from the old date**.
+
+The replacement is a new row with a new id, and therefore a new provider
+idempotency key, so it can never be mistaken for an attempt made against the old
+date.
+
+A date change and a handler finishing a stage serialise on the asset's row lock
+(`lockAssetForChain`), as does a passing test. Without it a date change could
+commit while a handler's successor insert was still invisible to it, and that
+successor would survive, computed from the old date.
 
 The reminder is scheduled **even when its day is already in the past**. That is
 what makes a purveyor who registers a long-overdue assembly get the escalation
@@ -441,10 +540,11 @@ past-due asset*.
 
 Reconciliation is guarded twice. The mutations only reconcile when
 `annual_test_date` actually moved, so correcting a service address does not touch
-the schedule; and the upsert itself refuses a row that already carries the same
-`run_at`, so a redundant reconciliation writes nothing, moves no `updated_at` and
-emits no scheduling line. The same rule the asset and template mutations follow
-for a save that changes nothing.
+the schedule; and the reconciler itself returns without writing when the chain is
+already exactly one live reminder at the target `run_at`, so a redundant
+reconciliation cancels nothing, inserts nothing, moves no `updated_at` and emits
+no scheduling line. The same rule the asset and template mutations follow for a
+save that changes nothing.
 
 ### A passing test ends the chain
 
@@ -504,8 +604,9 @@ The event names are a closed list in `scheduler/logging.ts`:
 
 | Event | Meaning |
 |---|---|
-| `scheduler_job_scheduled` | a stage that had no job now has one |
-| `scheduler_job_rescheduled` | an existing pending job's `run_at` moved |
+| `scheduler_job_scheduled` | a new asset's reminder, or a date change's replacement reminder |
+| `scheduler_delivery_recorded` | the provider confirmed the email — job id, idempotency key, provider message id, `delivery_pass`; no address or body |
+| `scheduler_delivery_unconfirmed` | the first attempt cannot be safely replayed — past the provider's idempotency window (`cause: "idempotency_window_expired"`), or a legacy payload with no frozen sender (`cause: "legacy_sender_not_frozen"`); failed for a person to check. Terminal |
 | `scheduler_job_cancelled` | withdrawn: passing test, changed date, flag off, gone asset |
 | `scheduler_job_resumed` | a held, already-due stage pulled forward |
 | `scheduler_job_claimed` | the loop took ownership |
@@ -557,7 +658,8 @@ for the other. `packages/db/src/scheduled-jobs-rls.test.ts` covers the second.
 | `packages/api/src/lib/honolulu-dates.test.ts` | the Honolulu day boundary, the 10:00 UTC day start, day and month arithmetic, the end-of-month clamp, validation |
 | `packages/api/src/lib/notice-schedule.test.ts` | the four stage days and instants, the interval constants, the successor chain, every `asset_status` boundary |
 | `packages/api/src/lib/notice-defaults.test.ts` | the certifier block's lines, and the empty case that omits the heading |
-| `packages/api/src/scheduler/notice-workflow.db.test.ts` | the workflow against real Postgres — scheduling and reconciliation, the flag at execution, recipient routing after a reassignment, cross-tenant refusal, hold and resume, certifier filtering, customized and fallback templates, escaping, one successor per stage, passing-test cancellation, retries, restart recovery, concurrent claim, idempotency, the live-job constraint, and `asset_status` |
+| `packages/api/src/scheduler/notice-workflow.db.test.ts` | the workflow against real Postgres — scheduling and reconciliation, the flag at execution, recipient routing after a reassignment, cross-tenant refusal, hold and resume, certifier filtering, customized and fallback templates, escaping, one successor per stage, passing-test cancellation, a running reminder withdrawn by a date change, retries, restart recovery, concurrent claim, the live-job constraint, `asset_status` — and delivery: a stand-in provider implementing Resend's idempotency contract over the full request body (sender included) proves one email and one successor across a crash after acceptance, the same after the configured sender changed between attempts, a legacy payload with no `sender` key failed without a provider call, an explicit `null` sender still retried through the console driver, a refusal that stays retryable with no successor, a recorded outcome, no re-send on a later tick, and an explicit failure past the 24-hour window |
+| `packages/api/src/lib/email.test.ts` | a pinned sender reaching Resend in place of the environment's, ordinary mail still sending as the configured sender, the sender never logged; the key reaching Resend as the SDK's `idempotencyKey` option (and unkeyed mail unchanged), the key on the attempt log line, and the console driver's per-key de-duplication |
 | `packages/db/src/scheduled-jobs-rls.test.ts` | the row policies: cross-tenant reads, a certifier, a blocked admin, and every write path refused for want of the privilege |
 
 The first three run under `npm test`. The last two write real rows and run under
@@ -574,7 +676,8 @@ The first three run under `npm test`. The last two write real rows and run under
   at the reminder means no late notices for that cycle. The alternative — advance
   the chain anyway so the escalation is not lost — is one branch in
   `recordJobFailure`'s caller, and it trades a visible `failed` row for a
-  customer who is escalated past a notice they never received.
+  customer who is escalated past a notice they never received. The same rule
+  applies to a *delivery outcome unknown* failure past the provider's window.
 - **Customer-facing copy for the four platform defaults.** Still provisional in
   `lib/notice-defaults.ts`, and still blocking a production release of this
   workflow. It now includes the certifier-block heading.

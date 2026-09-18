@@ -17,7 +17,7 @@ import {
 	it,
 	vi,
 } from "vitest";
-
+import type { EmailDriver } from "../lib/email";
 import {
 	addCalendarDays,
 	addCalendarMonths,
@@ -58,8 +58,9 @@ let reconcileAssetNoticeChain: typeof import("./notice-chain")["reconcileAssetNo
  * Postgres.
  *
  * Almost nothing here can be tested any other way. What the feature promises is
- * a sequence of conditional writes (`pending → running` claimed once, `sent_at`
- * claimed once, a completion that refuses a cancelled row) and a set of reads
+ * a sequence of conditional writes (`pending → running` claimed once, a payload
+ * frozen once, a delivery recorded only from the provider's answer, a completion
+ * that refuses a cancelled row) and a set of reads
  * resolved *at send time* against whatever the asset looks like then. A test
  * with a mocked database would assert that this file's own queries were called,
  * which is the one thing that is not in doubt.
@@ -231,10 +232,16 @@ async function jobsFor(assetId: string) {
 		run_at: Date;
 		attempts: number;
 		last_error: string | null;
-		sent_at: Date | null;
+		delivery_payload: Record<string, unknown> | null;
+		delivery_attempted_at: Date | null;
+		provider_message_id: string | null;
+		delivered_at: Date | null;
 		completed_at: Date | null;
+		updated_at: Date;
 	}>(
-		`select id, job_type, status, run_at, attempts, last_error, sent_at, completed_at
+		`select id, job_type, status, run_at, attempts, last_error,
+		        delivery_payload, delivery_attempted_at, provider_message_id,
+		        delivered_at, completed_at, updated_at
 		   from scheduled_jobs where bfa_asset_id = $1
 		  order by created_at, job_type`,
 		[assetId],
@@ -262,7 +269,21 @@ async function liveJobFor(assetId: string) {
  * due job. The atomic claim has tests of its own further down — this helper is
  * about the handler.
  */
-async function runStage(assetId: string, { now = new Date() } = {}) {
+async function runStage(
+	assetId: string,
+	{ now = new Date(), driver }: { now?: Date; driver?: EmailDriver } = {},
+) {
+	const job = await claimLive(assetId);
+	const outcome = await runNoticeJob(job, job.jobType as NoticeType, {
+		now,
+		driver,
+	});
+
+	return { job, outcome };
+}
+
+/** Moves the asset's one live job to `running`, as the loop's claim would. */
+async function claimLive(assetId: string): Promise<ScheduledJob> {
 	const live = await liveJobFor(assetId);
 
 	const [claimed] = await db
@@ -275,10 +296,96 @@ async function runStage(assetId: string, { now = new Date() } = {}) {
 
 	expect(claimed).toBeDefined();
 
-	const job = claimed as ScheduledJob;
-	const outcome = await runNoticeJob(job, job.jobType as NoticeType, { now });
+	return claimed as ScheduledJob;
+}
 
-	return { job, outcome };
+/**
+ * A stand-in for the email provider that implements its documented idempotency
+ * contract: a repeated `Idempotency-Key` returns the original id and sends
+ * nothing; a repeated key with a different payload is refused (Resend's 409
+ * `invalid_idempotent_request`).
+ *
+ * `acceptThenLoseResponse` models the case the fix exists for: the provider
+ * accepts and sends, and the answer never reaches us — a crash, a timeout, a
+ * dropped connection. From the handler's side that is indistinguishable from a
+ * process dying between acceptance and recording the result.
+ *
+ * It builds the request body the way `providerDriver` does: `from` and
+ * `replyTo` come from the message's pinned `sender` when there is one, and from
+ * `state.sender` — its current "configuration" — when there is not. The
+ * comparison covers that whole body, so a retry that re-read a changed sender
+ * is refused exactly as Resend would refuse it.
+ */
+function fakeProvider() {
+	const sent = new Map<string, { id: string; body: string }>();
+	const calls: {
+		key: string | undefined;
+		to: string;
+		from: string;
+		replyTo: string;
+	}[] = [];
+	const state = {
+		refuse: false,
+		acceptThenLoseResponse: false,
+		sender: {
+			from: "Kalani Notices <notices@kalani.example>",
+			replyTo: "office@kalani.example",
+		},
+	};
+
+	const driver: EmailDriver = {
+		name: "provider",
+		async senderIdentity() {
+			return { ...state.sender };
+		},
+		async send(message) {
+			const { from, replyTo } = message.sender ?? state.sender;
+			calls.push({
+				key: message.idempotencyKey,
+				to: message.to,
+				from,
+				replyTo,
+			});
+
+			if (state.refuse) throw new Error("Resend refused the send (503)");
+
+			// The provider-visible body, in full.
+			const body = JSON.stringify({
+				from,
+				replyTo,
+				to: message.to,
+				subject: message.subject,
+				html: message.html,
+				tags: message.tags,
+			});
+			const key = message.idempotencyKey ?? `unkeyed-${calls.length}`;
+			const previous = sent.get(key);
+
+			if (previous && previous.body !== body) {
+				throw new Error("409 invalid_idempotent_request");
+			}
+
+			const id = previous?.id ?? `re_${randomUUID()}`;
+			if (!previous) sent.set(key, { id, body });
+
+			if (state.acceptThenLoseResponse) {
+				throw new Error("socket hang up after the provider accepted");
+			}
+
+			return { id, driver: "provider" };
+		},
+	};
+
+	return {
+		driver,
+		state,
+		calls,
+		/** Emails actually sent, which is what a customer's inbox would show. */
+		emailsSent: () => sent.size,
+		keys: () => [...new Set(calls.map((call) => call.key))],
+		/** The id the provider assigned when it first accepted `key`. */
+		idFor: (key: string) => sent.get(key)?.id,
+	};
 }
 
 describeDb("Workflow 1 — reminder and escalating late notices", () => {
@@ -559,11 +666,12 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			expect(rows.map((row) => row.job_type)).toEqual(["reminder"]);
 		});
 
-		it("moves the reminder when the annual test date is corrected, without leaving a second one", async () => {
+		it("replaces the reminder when the annual test date is corrected, leaving exactly one live", async () => {
 			const caller = callerFor(ids.adminA);
 			const asset = await caller.assets.createAsset(
 				newAsset({ annualTestDate: futureDate }),
 			);
+			const original = await liveJobFor(asset.id);
 			const corrected = addCalendarDays(futureDate, 20);
 
 			const lines = captureLogs();
@@ -572,13 +680,114 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			);
 
 			const rows = await jobsFor(asset.id);
+			const live = rows.filter((row) => row.status === "pending");
 
-			expect(rows).toHaveLength(1);
-			expect(rows[0]?.status).toBe("pending");
-			expect(rows[0]?.run_at.toISOString()).toBe(
+			// The old row is withdrawn, not rewritten; one fresh reminder replaces it.
+			expect(rows.find((row) => row.id === original.id)?.status).toBe(
+				"cancelled",
+			);
+			expect(live).toHaveLength(1);
+			expect(live[0]?.id).not.toBe(original.id);
+			expect(live[0]?.job_type).toBe("reminder");
+			expect(live[0]?.run_at.toISOString()).toBe(
 				noticeRunAt(corrected, "reminder").toISOString(),
 			);
-			expect(eventsNamed(lines, "scheduler_job_rescheduled")).toHaveLength(1);
+			expect(eventsNamed(lines, "scheduler_job_cancelled")).toHaveLength(1);
+			expect(eventsNamed(lines, "scheduler_job_scheduled")).toHaveLength(1);
+		});
+
+		it("withdraws a reminder that is already running when the date changes, and its handler cannot finish it", async () => {
+			const caller = callerFor(ids.adminA);
+			const asset = await caller.assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+
+			// 1. The reminder has been claimed by the loop and is mid-flight.
+			const running = await claimLive(asset.id);
+			expect(running.jobType).toBe("reminder");
+
+			// 2. The purveyor corrects the annual test date.
+			await caller.assets.updateAsset(
+				asUpdate(asset, { annualTestDate: futureDate }),
+			);
+
+			const rows = await jobsFor(asset.id);
+
+			// 3. The running reminder is cancelled, not left to send on the old date.
+			const old = rows.find((row) => row.id === running.id);
+			expect(old?.status).toBe("cancelled");
+			expect(old?.last_error).toMatch(/annual test date changed/i);
+
+			// 4. Exactly one new pending reminder, computed from the new date.
+			const live = rows.filter(
+				(row) => row.status === "pending" || row.status === "running",
+			);
+			expect(live).toHaveLength(1);
+			expect(live[0]?.job_type).toBe("reminder");
+			expect(live[0]?.status).toBe("pending");
+			expect(live[0]?.run_at.toISOString()).toBe(
+				noticeRunAt(futureDate, "reminder").toISOString(),
+			);
+
+			// 5. The old handler carries on and reaches its completion — which is
+			// refused, so it schedules no late notice from the old date.
+			const provider = fakeProvider();
+			const lines = captureLogs();
+			const outcome = await runNoticeJob(running, "reminder", {
+				driver: provider.driver,
+			});
+
+			expect(outcome).toMatchObject({ kind: "superseded" });
+			expect(provider.emailsSent()).toBe(0);
+
+			const after = await jobsFor(asset.id);
+			expect(after.filter((row) => row.job_type !== "reminder")).toEqual([]);
+			expect(after.find((row) => row.id === running.id)?.status).toBe(
+				"cancelled",
+			);
+			expect(eventsNamed(lines, "scheduler_job_scheduled")).toHaveLength(0);
+		});
+
+		it("refuses to schedule a successor for a stage whose send was already in flight when the date changed", async () => {
+			const caller = callerFor(ids.adminA);
+			const asset = await caller.assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			const running = await claimLive(asset.id);
+
+			// The date changes while the provider is still answering: the handler
+			// has already passed its checks and is inside the send.
+			const provider = fakeProvider();
+			const inFlight: EmailDriver = {
+				name: "provider",
+				async send(message) {
+					await caller.assets.updateAsset(
+						asUpdate(asset, { annualTestDate: futureDate }),
+					);
+					return provider.driver.send(message);
+				},
+			};
+
+			const outcome = await runNoticeJob(running, "reminder", {
+				driver: inFlight,
+			});
+
+			// The email that was already in flight is recorded as the fact it is…
+			expect(outcome).toMatchObject({ kind: "superseded" });
+			const after = await jobsFor(asset.id);
+			const old = after.find((row) => row.id === running.id);
+			expect(old?.status).toBe("cancelled");
+			expect(old?.provider_message_id).not.toBeNull();
+
+			// …but it does not advance the chain computed from the old date.
+			expect(after.filter((row) => row.job_type === "late_notice_1")).toEqual(
+				[],
+			);
+			const live = after.filter((row) => row.status === "pending");
+			expect(live).toHaveLength(1);
+			expect(live[0]?.run_at.toISOString()).toBe(
+				noticeRunAt(futureDate, "reminder").toISOString(),
+			);
 		});
 
 		it("cancels an obsolete late notice and reschedules from the new date", async () => {
@@ -628,8 +837,9 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 
 			const after = await jobsFor(asset.id);
 
+			// Same rows, same `updated_at`, no scheduling lines.
 			expect(after).toEqual(before);
-			expect(eventsNamed(lines, "scheduler_job_rescheduled")).toHaveLength(0);
+			expect(eventsNamed(lines, "scheduler_job_cancelled")).toHaveLength(0);
 			expect(eventsNamed(lines, "scheduler_job_scheduled")).toHaveLength(0);
 		});
 
@@ -648,7 +858,8 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			});
 
 			expect(await jobsFor(asset.id)).toEqual(before);
-			expect(eventsNamed(lines, "scheduler_job_rescheduled")).toHaveLength(0);
+			expect(eventsNamed(lines, "scheduler_job_cancelled")).toHaveLength(0);
+			expect(eventsNamed(lines, "scheduler_job_scheduled")).toHaveLength(0);
 		});
 
 		it("withdraws the chain for an asset with no annual test date", async () => {
@@ -795,7 +1006,10 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			expect(rows[0]?.last_error).toMatch(/nobody to write to/i);
 			// A hold is not a failure, so no attempt is consumed.
 			expect(rows[0]?.attempts).toBe(0);
-			expect(rows[0]?.sent_at).toBeNull();
+			// Nothing was attempted, so nothing is frozen and nothing is recorded.
+			expect(rows[0]?.delivery_payload).toBeNull();
+			expect(rows[0]?.delivery_attempted_at).toBeNull();
+			expect(rows[0]?.provider_message_id).toBeNull();
 		});
 
 		it("holds for a suspended customer", async () => {
@@ -1321,18 +1535,18 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 	});
 
 	describe("retries, recovery, concurrency and idempotency", () => {
-		/**
-		 * Makes every send fail the way a refused provider call does.
-		 *
-		 * `resolveEmailDriver` throws on an unknown `EMAIL_DRIVER`, and it is
-		 * evaluated inside `sendEmail`, so this produces a real thrown delivery
-		 * failure through the real code path rather than a mocked module.
-		 */
 		/** An instant far enough ahead that a row claimed now reads as abandoned. */
 		function afterStaleWindow() {
 			return new Date(Date.now() + STALE_RUNNING_AFTER_MS + 60_000);
 		}
 
+		/**
+		 * Makes every send fail the way a misconfigured driver does.
+		 *
+		 * `resolveEmailDriver` throws on an unknown `EMAIL_DRIVER`, and it is
+		 * evaluated inside `sendEmail`, so this produces a real thrown delivery
+		 * failure through the real code path rather than a mocked module.
+		 */
 		async function withBrokenDelivery<T>(fn: () => Promise<T>): Promise<T> {
 			const previous = process.env.EMAIL_DRIVER;
 			process.env.EMAIL_DRIVER = "wf1-broken-driver";
@@ -1345,32 +1559,444 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			}
 		}
 
-		it("retries a refused delivery with a backoff, and releases the send claim", async () => {
+		it("keeps a refused delivery retryable, records no outcome, and schedules no next stage", async () => {
 			const asset = await callerFor(ids.adminA).assets.createAsset(
 				newAsset({ currentCustomerId: customerIds.primary }),
 			);
 			const live = await liveJobFor(asset.id);
+			const provider = fakeProvider();
+			provider.state.refuse = true;
 
 			const lines = captureLogs();
-			await withBrokenDelivery(() => runSchedulerTick({ limit: 50 }));
+			await runSchedulerTick({ limit: 50, driver: provider.driver });
 
-			const [row] = (await jobsFor(asset.id)).filter(
-				(candidate) => candidate.id === live.id,
-			);
+			const rows = await jobsFor(asset.id);
+			const row = rows.find((candidate) => candidate.id === live.id);
 
 			expect(row?.status).toBe("pending");
 			expect(row?.attempts).toBe(1);
-			expect(row?.last_error).toMatch(/EMAIL_DRIVER/i);
-			// The claim is given back, because nothing was accepted — otherwise the
-			// retry would skip the send forever.
-			expect(row?.sent_at).toBeNull();
+			expect(row?.last_error).toMatch(/refused/i);
 			expect(row?.run_at.getTime()).toBeGreaterThan(Date.now());
+			// No confirmed outcome, so nothing claims one…
+			expect(row?.provider_message_id).toBeNull();
+			expect(row?.delivered_at).toBeNull();
+			// …the payload stays frozen, so the retry replays it under the same key…
+			expect(row?.delivery_payload).not.toBeNull();
+			expect(row?.delivery_attempted_at).not.toBeNull();
+			// …and the chain does not advance past an unconfirmed notice.
+			expect(rows.filter((r) => r.job_type === "late_notice_1")).toEqual([]);
 
 			const retrying = eventsNamed(lines, "scheduler_job_retrying").filter(
 				(line) => line.job_id === live.id,
 			);
 			expect(retrying).toHaveLength(1);
 			expect(retrying[0]).toMatchObject({ attempts: 1 });
+
+			// The provider recovers: the retry sends once, under the original key.
+			provider.state.refuse = false;
+			await pool.query(
+				"update scheduled_jobs set run_at = now() - interval '1 minute' where id = $1",
+				[live.id],
+			);
+			await runSchedulerTick({ limit: 50, driver: provider.driver });
+
+			const keysForJob = provider.calls
+				.map((call) => call.key)
+				.filter((key) => key?.endsWith(live.id));
+			expect(new Set(keysForJob).size).toBe(1);
+			expect(
+				(await jobsFor(asset.id)).find((r) => r.id === live.id)?.status,
+			).toBe("completed");
+		});
+
+		it("records the provider's message id and completes the job on a successful send", async () => {
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			const provider = fakeProvider();
+
+			const lines = captureLogs();
+			const { job, outcome } = await runStage(asset.id, {
+				driver: provider.driver,
+			});
+
+			const row = (await jobsFor(asset.id)).find((r) => r.id === job.id);
+
+			expect(outcome).toMatchObject({
+				kind: "sent",
+				deliveryPass: "first_attempt",
+			});
+			expect(row?.status).toBe("completed");
+			expect(row?.provider_message_id).toMatch(/^re_/);
+			expect(row?.delivered_at).not.toBeNull();
+			// Settled, so the rendered message is no longer kept at rest.
+			expect(row?.delivery_payload).toBeNull();
+			expect(provider.calls[0]?.key).toBe(`bfa-notice/${job.id}`);
+
+			// The delivery line ties job, key and provider id together, and carries
+			// no address or message body.
+			const recorded = eventsNamed(lines, "scheduler_delivery_recorded");
+			expect(recorded).toHaveLength(1);
+			expect(recorded[0]).toMatchObject({
+				job_id: job.id,
+				idempotency_key: `bfa-notice/${job.id}`,
+				provider_message_id: row?.provider_message_id,
+				delivery_pass: "first_attempt",
+			});
+			expect(JSON.stringify(recorded[0])).not.toContain(
+				"wf1-marta@example.com",
+			);
+			expect(
+				eventsNamed(lines, "email_send_attempted").find(
+					(line) => line.idempotency_key === `bfa-notice/${job.id}`,
+				),
+			).toMatchObject({ email_id: row?.provider_message_id, status: "sent" });
+		});
+
+		it("does not send again when the scheduler runs after a successful delivery", async () => {
+			// Due ten days out: the reminder is already due, late notice 1 is not,
+			// so a second tick has nothing of this asset's to claim.
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({
+					currentCustomerId: customerIds.primary,
+					annualTestDate: addCalendarDays(today, 10),
+				}),
+			);
+			const reminder = await liveJobFor(asset.id);
+			const provider = fakeProvider();
+			const key = `bfa-notice/${reminder.id}`;
+
+			await runSchedulerTick({ limit: 50, driver: provider.driver });
+			await runSchedulerTick({ limit: 50, driver: provider.driver });
+			await runSchedulerTick({ limit: 50, driver: provider.driver });
+
+			expect(provider.calls.filter((call) => call.key === key)).toHaveLength(1);
+			const rows = await jobsFor(asset.id);
+			expect(rows.find((r) => r.id === reminder.id)?.status).toBe("completed");
+			expect(rows.filter((r) => r.job_type === "late_notice_1")).toHaveLength(
+				1,
+			);
+		});
+
+		it("recovers a crash after the provider accepted: same key, one email, one successor", async () => {
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			const provider = fakeProvider();
+
+			// The provider accepts and sends, and its answer never reaches us.
+			provider.state.acceptThenLoseResponse = true;
+			const first = await claimLive(asset.id);
+			await expect(
+				runNoticeJob(first, "reminder", { driver: provider.driver }),
+			).rejects.toThrow(/after the provider accepted/);
+
+			// The process dies here — the job is left `running`, outcome unknown.
+			expect(provider.emailsSent()).toBe(1);
+			let row = (await jobsFor(asset.id)).find((r) => r.id === first.id);
+			expect(row?.status).toBe("running");
+			expect(row?.provider_message_id).toBeNull();
+			expect(row?.delivery_payload).not.toBeNull();
+
+			// Startup recovery reclaims it; the retry replays with the same key.
+			provider.state.acceptThenLoseResponse = false;
+			await recoverInterruptedJobs({ now: afterStaleWindow() });
+
+			// A template edit and a reassignment in between must not change what is
+			// replayed — a different payload under the same key would be refused.
+			await pool.query(
+				`update notice_templates set body = 'Rewritten after the crash'
+				  where water_purveyor_id = $1 and notice_type = 'reminder'`,
+				[wpA],
+			);
+
+			try {
+				const lines = captureLogs();
+				const { outcome } = await runStage(asset.id, {
+					driver: provider.driver,
+				});
+
+				expect(outcome).toMatchObject({
+					kind: "sent",
+					deliveryPass: "idempotent_retry",
+				});
+				// Two calls, one key, one email.
+				expect(provider.calls).toHaveLength(2);
+				expect(provider.keys()).toEqual([`bfa-notice/${first.id}`]);
+				expect(provider.emailsSent()).toBe(1);
+
+				row = (await jobsFor(asset.id)).find((r) => r.id === first.id);
+				expect(row?.status).toBe("completed");
+				expect(row?.provider_message_id).not.toBeNull();
+
+				const rows = await jobsFor(asset.id);
+				expect(rows.filter((r) => r.job_type === "late_notice_1")).toHaveLength(
+					1,
+				);
+				expect(
+					eventsNamed(lines, "scheduler_delivery_recorded")[0],
+				).toMatchObject({ delivery_pass: "idempotent_retry" });
+			} finally {
+				await pool.query(
+					`update notice_templates set body = $2
+					  where water_purveyor_id = $1 and notice_type = 'reminder'`,
+					[wpA, CUSTOM_REMINDER_BODY],
+				);
+			}
+		});
+
+		it("replays the frozen sender identity after a lost response, even when the configured sender changed", async () => {
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			const provider = fakeProvider();
+			const original = { ...provider.state.sender };
+
+			// 1. The provider accepts the first request and the answer is lost.
+			provider.state.acceptThenLoseResponse = true;
+			const first = await claimLive(asset.id);
+			await expect(
+				runNoticeJob(first, "reminder", { driver: provider.driver }),
+			).rejects.toThrow(/after the provider accepted/);
+
+			expect(provider.emailsSent()).toBe(1);
+			const frozen = (await jobsFor(asset.id)).find((r) => r.id === first.id)
+				?.delivery_payload as { sender?: unknown } | null;
+			// The sender was fixed before the provider call, with the content.
+			expect(frozen?.sender).toEqual(original);
+
+			// 2. The job is recovered.
+			provider.state.acceptThenLoseResponse = false;
+			await recoverInterruptedJobs({ now: afterStaleWindow() });
+
+			// 3. The sender identity in the current configuration changes —
+			// RESEND_FROM_EMAIL and RESEND_REPLY_TO rotated between attempts.
+			provider.state.sender = {
+				from: "Kalani Billing <billing@kalani.example>",
+				replyTo: "billing@kalani.example",
+			};
+
+			// 4. The retry sends the first attempt's body, so the provider returns
+			// the original id instead of refusing a changed body under the key.
+			const { outcome } = await runStage(asset.id, {
+				driver: provider.driver,
+			});
+
+			expect(outcome).toMatchObject({
+				kind: "sent",
+				deliveryPass: "idempotent_retry",
+			});
+			expect(provider.calls).toHaveLength(2);
+			expect(provider.calls[1]).toMatchObject({
+				key: `bfa-notice/${first.id}`,
+				from: original.from,
+				replyTo: original.replyTo,
+			});
+			expect(provider.emailsSent()).toBe(1);
+
+			// The id the provider assigned when it accepted the *first* request.
+			const originalId = provider.idFor(`bfa-notice/${first.id}`);
+			expect(originalId).toMatch(/^re_/);
+			expect(outcome).toMatchObject({ providerMessageId: originalId });
+
+			// 5. Completed with the original provider id, and exactly one successor.
+			const rows = await jobsFor(asset.id);
+			const done = rows.find((r) => r.id === first.id);
+			expect(done?.status).toBe("completed");
+			expect(done?.provider_message_id).toBe(originalId);
+			expect(rows.filter((r) => r.job_type === "late_notice_1")).toHaveLength(
+				1,
+			);
+
+			// And the successor, a new message, uses the sender configured *now*.
+			const next = await runStage(asset.id, { driver: provider.driver });
+			expect(next.job.jobType).toBe("late_notice_1");
+			expect(provider.calls.at(-1)).toMatchObject({
+				from: "Kalani Billing <billing@kalani.example>",
+			});
+		});
+
+		it("fails a legacy payload with no frozen sender instead of replaying it", async () => {
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			const provider = fakeProvider();
+
+			// 1. The provider accepts the first request and the answer is lost.
+			provider.state.acceptThenLoseResponse = true;
+			const first = await claimLive(asset.id);
+			await expect(
+				runNoticeJob(first, "reminder", { driver: provider.driver }),
+			).rejects.toThrow(/after the provider accepted/);
+			expect(provider.calls).toHaveLength(1);
+
+			// 2. Reproduce a row frozen by the previous version: no `sender` key at
+			// all — not `null`, absent.
+			await pool.query(
+				"update scheduled_jobs set delivery_payload = delivery_payload - 'sender' where id = $1",
+				[first.id],
+			);
+			const { rows: shape } = await pool.query<{ has_sender: boolean }>(
+				"select delivery_payload ? 'sender' as has_sender from scheduled_jobs where id = $1",
+				[first.id],
+			);
+			expect(shape[0]?.has_sender).toBe(false);
+
+			// 3. The job is recovered — within the same minute, far inside the
+			// provider's window — and the configured sender changes.
+			provider.state.acceptThenLoseResponse = false;
+			await recoverInterruptedJobs({ now: afterStaleWindow() });
+			provider.state.sender = {
+				from: "Kalani Billing <billing@kalani.example>",
+				replyTo: "billing@kalani.example",
+			};
+
+			// 4. No second provider call, a terminal failure, no successor.
+			const lines = captureLogs();
+			const { outcome } = await runStage(asset.id, {
+				driver: provider.driver,
+			});
+
+			expect(outcome).toMatchObject({ kind: "delivery_unconfirmed" });
+			expect(provider.calls).toHaveLength(1);
+
+			const rows = await jobsFor(asset.id);
+			const row = rows.find((r) => r.id === first.id);
+			expect(row?.status).toBe("failed");
+			expect(row?.provider_message_id).toBeNull();
+			expect(row?.last_error).toMatch(/did not store the sender identity/i);
+			expect(rows.filter((r) => r.job_type !== "reminder")).toEqual([]);
+			expect(
+				rows.filter((r) => r.status === "pending" || r.status === "running"),
+			).toEqual([]);
+
+			const unconfirmed = eventsNamed(lines, "scheduler_delivery_unconfirmed");
+			expect(unconfirmed).toHaveLength(1);
+			expect(unconfirmed[0]).toMatchObject({
+				job_id: first.id,
+				idempotency_key: `bfa-notice/${first.id}`,
+				cause: "legacy_sender_not_frozen",
+			});
+			expect(String(unconfirmed[0]?.reason)).toMatch(
+				/did not store the sender identity/i,
+			);
+			expect(eventsNamed(lines, "email_send_attempted")).toEqual([]);
+		});
+
+		it("still retries a payload frozen with an explicit null sender through the console driver", async () => {
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+
+			// A console-type driver has no sender to pin, so the payload is frozen
+			// with `sender: null`. Its first attempt fails.
+			const failingConsole: EmailDriver = {
+				name: "console",
+				async send() {
+					throw new Error("console driver unavailable");
+				},
+			};
+			const first = await claimLive(asset.id);
+			await expect(
+				runNoticeJob(first, "reminder", { driver: failingConsole }),
+			).rejects.toThrow(/unavailable/);
+
+			const { rows: shape } = await pool.query<{
+				has_sender: boolean;
+				sender_is_null: boolean;
+			}>(
+				`select delivery_payload ? 'sender' as has_sender,
+				        delivery_payload -> 'sender' = 'null'::jsonb as sender_is_null
+				   from scheduled_jobs where id = $1`,
+				[first.id],
+			);
+			expect(shape[0]).toEqual({ has_sender: true, sender_is_null: true });
+
+			// The retry, through the real console driver, sends and completes.
+			await recoverInterruptedJobs({ now: afterStaleWindow() });
+			const lines = captureLogs();
+			const { outcome } = await runStage(asset.id);
+
+			expect(outcome).toMatchObject({
+				kind: "sent",
+				deliveryPass: "idempotent_retry",
+			});
+			expect(deliveries(lines, "wf1-marta@example.com")).toHaveLength(1);
+			expect(eventsNamed(lines, "scheduler_delivery_unconfirmed")).toEqual([]);
+
+			const rows = await jobsFor(asset.id);
+			expect(rows.find((r) => r.id === first.id)?.status).toBe("completed");
+			expect(rows.filter((r) => r.job_type === "late_notice_1")).toHaveLength(
+				1,
+			);
+		});
+
+		it("completes without sending when the outcome was recorded but completion was lost", async () => {
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			const live = await liveJobFor(asset.id);
+
+			// The state a process dies in after recording the provider's answer and
+			// before committing the completion.
+			await pool.query(
+				`update scheduled_jobs
+				    set status = 'running', provider_message_id = 're_confirmed',
+				        delivered_at = now(), delivery_attempted_at = now()
+				  where id = $1`,
+				[live.id],
+			);
+
+			await recoverInterruptedJobs({ now: afterStaleWindow() });
+
+			const provider = fakeProvider();
+			const { outcome } = await runStage(asset.id, {
+				driver: provider.driver,
+			});
+
+			expect(outcome).toMatchObject({
+				kind: "sent",
+				deliveryPass: "already_recorded",
+				providerMessageId: "re_confirmed",
+			});
+			expect(provider.calls).toHaveLength(0);
+			expect((await liveJobFor(asset.id)).job_type).toBe("late_notice_1");
+		});
+
+		it("fails explicitly, without sending, once the provider's idempotency window has closed", async () => {
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			const provider = fakeProvider();
+			provider.state.refuse = true;
+
+			const first = await claimLive(asset.id);
+			await expect(
+				runNoticeJob(first, "reminder", { driver: provider.driver }),
+			).rejects.toThrow();
+
+			// The retry arrives a day later — past the provider's 24-hour window.
+			provider.state.refuse = false;
+			const lines = captureLogs();
+			const outcome = await runNoticeJob(first, "reminder", {
+				driver: provider.driver,
+				now: new Date(Date.now() + 24 * 3_600_000),
+			});
+
+			expect(outcome).toMatchObject({ kind: "delivery_unconfirmed" });
+			// No blind retry that could duplicate…
+			expect(provider.calls).toHaveLength(1);
+			// …no assumption that it was delivered…
+			const rows = await jobsFor(asset.id);
+			const row = rows.find((r) => r.id === first.id);
+			expect(row?.status).toBe("failed");
+			expect(row?.provider_message_id).toBeNull();
+			expect(row?.last_error).toMatch(/delivery outcome unknown/i);
+			expect(rows.filter((r) => r.job_type === "late_notice_1")).toEqual([]);
+			// …and a line saying so.
+			expect(
+				eventsNamed(lines, "scheduler_delivery_unconfirmed")[0],
+			).toMatchObject({ idempotency_key: `bfa-notice/${first.id}` });
 		});
 
 		it("gives up after the attempt ceiling and does not escalate to the next stage", async () => {
@@ -1439,34 +2065,31 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			).toHaveLength(1);
 		});
 
-		it("does not resend a notice whose send was already claimed before the crash", async () => {
+		it("delivers a notice whose payload was frozen before a crash that preceded any send", async () => {
 			const asset = await callerFor(ids.adminA).assets.createAsset(
 				newAsset({ currentCustomerId: customerIds.primary }),
 			);
-			const live = await liveJobFor(asset.id);
+			const provider = fakeProvider();
 
-			// The state a process dies in after `sent_at` was written: the mail may
-			// already be out, so the retry must not send a second copy.
-			await pool.query(
-				`update scheduled_jobs
-				    set status = 'running', sent_at = now()
-				  where id = $1`,
-				[live.id],
-			);
+			// The process dies after freezing the payload and before the request
+			// leaves: modelled as a refusal that never reached the provider's store.
+			provider.state.refuse = true;
+			const first = await claimLive(asset.id);
+			await expect(
+				runNoticeJob(first, "reminder", { driver: provider.driver }),
+			).rejects.toThrow();
+			expect(provider.emailsSent()).toBe(0);
 
 			await recoverInterruptedJobs({ now: afterStaleWindow() });
-
-			const lines = captureLogs();
-			const { outcome } = await runStage(asset.id);
-
-			expect(outcome).toMatchObject({ kind: "sent" });
-			// No second copy…
-			expect(deliveries(lines)).toHaveLength(0);
-			// …and the chain still advances, so the customer is not dropped out of
-			// the escalation by a crash.
-			expect(eventsNamed(lines, "scheduler_job_completed")[0]).toMatchObject({
-				mail_sent: false,
+			provider.state.refuse = false;
+			const { outcome } = await runStage(asset.id, {
+				driver: provider.driver,
 			});
+
+			// Under the old `sent_at` model this notice was silently lost. Now it is
+			// sent — once — and the chain advances only after it is confirmed.
+			expect(outcome).toMatchObject({ kind: "sent" });
+			expect(provider.emailsSent()).toBe(1);
 			expect((await liveJobFor(asset.id)).job_type).toBe("late_notice_1");
 		});
 
@@ -1508,8 +2131,9 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 				runNoticeJob(job, "reminder"),
 			]);
 
-			// `sent_at` is claimed with a conditional update, so only one pass owns
-			// the send however many run it.
+			// Only one pass freezes a payload; the other replays it under the same
+			// idempotency key, and the console driver — like the provider — sends
+			// once per key however many times it is asked.
 			expect(deliveries(lines, "wf1-marta@example.com")).toHaveLength(1);
 			// One completes the row; the other finds it no longer `running`.
 			expect(outcomes.filter((o) => o.kind === "sent")).toHaveLength(1);

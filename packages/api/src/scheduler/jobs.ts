@@ -9,9 +9,11 @@
  *   `pending → running` inside one statement, over rows locked with
  *   `FOR UPDATE SKIP LOCKED`, so two processes ticking at the same second take
  *   disjoint sets and neither waits on the other.
- * - **A job's outbound side effect happens at most once.**
- *   {@link claimJobSend} sets `sent_at` only where it is still null; a handler
- *   that does not win that statement does not send.
+ * - **A job sends at most one email, and its delivery is never assumed.** The
+ *   rendered message is frozen once ({@link freezeDelivery}) and every attempt
+ *   replays it under the job's own provider idempotency key, so the provider
+ *   de-duplicates retries; the outcome is written only from the provider's
+ *   answer ({@link recordDelivery}).
  * - **A job that was withdrawn mid-flight does not advance the chain.**
  *   {@link completeRunningJob} only completes a row that is still `running`, so
  *   a passing test or a corrected date that cancelled the job underneath the
@@ -24,7 +26,10 @@
  */
 
 import { db } from "@bfa-platform/db";
-import { scheduledJobs } from "@bfa-platform/db/schema";
+import {
+	type FrozenEmailPayload,
+	scheduledJobs,
+} from "@bfa-platform/db/schema";
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
 import type { NoticeType } from "../lib/notice-defaults";
@@ -42,7 +47,10 @@ export type ScheduledJob = typeof scheduledJobs.$inferSelect;
  * sit inside the same transaction as the asset insert that justifies it, so a
  * rolled-back asset never leaves a job behind to mail its customer.
  */
-export type JobExecutor = Pick<typeof db, "select" | "insert" | "update">;
+export type JobExecutor = Pick<
+	typeof db,
+	"select" | "insert" | "update" | "execute"
+>;
 
 /** The `job_type` values that belong to the escalation chain. */
 export const NOTICE_JOB_TYPES = NOTICE_STAGES;
@@ -71,12 +79,15 @@ function isLive() {
 const LIVE_ASSET_JOB_CONFLICT = sql`${scheduledJobs.status} in ('pending', 'running') and ${scheduledJobs.bfaAssetId} is not null`;
 
 /**
- * Creates or corrects the one live job for `stage` on this asset.
+ * Creates the one live job for `stage` on this asset — used for a stage's
+ * successor — or leaves an equivalent pending one as it is.
  *
- * An upsert on the live-job index, so "this asset already has a pending
- * reminder" is resolved by the database rather than by a read the caller made a
- * moment earlier. Two clerks saving a date correction at the same instant
- * produce one job, not two.
+ * An upsert on the live-job index, so "this asset already has this stage
+ * pending" is resolved by the database rather than by a read the caller made a
+ * moment earlier, and a completion that is retried cannot queue the successor
+ * twice. A date change does *not* come through here: it cancels the whole chain
+ * and inserts a fresh reminder (`insertNoticeJob`), because a running job must
+ * be withdrawn, never rewritten.
  *
  * A write happens only if it changes something. The `setWhere` refuses to touch
  * a row that already carries this `run_at`, which is what keeps a save that
@@ -125,6 +136,44 @@ export async function scheduleNoticeJob({
 		.returning();
 
 	return row ?? null;
+}
+
+/**
+ * Inserts a new pending job for `stage`. A plain insert, not an upsert.
+ *
+ * Used where the caller has just withdrawn every live job for the asset under
+ * the asset's lock, so nothing live can conflict. If something does, the live-job
+ * index refuses it and the caller's transaction fails loudly — which is the
+ * right outcome for a state that should be impossible, and better than quietly
+ * reusing a row that belongs to a different date.
+ */
+export async function insertNoticeJob({
+	executor = db,
+	assetId,
+	waterPurveyorId,
+	stage,
+	runAt,
+}: {
+	executor?: JobExecutor;
+	assetId: string;
+	waterPurveyorId: string;
+	stage: NoticeType;
+	runAt: Date;
+}): Promise<ScheduledJob> {
+	const [row] = await executor
+		.insert(scheduledJobs)
+		.values({
+			jobType: stage,
+			bfaAssetId: assetId,
+			waterPurveyorId,
+			runAt,
+			status: "pending",
+		})
+		.returning();
+
+	if (!row) throw new Error("scheduled_jobs insert returned no row");
+
+	return row;
 }
 
 /**
@@ -272,58 +321,152 @@ export async function claimDueJobs({
 }
 
 /**
- * Claims this job's one outbound side effect: `sent_at` null → now.
+ * The provider idempotency key for one job: stable for the life of the row, and
+ * different for every row.
  *
- * `true` means this caller owns the send. `false` means the mail either already
- * went out on an earlier attempt or is going out in another process right now,
- * and the caller must not send.
- *
- * This is the whole of the idempotency guarantee, and it is deliberately
- * mark-then-send rather than send-then-mark. An email is not enrollable in a
- * Postgres transaction, so one of the two orders has to lose something when a
- * process dies between the two steps: send-then-mark loses *uniqueness* and can
- * mail a customer the same overdue notice twice, and mark-then-send loses *at
- * most one notice* out of a chain of four that continues regardless. The second
- * is the smaller harm, and it is the one chosen here.
+ * Derived rather than stored, because the job id already is the identity of the
+ * one email this job exists to send — a stage of one asset's chain in one cycle.
+ * A date change or a new cycle creates a new row and therefore a new key; a
+ * retry of the same row never does.
  */
-export async function claimJobSend({
+export function noticeIdempotencyKey(jobId: string): string {
+	return `bfa-notice/${jobId}`;
+}
+
+/**
+ * Takes the row lock on one asset for the rest of the caller's transaction.
+ *
+ * Everything that changes an asset's notice chain — a date correction, a
+ * passing test, and a handler completing a stage and scheduling the next — runs
+ * this first, so they serialise on the asset rather than interleaving. Without
+ * it a date change could commit while a handler's successor insert was still
+ * invisible to it, and the successor would survive, computed from the old date.
+ */
+export async function lockAssetForChain(
+	executor: Pick<typeof db, "execute">,
+	assetId: string,
+): Promise<void> {
+	await executor.execute(
+		sql`select 1 from bfa_assets where id = ${assetId} for update`,
+	);
+}
+
+/**
+ * Freezes the provider request this job will send — rendered content and sender
+ * identity — and starts its delivery window.
+ *
+ * Written once, before the first provider call, and never rewritten: the
+ * provider honours an idempotency key only while the request body is identical,
+ * so every retry must replay exactly what was first attempted, including the
+ * `from`/`replyTo` that would otherwise be re-read from the environment. `null` means another
+ * pass froze a payload first — the caller reads the stored one and sends that.
+ */
+export async function freezeDelivery({
 	executor = db,
 	jobId,
+	payload,
+	at,
+}: {
+	executor?: JobExecutor;
+	jobId: string;
+	payload: FrozenEmailPayload;
+	at: Date;
+}): Promise<ScheduledJob | null> {
+	const [row] = await executor
+		.update(scheduledJobs)
+		.set({ deliveryPayload: payload, deliveryAttemptedAt: at })
+		.where(
+			and(
+				eq(scheduledJobs.id, jobId),
+				eq(scheduledJobs.status, "running"),
+				isNull(scheduledJobs.deliveryPayload),
+				isNull(scheduledJobs.providerMessageId),
+			),
+		)
+		.returning();
+
+	return row ?? null;
+}
+
+/** One job, as it is now. */
+export async function readJob({
+	executor = db,
+	jobId,
+}: {
+	executor?: JobExecutor;
+	jobId: string;
+}): Promise<ScheduledJob | null> {
+	const [row] = await executor
+		.select()
+		.from(scheduledJobs)
+		.where(eq(scheduledJobs.id, jobId))
+		.limit(1);
+
+	return row ?? null;
+}
+
+/**
+ * Records the provider's confirmation: the message id it returned, and when.
+ *
+ * The only write that says a notice was delivered, and it happens only after
+ * the provider answered with an id. The frozen payload is cleared in the same
+ * statement — the delivery is settled, so the rendered message has no reason to
+ * stay at rest.
+ *
+ * Not guarded on `running`. A delivery that the provider confirmed is a fact
+ * even when a passing test cancelled the job while the request was in flight,
+ * and the record should say so. `provider_message_id is null` keeps the first
+ * recorded answer if two passes both reach here.
+ */
+export async function recordDelivery({
+	executor = db,
+	jobId,
+	providerMessageId,
+	at,
+}: {
+	executor?: JobExecutor;
+	jobId: string;
+	providerMessageId: string;
+	at: Date;
+}): Promise<ScheduledJob | null> {
+	const [row] = await executor
+		.update(scheduledJobs)
+		.set({ providerMessageId, deliveredAt: at, deliveryPayload: null })
+		.where(
+			and(eq(scheduledJobs.id, jobId), isNull(scheduledJobs.providerMessageId)),
+		)
+		.returning();
+
+	return row ?? null;
+}
+
+/**
+ * Marks a running job `failed` immediately, without spending retries.
+ *
+ * For outcomes no retry can fix — today, a delivery whose idempotency window
+ * has closed, where a retry could no longer be de-duplicated and the true
+ * outcome cannot be learned. Terminal, visible, and explained in `last_error`.
+ */
+export async function failRunningJob({
+	executor = db,
+	jobId,
+	reason,
 	at = new Date(),
 }: {
 	executor?: JobExecutor;
 	jobId: string;
+	reason: string;
 	at?: Date;
-}): Promise<boolean> {
-	const rows = await executor
+}): Promise<ScheduledJob | null> {
+	const [row] = await executor
 		.update(scheduledJobs)
-		.set({ sentAt: at })
-		.where(and(eq(scheduledJobs.id, jobId), isNull(scheduledJobs.sentAt)))
-		.returning({ id: scheduledJobs.id });
+		.set({ status: "failed", lastError: reason, completedAt: at })
+		.where(
+			and(eq(scheduledJobs.id, jobId), eq(scheduledJobs.status, "running")),
+		)
+		.returning();
 
-	return rows.length > 0;
-}
-
-/**
- * Gives the send claim back, after a provider *refused* the message.
- *
- * Only called when `sendEmail` threw, which means no message was accepted —
- * `providerDriver` turns a Resend error and a response with no id into thrown
- * errors precisely so that this distinction is available. Releasing the claim is
- * what makes a genuine delivery failure retryable without making a crash
- * duplicable.
- */
-export async function releaseJobSend({
-	executor = db,
-	jobId,
-}: {
-	executor?: JobExecutor;
-	jobId: string;
-}): Promise<void> {
-	await executor
-		.update(scheduledJobs)
-		.set({ sentAt: null })
-		.where(eq(scheduledJobs.id, jobId));
+	return row ?? null;
 }
 
 /**

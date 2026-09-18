@@ -33,11 +33,12 @@ import {
 import { noticeDueDay, noticeRunAt } from "../lib/notice-schedule";
 import {
 	cancelAssetNoticeJobs,
+	insertNoticeJob,
 	isNoticeJobType,
 	type JobExecutor,
 	liveNoticeJobsForAsset,
+	lockAssetForChain,
 	pullJobForward,
-	scheduleNoticeJob,
 } from "./jobs";
 import { logSchedulerEvent } from "./logging";
 
@@ -76,15 +77,23 @@ type ChainContext = {
  * Brings an asset's chain into line with its current `annual_test_date`.
  *
  * Called when an asset is registered with a date and when that date changes.
- * Two steps, in this order:
+ * Three steps, in one transaction, under the asset's row lock:
  *
- * 1. Every live stage *except* the reminder is cancelled. The whole chain hangs
- *    off one date, so a pending late notice computed from the old one is not
- *    merely early or late — it is a notice about a deadline that no longer
- *    exists. The reminder is excluded because step 2 rewrites it in place,
- *    which is one write rather than a cancel-and-insert pair and keeps the
- *    row's history readable.
- * 2. The reminder is scheduled, or its `run_at` corrected, for the new date.
+ * 1. **Every** live stage is cancelled — `pending` or `running`, the reminder
+ *    included. The whole chain hangs off one date, so any live job computed
+ *    from the old one is a notice about a deadline that no longer exists.
+ *    A `running` reminder matters most: its handler may be mid-send, and only
+ *    cancelling the row is what stops it — `completeRunningJob` then refuses to
+ *    complete it and no successor is scheduled from the old date. Rewriting the
+ *    reminder's `run_at` in place cannot do that, because a running row is
+ *    deliberately never rewritten.
+ * 2. Exactly one replacement reminder is inserted, for the new date. It is a
+ *    fresh row with a fresh id, and therefore a fresh provider idempotency key,
+ *    so it can never be confused with an attempt made for the old date.
+ * 3. The asset lock (`lockAssetForChain`) is what keeps this atomic against a
+ *    handler finishing a stage at the same moment: the two serialise, so either
+ *    the handler's successor is committed before this runs and is cancelled by
+ *    step 1, or this commits first and the handler finds its row cancelled.
  *
  * The reminder is scheduled even when its day is already in the past. That is
  * what makes a purveyor who registers a long-overdue assembly get the
@@ -93,10 +102,10 @@ type ChainContext = {
  * It is also the build plan's acceptance criterion — "the full escalation fires
  * in order against a seeded past-due asset".
  *
- * A date that did not change produces no writes: the cancel matches nothing and
- * the upsert's own predicate refuses a row that already carries this `run_at`.
- * Callers still guard on the change themselves, so the ordinary save does not
- * reach the database at all.
+ * A chain already in the target state — one live reminder at exactly this
+ * `run_at` and nothing else — is left alone: no cancel, no insert, no log line.
+ * Callers guard on the date actually changing as well, so the ordinary save
+ * does not reach this function at all.
  */
 export async function reconcileAssetNoticeChain({
 	executor = db,
@@ -110,6 +119,8 @@ export async function reconcileAssetNoticeChain({
 	/** What caused the reconciliation, for the log line. */
 	trigger: "asset_created" | "annual_test_date_changed";
 }): Promise<void> {
+	await lockAssetForChain(executor, assetId);
+
 	if (!annualTestDate) {
 		await withdrawChain({
 			executor,
@@ -123,26 +134,30 @@ export async function reconcileAssetNoticeChain({
 		return;
 	}
 
-	const obsolete = await cancelAssetNoticeJobs({
-		executor,
-		assetId,
-		reason: CANCEL_REASONS.annualTestDateChanged,
-		stages: ["late_notice_1", "late_notice_2", "final_notice"],
-	});
+	const runAt = noticeRunAt(annualTestDate, "reminder");
+	const live = await liveNoticeJobsForAsset({ executor, assetId });
 
-	for (const job of obsolete) {
-		logSchedulerEvent("scheduler_job_cancelled", {
-			jobId: job.id,
-			jobType: job.jobType,
-			assetId,
-			waterPurveyorId,
-			actor,
-			extra: { reason: CANCEL_REASONS.annualTestDateChanged, trigger },
-		});
+	// Already exactly right: nothing to write, and nothing to log. The same rule
+	// the asset and template mutations follow for a save that changes nothing.
+	const [only] = live;
+	if (
+		live.length === 1 &&
+		only?.jobType === "reminder" &&
+		only.runAt.getTime() === runAt.getTime()
+	) {
+		return;
 	}
 
-	const runAt = noticeRunAt(annualTestDate, "reminder");
-	const scheduled = await scheduleNoticeJob({
+	await withdrawChain({
+		executor,
+		assetId,
+		waterPurveyorId,
+		actor,
+		reason: CANCEL_REASONS.annualTestDateChanged,
+		trigger,
+	});
+
+	const scheduled = await insertNoticeJob({
 		executor,
 		assetId,
 		waterPurveyorId,
@@ -150,36 +165,20 @@ export async function reconcileAssetNoticeChain({
 		runAt,
 	});
 
-	// Nothing written means the reminder was already queued for this exact
-	// instant. Logging it would put a scheduling record against a schedule
-	// nobody changed, which is the same rule the asset and template mutations
-	// follow for a save that changes nothing.
-	if (!scheduled) return;
-
-	// Inserted rows carry one `now()` in both timestamps; the `set_updated_at`
-	// trigger moves `updated_at` on the conflict-update path and leaves
-	// `created_at` where it was. That is the difference between "this asset had
-	// no reminder" and "this asset's reminder moved", which is what the two
-	// event names mean.
-	const inserted =
-		scheduled.createdAt.getTime() === scheduled.updatedAt.getTime();
-
-	logSchedulerEvent(
-		inserted ? "scheduler_job_scheduled" : "scheduler_job_rescheduled",
-		{
-			jobId: scheduled.id,
-			jobType: scheduled.jobType,
-			assetId,
-			waterPurveyorId,
-			actor,
-			extra: {
-				trigger,
-				annual_test_date: annualTestDate,
-				due_day: noticeDueDay(annualTestDate, "reminder"),
-				run_at: runAt.toISOString(),
-			},
+	logSchedulerEvent("scheduler_job_scheduled", {
+		jobId: scheduled.id,
+		jobType: scheduled.jobType,
+		assetId,
+		waterPurveyorId,
+		actor,
+		extra: {
+			trigger,
+			annual_test_date: annualTestDate,
+			due_day: noticeDueDay(annualTestDate, "reminder"),
+			run_at: runAt.toISOString(),
+			replaced_job_ids: live.map((job) => job.id),
 		},
-	);
+	});
 }
 
 /**
@@ -203,6 +202,11 @@ export async function cancelNoticeChainForPassingTest({
 	actor = null,
 	submissionId,
 }: ChainContext & { submissionId: string }): Promise<void> {
+	// Serialised with a handler finishing a stage — see `lockAssetForChain`.
+	// Without it, a successor inserted by a handler that has not yet committed
+	// would be invisible to the cancel below and would survive the passing test.
+	await lockAssetForChain(executor, assetId);
+
 	const cancelled = await cancelAssetNoticeJobs({
 		executor,
 		assetId,
@@ -311,7 +315,7 @@ export async function resumeHeldNoticeChain({
 	}
 }
 
-/** Cancels every live stage, for the reasons that are not a reschedule. */
+/** Cancels every live stage — `pending` and `running` — and logs each one. */
 async function withdrawChain({
 	executor,
 	assetId,

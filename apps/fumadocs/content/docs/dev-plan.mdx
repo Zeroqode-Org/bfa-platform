@@ -191,10 +191,21 @@ together, because neither is testable without the other. `packages/api/src/sched
 is a Node timer over `scheduled_jobs` — no Vercel Cron, no OS cron, no provider
 queue — switched on by `apps/web/src/instrumentation.ts` behind the new
 `SCHEDULER_ENABLED` variable, which defaults to **off** so a checkout and CI never
-mail anybody on a timer. `0012_scheduled_job_policies` adds a `sent_at` column, a
-partial unique index that makes "one live job per stage per assembly" a database
-fact, and the table's first row policies: read-only for every role, with **no
-write grant at all**, Super-Admin included.
+mail anybody on a timer. `0012_scheduled_job_policies` adds a partial unique
+index that makes "one live job per stage per assembly" a database fact, and the
+table's first row policies: read-only for every role, with **no write grant at
+all**, Super-Admin included.
+
+**Two defects fixed after the first cut.** *(1)* A date change left a `running`
+reminder live, so it could send on the old schedule; reconciliation now cancels
+every live stage — reminder included — under the asset's row lock and inserts one
+fresh reminder. *(2)* `0012`'s `sent_at` was written *before* the send, so a crash
+in between silently lost a notice. `0013_scheduled_job_delivery_outcome` drops it:
+each job now sends under a stable Resend idempotency key, replays a payload frozen
+before the first attempt, records delivery only from the provider's answer, and
+schedules the next stage only after that record commits. The one bound is the
+provider's 24-hour key window, past which a job fails explicitly as *delivery
+outcome unknown* instead of guessing.
 
 The four stages are computed from `bfa_assets.annual_test_date` alone — reminder
 two calendar months before, then +1, +32 and +63 days — and evaluated in

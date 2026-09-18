@@ -5,6 +5,7 @@ import {
 	type EmailDriver,
 	providerDriver,
 	resolveEmailDriver,
+	resolveSenderIdentity,
 	sendEmail,
 } from "./email";
 
@@ -68,6 +69,35 @@ const message = {
 	tags: [{ name: "type", value: "invitation" }],
 };
 
+describe("consoleDriver idempotency", () => {
+	it("returns the first id and logs no second delivery for a repeated key", async () => {
+		const { lines } = captureLogs();
+		const key = `bfa-notice/${Math.random().toString(36).slice(2)}`;
+
+		const first = await consoleDriver.send({ ...message, idempotencyKey: key });
+		const second = await consoleDriver.send({
+			...message,
+			idempotencyKey: key,
+		});
+
+		expect(second.id).toBe(first.id);
+		expect(
+			lines.filter((line) => line.event === "email_console_delivery"),
+		).toHaveLength(1);
+		expect(lines[0]).toMatchObject({ idempotency_key: key });
+	});
+
+	it("delivers every unkeyed message, as it always has", async () => {
+		const { lines } = captureLogs();
+
+		const first = await consoleDriver.send(message);
+		const second = await consoleDriver.send(message);
+
+		expect(second.id).not.toBe(first.id);
+		expect(lines).toHaveLength(2);
+	});
+});
+
 describe("consoleDriver", () => {
 	it("logs the whole payload as one JSON line and reports success", async () => {
 		const { lines } = captureLogs();
@@ -121,6 +151,39 @@ describe("providerDriver", () => {
 			html: message.html,
 			tags: [{ name: "type", value: "invitation" }],
 		});
+	});
+
+	it("passes an idempotency key to Resend as the SDK's request option", async () => {
+		mocks.send.mockResolvedValue({
+			data: { id: "resend-email-1" },
+			error: null,
+			headers: null,
+		});
+
+		await providerDriver.send({
+			...message,
+			idempotencyKey: "bfa-notice/job-1",
+		});
+
+		// The SDK turns this option into the `Idempotency-Key` header.
+		expect(mocks.send).toHaveBeenCalledWith(
+			expect.objectContaining({ to: "invitee@example.com" }),
+			{ idempotencyKey: "bfa-notice/job-1" },
+		);
+		// The key is a request option, never part of the email itself.
+		expect(mocks.send.mock.calls[0]?.[0]).not.toHaveProperty("idempotencyKey");
+	});
+
+	it("makes the same one-argument request as before when there is no key", async () => {
+		mocks.send.mockResolvedValue({
+			data: { id: "resend-email-1" },
+			error: null,
+			headers: null,
+		});
+
+		await providerDriver.send(message);
+
+		expect(mocks.send.mock.calls[0]).toHaveLength(1);
 	});
 
 	it("returns Resend's id as the send id", async () => {
@@ -206,6 +269,130 @@ describe("providerDriver", () => {
 	);
 });
 
+describe("sender identity for replays", () => {
+	const frozen = {
+		from: "Old Sender <old@example.com>",
+		replyTo: "old-replies@example.com",
+	};
+
+	beforeEach(() => {
+		mocks.send.mockResolvedValue({
+			data: { id: "resend-email-1" },
+			error: null,
+			headers: null,
+		});
+	});
+
+	it("sends a pinned sender to Resend in place of the configured one", async () => {
+		// The configuration has moved on since the message was frozen.
+		mocks.env.RESEND_FROM_EMAIL = "New Sender <new@example.com>";
+		mocks.env.RESEND_REPLY_TO = "new-replies@example.com";
+
+		await providerDriver.send({
+			...message,
+			sender: frozen,
+			idempotencyKey: "bfa-notice/job-1",
+		});
+
+		expect(mocks.send).toHaveBeenCalledWith(
+			{
+				from: "Old Sender <old@example.com>",
+				replyTo: "old-replies@example.com",
+				to: "invitee@example.com",
+				subject: "You have been invited",
+				html: message.html,
+				tags: [{ name: "type", value: "invitation" }],
+			},
+			{ idempotencyKey: "bfa-notice/job-1" },
+		);
+	});
+
+	it("still sends ordinary mail as the configured sender", async () => {
+		await providerDriver.send(message);
+		await providerDriver.send({ ...message, sender: null });
+
+		for (const [payload] of mocks.send.mock.calls) {
+			expect(payload).toMatchObject({
+				from: "Backflow Reporter <notifications@example.com>",
+				replyTo: "info@backflowreporter.io",
+			});
+			// The pinned-sender field is an instruction to the driver, never a
+			// field of the request.
+			expect(payload).not.toHaveProperty("sender");
+		}
+	});
+
+	it("replays a pinned sender even when the configured one is unset", async () => {
+		mocks.env.RESEND_FROM_EMAIL = undefined;
+		mocks.env.RESEND_REPLY_TO = undefined;
+
+		await expect(
+			providerDriver.send({ ...message, sender: frozen }),
+		).resolves.toEqual({ id: "resend-email-1", driver: "provider" });
+	});
+
+	it("still refuses to send without an API key, sender pinned or not", async () => {
+		mocks.env.RESEND_API_KEY = undefined;
+
+		await expect(
+			providerDriver.send({ ...message, sender: frozen }),
+		).rejects.toThrow(/requires RESEND_API_KEY/);
+		expect(mocks.send).not.toHaveBeenCalled();
+	});
+
+	it("resolves the provider's current sender for freezing, without sending", async () => {
+		await expect(resolveSenderIdentity(providerDriver)).resolves.toEqual({
+			from: "Backflow Reporter <notifications@example.com>",
+			replyTo: "info@backflowreporter.io",
+		});
+		expect(mocks.send).not.toHaveBeenCalled();
+	});
+
+	it("refuses to resolve a sender the configuration does not have", async () => {
+		mocks.env.RESEND_REPLY_TO = undefined;
+
+		await expect(resolveSenderIdentity(providerDriver)).rejects.toThrow(
+			/RESEND_REPLY_TO/,
+		);
+	});
+
+	it("resolves no sender for the console driver, which has none to vary", async () => {
+		await expect(resolveSenderIdentity(consoleDriver)).resolves.toBeNull();
+	});
+
+	it("passes a pinned sender through sendEmail without logging it", async () => {
+		const { lines } = captureLogs();
+		const seen: unknown[] = [];
+		const recording: EmailDriver = {
+			name: "provider",
+			async send(sent) {
+				seen.push(sent.sender);
+				return { id: "re_abc", driver: "provider" };
+			},
+		};
+
+		await sendEmail(
+			{ ...message, sender: frozen, idempotencyKey: "bfa-notice/job-2" },
+			{ event: "notice_reminder" },
+			recording,
+		);
+
+		expect(seen).toEqual([frozen]);
+		const line = JSON.stringify(lines);
+		expect(line).not.toContain("old@example.com");
+		expect(line).not.toContain("old-replies@example.com");
+	});
+
+	it("leaves the console driver's output unchanged by a pinned sender", async () => {
+		const { lines } = captureLogs();
+
+		await consoleDriver.send({ ...message, sender: frozen });
+
+		expect(lines[0]).not.toHaveProperty("sender");
+		expect(lines[0]).not.toHaveProperty("from");
+	});
+});
+
 describe("resolveEmailDriver", () => {
 	it("defaults to the console driver", () => {
 		expect(resolveEmailDriver(undefined).name).toBe("console");
@@ -263,6 +450,34 @@ describe("sendEmail", () => {
 		});
 		expect(typeof attempt?.timestamp).toBe("string");
 		expect(typeof attempt?.email_id).toBe("string");
+		expect(attempt?.idempotency_key).toBeNull();
+	});
+
+	it("hands the idempotency key to the driver and puts it on the attempt line", async () => {
+		const { lines } = captureLogs();
+		const seen: (string | undefined)[] = [];
+		const recording: EmailDriver = {
+			name: "provider",
+			async send(sent) {
+				seen.push(sent.idempotencyKey);
+				return { id: "re_abc", driver: "provider" };
+			},
+		};
+
+		await sendEmail(
+			{ ...message, idempotencyKey: "bfa-notice/job-9" },
+			{ event: "notice_reminder", assetId: "asset-9" },
+			recording,
+		);
+
+		expect(seen).toEqual(["bfa-notice/job-9"]);
+		expect(
+			lines.find((line) => line.event === "email_send_attempted"),
+		).toMatchObject({
+			idempotency_key: "bfa-notice/job-9",
+			email_id: "re_abc",
+			asset_id: "asset-9",
+		});
 	});
 
 	it("logs the attempt and rethrows when the driver fails", async () => {

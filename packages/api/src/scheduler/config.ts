@@ -80,6 +80,22 @@ export const STALE_RUNNING_AFTER_MS = 600_000;
 export const RECIPIENT_HOLD_MS = 86_400_000;
 
 /**
+ * How long after its first attempt a delivery may still be retried.
+ *
+ * Resend de-duplicates an `Idempotency-Key` for 24 hours; after that a replay
+ * would be treated as a new request and could send a second email. The ceiling
+ * is 23 hours so clock skew between this process and the provider cannot put a
+ * retry on the wrong side of the provider's window.
+ *
+ * Ordinary operation never approaches it — five attempts with the backoff below
+ * finish within about a quarter of an hour. It exists for the case where the
+ * process is down for most of a day between an attempt and its retry, and what
+ * happens then is explicit: the job is `failed` with "delivery outcome unknown",
+ * not retried blind and not assumed delivered.
+ */
+export const PROVIDER_IDEMPOTENCY_WINDOW_MS = 23 * 3_600_000;
+
+/**
  * How long a job of a type this build cannot handle waits before being looked
  * at again.
  *

@@ -26,12 +26,14 @@
  * could drift from it.
  *
  * Two instances are safe and neither coordinates with the other: the claim is
- * atomic, and a job's one outbound side effect is claimed separately through
- * `sent_at`. What is *not* safe is assuming the loop runs at all — the schedule
+ * atomic, and a job's one email is sent under the job's own provider
+ * idempotency key, so even two passes over one job produce one message. What is
+ * *not* safe is assuming the loop runs at all — the schedule
  * is the table, so nothing in the application waits on a tick or reads a result
  * from one.
  */
 
+import type { EmailDriver } from "../lib/email";
 import type { NoticeType } from "../lib/notice-defaults";
 import { recomputeAssetStatuses } from "./asset-status";
 import {
@@ -45,6 +47,7 @@ import {
 	claimDueJobs,
 	deferUnhandledJob,
 	isNoticeJobType,
+	noticeIdempotencyKey,
 	recordJobFailure,
 	type ScheduledJob,
 	staleRunningJobs,
@@ -82,14 +85,33 @@ type JobHandler = (job: ScheduledJob) => Promise<NoticeJobOutcome>;
  * and failed, so shipping this workflow cannot consume the retry budget of a
  * row a later workflow will want.
  */
-function handlerFor(job: ScheduledJob): JobHandler | null {
+function handlerFor(
+	job: ScheduledJob,
+	driver: EmailDriver | undefined,
+): JobHandler | null {
 	if (isNoticeJobType(job.jobType)) {
 		const stage: NoticeType = job.jobType;
 
-		return (claimed) => runNoticeJob(claimed, stage);
+		return (claimed) => runNoticeJob(claimed, stage, { driver });
 	}
 
 	return null;
+}
+
+/**
+ * Where a job's delivery stands, for the claim and recovery lines. Booleans
+ * only — the payload itself, which carries an address and a message body, is
+ * never logged from here.
+ */
+function deliveryState(job: ScheduledJob) {
+	return {
+		idempotency_key: isNoticeJobType(job.jobType)
+			? noticeIdempotencyKey(job.id)
+			: null,
+		delivery_recorded: job.providerMessageId !== null,
+		delivery_in_doubt:
+			job.deliveryAttemptedAt !== null && job.providerMessageId === null,
+	};
 }
 
 export type TickResult = {
@@ -129,9 +151,15 @@ const EMPTY_TICK: TickResult = {
 export async function runSchedulerTick({
 	now = new Date(),
 	limit = CLAIM_BATCH_SIZE,
+	driver,
 }: {
 	now?: Date;
 	limit?: number;
+	/**
+	 * The email driver to send through. Omitted in production, where `sendEmail`
+	 * selects one from `EMAIL_DRIVER`; tests pass a stand-in for the provider.
+	 */
+	driver?: EmailDriver;
 } = {}): Promise<TickResult> {
 	const result: TickResult = { ...EMPTY_TICK };
 
@@ -149,11 +177,11 @@ export async function runSchedulerTick({
 			extra: {
 				run_at: job.runAt.toISOString(),
 				attempts: job.attempts,
-				already_sent: job.sentAt !== null,
+				...deliveryState(job),
 			},
 		});
 
-		const handler = handlerFor(job);
+		const handler = handlerFor(job, driver);
 
 		if (!handler) {
 			// Put it straight back, with its retry budget intact: there is nothing
@@ -175,6 +203,7 @@ export async function runSchedulerTick({
 			if (outcome.kind === "held") result.held += 1;
 			if (outcome.kind === "cancelled") result.cancelled += 1;
 			if (outcome.kind === "superseded") result.superseded += 1;
+			if (outcome.kind === "delivery_unconfirmed") result.failed += 1;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const outcome = await recordJobFailure({ job, error: message, now });
@@ -254,9 +283,11 @@ export async function recoverInterruptedJobs({
 					attempts: outcome.attempts,
 					max_attempts: MAX_JOB_ATTEMPTS,
 					next_run_at: outcome.runAt?.toISOString() ?? null,
-					// A reclaimed job whose mail was already claimed will not send
-					// again — `sent_at` survives the crash, which is the point of it.
-					already_sent: job.sentAt !== null,
+					// A reclaimed job with an attempt in doubt is retried with the same
+					// frozen payload and idempotency key, so the provider settles it
+					// without a second email; one with a recorded delivery only has
+					// its completion left to do.
+					...deliveryState(job),
 				},
 			},
 		);

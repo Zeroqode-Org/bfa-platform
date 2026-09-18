@@ -119,15 +119,17 @@ does.
 
 ### Changing the date reschedules the chain
 
-Correcting `annual_test_date` on an existing asset cancels the notice jobs
-computed from the old one and rewrites the reminder from the new date, **in the
-same transaction as the asset write**. Every stage hangs off that one field, so a
-pending late notice left behind would be a notice about a deadline that no longer
-exists.
+Correcting `annual_test_date` on an existing asset cancels **every** notice job
+computed from the old one — including a reminder the scheduler is already
+running — and inserts one fresh reminder for the new date, **in the same
+transaction as the asset write**. Every stage hangs off that one field, so any
+job left behind would be a notice about a deadline that no longer exists; a
+running reminder that is cancelled cannot complete or schedule a late notice from
+the old date.
 
 Two guards keep this from being noisy. The reconciliation runs only when the date
 actually moved — correcting a service address does not touch the schedule — and
-the write itself refuses a job row that already carries the same run time, so a
+it writes nothing when the chain is already one reminder at the right time, so a
 redundant reconciliation writes nothing, moves no `updated_at` and emits no
 scheduling line. Same rule as [a save that changes
 nothing](#a-save-that-changes-nothing-writes-nothing).

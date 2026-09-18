@@ -19,16 +19,27 @@
 import { type AuditActor, auditActorFields } from "../lib/audit-actor";
 
 export const SCHEDULER_EVENTS = {
-	/** A job row was created for a stage that had none. */
+	/** A job row was created — a new asset's reminder, or a date change's replacement. */
 	scheduled: "scheduler_job_scheduled",
-	/** An existing pending job's `run_at` was moved to match a corrected date. */
-	rescheduled: "scheduler_job_rescheduled",
 	/** A pending job was withdrawn: passing test, changed date, flag off, gone asset. */
 	cancelled: "scheduler_job_cancelled",
 	/** A pending job that was already due was pulled forward to run now. */
 	resumed: "scheduler_job_resumed",
 	/** The loop took ownership of a due job. */
 	claimed: "scheduler_job_claimed",
+	/**
+	 * The provider confirmed the job's email and the confirmation is on record.
+	 * Carries the job id, the idempotency key and the provider's message id —
+	 * the three values that tie a job to a delivery in the provider's own log —
+	 * and nothing about the recipient beyond their customer id.
+	 */
+	deliveryRecorded: "scheduler_delivery_recorded",
+	/**
+	 * The first attempt is older than the provider's idempotency window, so the
+	 * outcome can no longer be learned without risking a duplicate. The job is
+	 * failed for a person to resolve. Terminal.
+	 */
+	deliveryUnconfirmed: "scheduler_delivery_unconfirmed",
 	/** The job did what it exists to do. */
 	completed: "scheduler_job_completed",
 	/** Nothing was sent and the chain did not advance; the job stays pending. */

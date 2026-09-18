@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
 	index,
 	integer,
+	jsonb,
 	pgTable,
 	text,
 	timestamp,
@@ -13,6 +14,39 @@ import { bfaAssets } from "./bfa-assets";
 import { customers } from "./customers";
 import { jobStatus, jobType } from "./enums";
 import { waterPurveyors } from "./water-purveyors";
+
+/**
+ * Everything the provider sees in a message's request body, as it was fixed
+ * before the first attempt. Stored so every retry sends a body identical to the
+ * original request, which the provider requires before it will honour an
+ * idempotency key: the rendered content *and* the sender identity, which would
+ * otherwise be re-read from the environment on each attempt.
+ */
+export type FrozenEmailPayload = {
+	to: string;
+	subject: string;
+	html: string;
+	tags: { name: string; value: string }[];
+	/**
+	 * `from` and `replyTo` as configured at the first attempt. Every payload this
+	 * version freezes has the key; its three states mean different things and
+	 * must never be collapsed:
+	 *
+	 * - `{ from, replyTo }` — pinned; every retry sends exactly this sender.
+	 * - `null` — frozen under a driver with no sender to pin (the console
+	 *   driver). Safe to replay.
+	 * - **key absent** — a legacy row, frozen by the earlier version that did not
+	 *   store the sender. The first request's sender is unknown, so the request
+	 *   cannot be replayed identically; the handler fails such a job as
+	 *   *delivery outcome unknown* instead of sending. It is *not* read as `null`.
+	 *
+	 * Optional in the type only to describe those legacy rows. Tell the states
+	 * apart with `Object.hasOwn(payload, "sender")`, not with `?? null`.
+	 */
+	sender?: { from: string; replyTo: string } | null;
+	/** The customer it was rendered for. For the delivery log; never sent. */
+	recipientId: string;
+};
 
 // Not in the original data model. Required because Vercel Cron is off the
 // table (bfa-requirements) and job state must survive restarts. All writes
@@ -31,11 +65,21 @@ export const scheduledJobs = pgTable(
 		status: jobStatus("status").notNull().default("pending"),
 		attempts: integer("attempts").notNull().default(0),
 		lastError: text("last_error"),
-		// When this job's outbound side effect was claimed — see 0012. Written
-		// *before* the send and cleared only when the provider refuses, so a
-		// crash-and-retry skips a send that may already have gone out rather than
-		// mailing a customer the same notice twice.
-		sentAt: timestamp("sent_at", { withTimezone: true }),
+		// The delivery outcome — see 0013, which replaced 0012's `sent_at`.
+		// The whole provider request body — rendered content and sender
+		// identity — frozen before the first send attempt so every retry replays
+		// it unchanged under the job's idempotency key. Cleared once the outcome
+		// is recorded. See `FrozenEmailPayload`.
+		deliveryPayload: jsonb("delivery_payload").$type<FrozenEmailPayload>(),
+		// The first attempt — the start of the provider's 24-hour
+		// de-duplication window.
+		deliveryAttemptedAt: timestamp("delivery_attempted_at", {
+			withTimezone: true,
+		}),
+		// Written only after the provider confirms acceptance. The only
+		// evidence of delivery this table holds.
+		providerMessageId: text("provider_message_id"),
+		deliveredAt: timestamp("delivered_at", { withTimezone: true }),
 		completedAt: timestamp("completed_at", { withTimezone: true }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
