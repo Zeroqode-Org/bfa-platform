@@ -6,7 +6,8 @@ import {
 	profiles,
 	testSubmissions,
 } from "@bfa-platform/db/schema";
-import { and, asc, eq, gte, isNotNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, lte, notExists, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { router, wpProcedure } from "../index";
 import {
@@ -365,6 +366,130 @@ export const dashboardRouter = router({
 	 * next action on one of these rows is contacting somebody — and the join is
 	 * left because an asset between occupants is still past due.
 	 */
+	/**
+	 * The fail list: every asset whose latest submitted, resulted test is a
+	 * fail, with the calendar day its current failure episode began.
+	 *
+	 * **Membership is computed from test history on every read — there is no
+	 * stored flag, no membership table, and no waiting period.** An asset joins
+	 * the list the moment a failing test is submitted (or a failing no-BIN
+	 * submission is linked to it) and leaves the moment a later passing test is
+	 * submitted. The 30/60-day thresholds are presentation only — age bands the
+	 * screen colours — never an entry condition.
+	 *
+	 * The definitions, stated once because two features depend on them agreeing
+	 * (the failure-notice handler makes the same comparison at send time):
+	 *
+	 * - Only rows with `status = 'submitted'` and a non-null `test_result`
+	 *   participate. Drafts and result-less records decide nothing.
+	 * - Event order is `(created_at, id)` — when the submission *happened*,
+	 *   with the id as a deterministic tie-breaker — never `test_date`, which
+	 *   is nullable and certifier-typed. "The next passing test submitted"
+	 *   means submitted next, not dated next.
+	 * - A **failure episode** starts at the first submitted fail after the
+	 *   asset's last submitted pass. Later fails inside the episode do not
+	 *   reset its start — each queues its own failure notice, but the list
+	 *   shows one row per asset, aged from the episode's beginning.
+	 * - `failingSince` is that starting submission's UTC calendar day, the same
+	 *   instant-to-day convention as the page's `today`.
+	 *
+	 * The `min(...)` below computes exactly that: the earliest submitted fail
+	 * with no later submitted pass. Its non-null existence *is* membership —
+	 * if the latest resulted test were a pass, every fail would have a later
+	 * pass and the group would be empty.
+	 *
+	 * One row per asset by construction (`group by`), the whole list in one
+	 * response: this is a work queue bounded by the purveyor's own assemblies
+	 * with an unresolved failure, and its default order — oldest unresolved
+	 * failure first, BIN then id breaking ties — is the server's, so the screen
+	 * and any export start from the same answer. Re-sorting by another column
+	 * is presentation and happens on the client, over the same rows.
+	 *
+	 * Tenant boundary: the fail rows, the asset join and the customer join are
+	 * each pinned to the caller's purveyor. The joins are pinned *as well as*
+	 * keyed because a foreign key proves existence, not tenancy — a submission
+	 * whose link crossed tenants simply produces no row here, and a mispointed
+	 * `current_customer_id` shows as no customer rather than as another
+	 * purveyor's name.
+	 */
+	failList: wpProcedure.query(async ({ ctx }) => {
+		const waterPurveyorId = ctx.caller.waterPurveyorId;
+		const laterPass = alias(testSubmissions, "later_pass");
+
+		const failing = db.$with("failing").as(
+			db
+				.select({
+					assetId: testSubmissions.bfaAssetId,
+					failingSince:
+						sql<string>`to_char(min(${testSubmissions.createdAt}) at time zone 'utc', 'YYYY-MM-DD')`.as(
+							"failing_since",
+						),
+				})
+				.from(testSubmissions)
+				.where(
+					and(
+						eq(testSubmissions.waterPurveyorId, waterPurveyorId),
+						eq(testSubmissions.status, "submitted"),
+						eq(testSubmissions.testResult, "fail"),
+						isNotNull(testSubmissions.bfaAssetId),
+						notExists(
+							db
+								.select({ one: sql`1` })
+								.from(laterPass)
+								.where(
+									and(
+										eq(laterPass.bfaAssetId, testSubmissions.bfaAssetId),
+										eq(laterPass.waterPurveyorId, waterPurveyorId),
+										eq(laterPass.status, "submitted"),
+										eq(laterPass.testResult, "pass"),
+										// Row comparison, so two submissions in the same
+										// microsecond still have a total order.
+										sql`(${laterPass.createdAt}, ${laterPass.id}) > (${testSubmissions.createdAt}, ${testSubmissions.id})`,
+									),
+								),
+						),
+					),
+				)
+				.groupBy(testSubmissions.bfaAssetId),
+		);
+
+		return (
+			db
+				.with(failing)
+				.select({
+					id: bfaAssets.id,
+					bin: bfaAssets.bin,
+					bfaType: bfaAssets.bfaType,
+					serviceAddress: bfaAssets.serviceAddress,
+					currentCustomerName: customers.name,
+					failingSince: failing.failingSince,
+				})
+				.from(failing)
+				// Inner, unlike the two home lists' left joins: a failing submission
+				// whose asset is missing or belongs to another purveyor represents no
+				// assembly this caller may see, so there is no safe row to render.
+				.innerJoin(
+					bfaAssets,
+					and(
+						eq(bfaAssets.id, failing.assetId),
+						eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+					),
+				)
+				.leftJoin(
+					customers,
+					and(
+						eq(customers.id, bfaAssets.currentCustomerId),
+						eq(customers.waterPurveyorId, waterPurveyorId),
+					),
+				)
+				.orderBy(
+					asc(failing.failingSince),
+					asc(bfaAssets.bin),
+					asc(bfaAssets.id),
+				)
+		);
+	}),
+
 	delinquentAssets: wpProcedure.input(homeListInput).query(({ ctx, input }) => {
 		return (
 			db

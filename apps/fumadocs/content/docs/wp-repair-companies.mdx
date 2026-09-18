@@ -106,9 +106,12 @@ purveyor exactly what deletion would have — the company stops being recommende
 same reason: this is the management table, and a company that vanished when it
 was deactivated could never be corrected or brought back.
 
-This release does not change the failure workflow. It sets the flag that
-workflow will read; [Workflow 3](/docs/build-plan) is where the filter is applied
-at send time.
+The failure workflow now reads that flag exactly as planned:
+[Workflow 3](/docs/notice-workflow#workflow-3--the-failure-notice) resolves the
+`active` list at send time — a company deactivated yesterday is not in today's
+email — and renders each entry as **name and phone only**. A repair company's
+email address stays a purveyor-side contact detail and never reaches a
+customer's inbox.
 
 ## Procedures
 

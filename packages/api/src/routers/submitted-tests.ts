@@ -21,7 +21,7 @@ import {
 	submissionIdInput,
 	updateSubmittedTestInput,
 } from "../lib/submission-input";
-import { cancelNoticeChainForPassingTest } from "../scheduler/notice-chain";
+import { applySubmittedTestResult } from "../scheduler/submission-lifecycle";
 
 /**
  * The two administrative WP roles, for the write half of this screen.
@@ -261,26 +261,29 @@ export const submittedTestsRouter = router({
 
 				if (!updated) throw notFound();
 
-				// A passing test is what the escalation exists to produce, so a
-				// correction that leaves this submitted row a pass ends the chain
-				// for its assembly. Every query in this router pins
+				// What this row's result now means for the notice machinery — one
+				// exported rule, not a per-caller derivation: a linked pass ends
+				// the assembly's escalation and withdraws this submission's unsent
+				// failure notice; a linked fail queues its failure notice, due
+				// immediately and idempotently. Every query in this router pins
 				// `status = 'submitted'`, so a draft cannot reach here at all —
 				// which is the rule, not a side effect: an unattested working copy
-				// must not stop a purveyor's notices.
+				// must neither stop a purveyor's notices nor send one.
 				//
-				// Run unconditionally for a passing row rather than only when the
-				// result changed *to* pass. Cancelling a chain that is already
-				// cancelled writes nothing, and the alternative leaves a chain
-				// running whenever the pass was recorded before the asset link.
-				if (next.testResult === "pass" && existing.bfaAssetId) {
-					await cancelNoticeChainForPassingTest({
-						executor: tx,
-						assetId: existing.bfaAssetId,
-						waterPurveyorId,
-						actor: auditActor(ctx),
-						submissionId: updated.id,
-					});
-				}
+				// Run unconditionally from the row's current state rather than only
+				// when the result changed. Re-applying an unchanged state writes
+				// nothing, and the alternative leaves a chain running — or a
+				// failure notice unqueued — whenever the result was recorded
+				// before the asset link.
+				await applySubmittedTestResult({
+					executor: tx,
+					submissionId: updated.id,
+					bfaAssetId: existing.bfaAssetId,
+					testResult: next.testResult,
+					waterPurveyorId,
+					actor: auditActor(ctx),
+					trigger: "test_submission_corrected",
+				});
 
 				return updated;
 			});
@@ -400,20 +403,22 @@ export const submittedTestsRouter = router({
 					});
 				}
 
-				// The assembly now has a passing test on file, so its escalation is
-				// over. In the same transaction as the link, because a link that
-				// committed without the cancellation would leave a late notice
-				// queued against an assembly the purveyor has just recorded as
-				// tested and passed.
-				if (submission.testResult === "pass") {
-					await cancelNoticeChainForPassingTest({
-						executor: tx,
-						assetId: asset.id,
-						waterPurveyorId,
-						actor: auditActor(ctx),
-						submissionId: linked.id,
-					});
-				}
+				// The link is the moment this test's result becomes a fact about
+				// that assembly: a pass ends its escalation, and a fail — the
+				// no-BIN failure the purveyor has just resolved to a valve — queues
+				// its failure notice. In the same transaction as the link, because
+				// a link that committed without them would leave a late notice
+				// queued against a passed assembly, or a failed one with nobody
+				// told.
+				await applySubmittedTestResult({
+					executor: tx,
+					submissionId: linked.id,
+					bfaAssetId: asset.id,
+					testResult: submission.testResult,
+					waterPurveyorId,
+					actor: auditActor(ctx),
+					trigger: "test_submission_asset_linked",
+				});
 
 				return linked;
 			});

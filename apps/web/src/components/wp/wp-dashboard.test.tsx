@@ -297,6 +297,21 @@ describe("WpDashboard metric cards", () => {
 		expect(screen.queryByText("Awaiting review")).toBeNull();
 	});
 
+	// The build plan routes the fail list through this card (Workflow 3): the
+	// number is the scheduler's past-due count, and the click is the door to
+	// the failure-based work queue.
+	it("makes the Past due card a link to the fail list, and only that card", async () => {
+		renderDashboard();
+
+		const pastDue = await figures().findByRole("link", {
+			name: /Past due — open the fail list/,
+		});
+
+		expect(pastDue.getAttribute("href")).toBe("/wp/fail-list");
+		// The other four cards are numbers, not doors.
+		expect(figures().getAllByRole("link").length).toBe(1);
+	});
+
 	it("names the month the monthly figure was measured over", async () => {
 		metricsFn.mockResolvedValue(metrics({ month: "2026-09" }));
 

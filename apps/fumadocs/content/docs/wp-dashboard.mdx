@@ -93,7 +93,7 @@ set of filtered aggregates over a single scan.
 |---|---|---|
 | **Total assets** | Every `bfa_assets` row in the tenant, at any status | Primary |
 | **Tests this month** | Submitted tests whose `test_date` falls in the current calendar month | Accent |
-| **Past due** | Assets the scheduler has marked `asset_status = 'past_due'` | Danger |
+| **Past due** | Assets the scheduler has marked `asset_status = 'past_due'`. The whole card is a link to the [fail list](#the-fail-list) | Danger |
 | **Submitted reports** | Every submitted row in the tenant | Primary |
 | **No-BIN submissions** | Submitted rows with a null `bfa_asset_id` | Accent |
 
@@ -187,10 +187,88 @@ a row says "Past due" rather than "0 days" — a zero would read as "due today".
 Each row links to `/wp/assets/[assetId]`, the asset's existing detail route.
 
 `asset_status` is read here and written nowhere. The scheduler computes it from
-`annual_test_date` and no procedure in the app accepts one, so this list is a
-view of that computation rather than a second opinion about it. Nothing yet
-recomputes it — that is Workflow 1 — so on today's data the list reflects
-whatever the column currently holds.
+`annual_test_date` on every tick (that shipped with
+[Workflow 1](/docs/notice-workflow)) and no procedure in the app accepts one, so
+this list is a view of that computation rather than a second opinion about it.
+
+## The fail list
+
+**Route:** `/wp/fail-list`, reached from the **Past due** metric card — the
+whole card is a link. The build plan fixes that handoff, not the URL;
+`/wp/fail-list` is the minimal default, produced by the `failListHref` helper
+beside the other typed route helpers, and the page deliberately has **no
+sidebar item**: it is a drill-down of the card, not a section.
+
+The page carries the standard WP gate (`requireAccount`) and renders inside the
+existing WP shell.
+
+### Membership is computed, never stored
+
+`dashboard.failList` returns every asset whose **latest submitted, resulted
+test is a fail** — computed from `test_submissions` history on every read.
+There is no membership flag, no membership table, and no waiting period: an
+asset joins the list the moment a failing test is submitted for it (or a
+failing no-BIN submission is linked to it), and leaves the moment a later
+passing test is submitted. The pre-declared `fail_list_check` job type remains
+deliberately unused — there is nothing to schedule and nothing to recheck.
+
+The definitions, which the [failure notice](/docs/notice-workflow#workflow-3--the-failure-notice)
+shares so the list and the email always agree on what "resolved" means:
+
+- Only rows with `status = 'submitted'` **and** a non-null `test_result`
+  participate. Drafts and result-less records decide nothing.
+- Event order is `(created_at, id)` — when the submission happened, with the id
+  as a deterministic tie-breaker — **never `test_date`**, which is nullable and
+  certifier-typed. "The next passing test submitted" means submitted next, not
+  dated next.
+- A **failure episode** starts at the first submitted fail after the asset's
+  last submitted pass. Later fails inside the same episode do not reset its
+  start — each triggers its own failure notice, but the list shows one row per
+  asset, aged from the episode's beginning. This episode rule is a project
+  default stated here, not a client requirement; changing it is an edit to one
+  SQL expression and its tests.
+- `failingSince` is the starting submission's **UTC calendar day**, the same
+  instant-to-day convention as the rest of this page.
+
+### Tenant boundary
+
+The query is a `wpProcedure` with no input at all — the tenant comes from the
+caller's own profile, and the fail rows, the asset join and the customer join
+are each pinned to it. The joins are pinned *as well as* keyed because a
+foreign key proves existence, not tenancy: a submission whose asset link
+crossed tenants produces **no row** (the asset join here is inner, unlike the
+home lists' — there is no safe way to render an assembly the caller may not
+see), and a mispointed `current_customer_id` shows as no customer rather than
+as another purveyor's name.
+
+### Sorting and age bands
+
+Each row shows the BIN (linking to the asset's existing detail route — no
+parallel asset view), the type, the service address, the current customer when
+safely resolvable, the episode's start date and its age in days.
+
+The server returns the whole list in its default order — **oldest unresolved
+failure first**, BIN then id breaking ties. Column sorting is client-side over
+that same response: the list is a work queue bounded by the purveyor's own
+failing assemblies, so re-sorting a set already in hand costs no round trip.
+
+Age colouring follows the build plan's three bands, driven by days since the
+episode began and rendered from design-system tokens, never hex in the
+component:
+
+| Age | Row background |
+|---|---|
+| under 30 days | the danger tint (`danger-bg`) |
+| 30–60 days | a stronger tint (`danger-bg-strong`, added for this screen) |
+| over 60 days | the full danger colour (`danger`, with a contrast foreground — the system's one sanctioned solid fill) |
+
+Day 30 is the first morning of the middle band and day 61 the first of the
+last. **The bands are presentation only** — an entry is on the list from day
+zero; 30 and 60 never gate membership. The age is also printed in words on the
+row, so colour is never the only carrier.
+
+The table has the standard loading, error and empty states, and the sortable
+headers carry `aria-sort` with a real button as the control.
 
 ## Compliance trend
 

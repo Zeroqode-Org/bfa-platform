@@ -45,7 +45,7 @@ Status as of **2026-09-18**. Update this table as work progresses — this is th
 | Node-native scheduler | — | Daniil | 09/14 | 09/18 | done |
 | Workflow 1: Reminder + Late Notices | 6.7 | Daniil | 09/14 | 09/18 | done |
 | Workflow 2: AG Rate Renewal Notice | 6.9 | Daniil | 09/14 | 09/18 | planned |
-| Workflow 3: Failure Notice + 30-Day Fail List | 6.8 | Daniil | 09/14 | 09/18 | planned |
+| Workflow 3: Failure Notice + 30-Day Fail List | 6.8 | Daniil | 09/14 | 09/18 | done |
 | Certifier Test Wizard (all 8 BFA types) | 6.5 | Lina | 09/21 | 09/25 | planned |
 | Workflow 4: General Info Email | 6.10 | Daniil | 09/21 | 09/25 | planned |
 | Monthly Statements (Basic Export) | 6.12 | Lina | 09/28 | 10/02 | planned |
@@ -111,8 +111,8 @@ creates, edits and deactivates approved repair firms through three WP-scoped
 procedures, and `repair_companies` has row policies for the first time.
 Deactivation flips `status` to `inactive` and nothing else — there is no delete
 procedure, no delete control and no DELETE grant, so a company that stops being
-recommended keeps the record a past failure notice was built from. The workflow
-that reads `status = 'active'` at send time is Workflow 3 and is still planned.
+recommended keeps the record a past failure notice was built from. Workflow 3
+now reads `status = 'active'` at send time, exactly as planned.
 Full writeup: [WP Repair Companies](/docs/wp-repair-companies).
 
 **WP Dashboard — Certifiers (6.6.3)**: shipped. `/wp/certifiers` lists the field
@@ -238,6 +238,28 @@ now due) are named in the docs. *(3)* A stage that exhausts its five delivery
 attempts stops the chain rather than escalating past a notice the customer never
 received. Still blocking a production release: the client's own copy for the four
 notices. Full writeup: [Notice Workflow & Scheduler](/docs/notice-workflow).
+
+**Workflow 3: Failure Notice + Fail List (6.8)**: shipped. A submitted test
+that becomes a **linked fail** — by a WP correction, by the late link of a
+no-BIN failure, or later by the wizard's own submit, all through one exported
+lifecycle helper — queues its failure notice in the same transaction, due
+immediately, and the scheduler delivers it under the same frozen-payload
+idempotency guarantee as Workflow 1 (`0016` adds `failure_notice` to `job_type`
+and `test_submission_id` to `scheduled_jobs`; the delivery sequence itself was
+extracted to `scheduler/delivery.ts` and shared). The email lists the
+purveyor's **active** repair companies, resolved at send time, name and phone
+only — never a repair company's email — and a pass submitted after the fail
+cancels the unsent notice. Not gated: the failure notice is not a paid add-on
+and checks no feature flag. The fail list ships as `dashboard.failList` — an
+asset is listed while its latest submitted, resulted test is a fail, computed
+from history on every read with **no stored membership and no waiting
+period** — and as `/wp/fail-list`, a drill-down behind the dashboard's Past due
+card, oldest unresolved failure first, with the build plan's three age bands as
+row colouring driven by design tokens (30 and 60 days are presentation, never
+entry rules). Copy is provisional pending client wording, like the four notice
+defaults. Full writeups:
+[Notice Workflow & Scheduler](/docs/notice-workflow#workflow-3--the-failure-notice)
+and [WP Dashboard](/docs/wp-dashboard#the-fail-list).
 
 **Super-Admin (6.11)**: stays *in-progress*. The invite-new-WP action is wired and `/admin` is gated to `super_admin`. **WP impersonation has shipped.** `superAdmin.startImpersonation` and `endImpersonation` set and clear a separate `bfa_impersonation` cookie: `httpOnly`, HMAC-SHA-256-signed, one-hour lifetime. Its key is the new optional server variable `IMPERSONATION_COOKIE_SECRET`.
 

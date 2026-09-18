@@ -62,12 +62,7 @@ import {
 } from "@bfa-platform/db/schema";
 import { and, asc, eq } from "drizzle-orm";
 
-import {
-	type EmailDriver,
-	type EmailSender,
-	resolveSenderIdentity,
-	sendEmail,
-} from "../lib/email";
+import { type EmailDriver, resolveSenderIdentity } from "../lib/email";
 import { renderTextEmail } from "../lib/email-layout";
 import {
 	certifierListText,
@@ -81,17 +76,12 @@ import {
 	renderTemplate,
 	variableKeys,
 } from "../lib/notice-variables";
-import { PROVIDER_IDEMPOTENCY_WINDOW_MS, RECIPIENT_HOLD_MS } from "./config";
+import { type DeliveryPassKind, settleJobDelivery } from "./delivery";
 import {
 	cancelRunningJob,
 	completeRunningJob,
-	failRunningJob,
-	freezeDelivery,
-	holdRunningJob,
 	lockAssetForChain,
 	noticeIdempotencyKey,
-	readJob,
-	recordDelivery,
 	type ScheduledJob,
 	scheduleNoticeJob,
 } from "./jobs";
@@ -121,7 +111,7 @@ export type NoticeJobOutcome =
 			 * replay of the frozen payload under the same idempotency key, or an
 			 * outcome an earlier pass had already recorded.
 			 */
-			deliveryPass: "first_attempt" | "idempotent_retry" | "already_recorded";
+			deliveryPass: DeliveryPassKind;
 			nextStage: NoticeType | null;
 	  }
 	| { kind: "held"; reason: string }
@@ -177,169 +167,35 @@ export async function runNoticeJob(
 		return cancel(job, stage, CANCEL_REASONS.featureDisabled);
 	}
 
-	// The row as it is now, not as it was claimed. A previous pass may already
-	// have frozen a payload or recorded the provider's answer before it died.
-	const current = await readJob({ jobId: job.id });
+	// Everything from "is a payload frozen yet" to "the provider confirmed" is
+	// the shared settlement — the same freeze/replay/idempotency sequence the
+	// failure notice uses. This handler decides only who the notice goes to and
+	// what it says, and what happens once delivery is confirmed.
+	const settlement = await settleJobDelivery<RenderedNotice>({
+		job,
+		jobType: stage,
+		emailEvent: `notice_${stage}`,
+		assetId: asset.id,
+		waterPurveyorId: asset.waterPurveyorId,
+		now,
+		driver,
+		render: async () => {
+			const recipient = await resolveRecipient(asset);
 
-	if (current?.status !== "running") {
-		// Withdrawn after it was claimed and before anything was sent — a passing
-		// test or a date change got here first. Nothing to send and nothing to
-		// advance.
-		return superseded(job, stage, "The job was cancelled before its send.");
-	}
+			if ("hold" in recipient) return recipient;
+
+			return renderNotice(asset, recipient.customer, stage, driver);
+		},
+	});
+
+	if (settlement.kind !== "delivered") return settlement;
 
 	const idempotencyKey = noticeIdempotencyKey(job.id);
-	let rendered: RenderedNotice | null = null;
-	let settled: ScheduledJob = current;
-
-	if (!settled.providerMessageId && !settled.deliveryPayload) {
-		// First attempt: decide the recipient and the words *now*, then freeze
-		// them. Everything after this replays the frozen message.
-		const recipient = await resolveRecipient(asset);
-
-		if ("hold" in recipient) {
-			return hold(job, stage, recipient.hold, now);
-		}
-
-		rendered = await renderNotice(asset, recipient.customer, stage, driver);
-
-		const frozen = await freezeDelivery({
-			jobId: job.id,
-			payload: rendered.payload,
-			at: now,
-		});
-
-		if (frozen) {
-			settled = frozen;
-		} else {
-			// Another pass froze first — and may already have sent and recorded
-			// the outcome — or the row stopped being ours. Whatever it froze is
-			// what gets sent, never a second rendering.
-			const again = await readJob({ jobId: job.id });
-
-			if (again?.status !== "running") {
-				return superseded(job, stage, "The job was cancelled before its send.");
-			}
-
-			settled = again;
-			rendered = null;
-		}
-	}
-
-	let delivery: DeliveryPass;
-
-	if (settled.providerMessageId) {
-		// The provider's confirmation is already on record — from an earlier pass
-		// whose completion was lost, or from a concurrent pass that got there
-		// first. Nothing is sent; the chain simply advances.
-		delivery = {
-			pass: "already_recorded",
-			providerMessageId: settled.providerMessageId,
-		};
-	} else {
-		const payload = settled.deliveryPayload;
-		const attemptedAt = settled.deliveryAttemptedAt;
-		const pass = rendered ? "first_attempt" : "idempotent_retry";
-
-		if (!payload || !attemptedAt) {
-			// Every path above ends with a recorded id or a frozen payload. A row
-			// with neither is broken, and sending anything for it would be a guess.
-			throw new Error(
-				`Notice job ${job.id} has no frozen delivery payload to send.`,
-			);
-		}
-
-		const sender = frozenSender(payload);
-
-		// A payload frozen by the previous version of this handler has no
-		// `sender` key at all: the `from` and `replyTo` of its first provider
-		// request were read from the environment and never stored. That request
-		// may have been accepted with its response lost, and the request body
-		// cannot be rebuilt, so any replay risks a 409 under the key or — if sent
-		// as the current sender — a body that was never the original. This does
-		// not depend on age: a legacy row is unsafe to replay a minute later.
-		if (sender.kind === "legacy") {
-			return deliveryUnconfirmed(
-				job,
-				stage,
-				idempotencyKey,
-				attemptedAt,
-				"legacy_sender_not_frozen",
-			);
-		}
-
-		// Outside the provider's de-duplication window a replay could send a
-		// second email, and the true outcome of the first attempt can no longer be
-		// learned. Neither guessing "delivered" nor guessing "not delivered" is
-		// acceptable, so the job fails, visibly, for a person to resolve.
-		if (
-			pass === "idempotent_retry" &&
-			now.getTime() - attemptedAt.getTime() > PROVIDER_IDEMPOTENCY_WINDOW_MS
-		) {
-			return deliveryUnconfirmed(
-				job,
-				stage,
-				idempotencyKey,
-				attemptedAt,
-				"idempotency_window_expired",
-			);
-		}
-
-		// The one shared send path. The frozen payload is replayed exactly, with
-		// the job's key, so the provider sends at most one email for this job no
-		// matter how many attempts reach this line. A refusal throws, the payload
-		// stays frozen, and the loop's retry policy re-queues the job — with no
-		// successor, because nothing has been confirmed.
-		const result = await sendEmail(
-			{
-				to: payload.to,
-				subject: payload.subject,
-				html: payload.html,
-				tags: payload.tags,
-				// The sender fixed at the first attempt — never the environment's
-				// current one — so this body is the first attempt's body. An
-				// explicit `null` was frozen under a driver with no sender to pin
-				// (the console driver); it leaves the driver to use its own
-				// configuration, which then makes the first request any provider
-				// sees under this key. A *missing* key never reaches here — see
-				// the legacy check above.
-				sender: sender.kind === "pinned" ? sender.sender : null,
-				idempotencyKey,
-			},
-			{
-				event: `notice_${stage}`,
-				recipientId: payload.recipientId,
-				wpId: asset.waterPurveyorId,
-				assetId: asset.id,
-			},
-			driver,
-		);
-
-		// Durable before anything depends on it. The next stage is scheduled only
-		// after this commit, so a crash from here on is recovered by the
-		// `already_recorded` branch rather than by another send.
-		await recordDelivery({
-			jobId: job.id,
-			providerMessageId: result.id,
-			at: now,
-		});
-
-		logSchedulerEvent("scheduler_delivery_recorded", {
-			jobId: job.id,
-			jobType: stage,
-			assetId: asset.id,
-			waterPurveyorId: asset.waterPurveyorId,
-			customerId: payload.recipientId,
-			extra: {
-				idempotency_key: idempotencyKey,
-				provider_message_id: result.id,
-				driver: result.driver,
-				delivery_pass: pass,
-			},
-		});
-
-		delivery = { pass, providerMessageId: result.id };
-	}
+	const rendered = settlement.rendered;
+	const delivery: DeliveryPass = {
+		pass: settlement.pass,
+		providerMessageId: settlement.providerMessageId,
+	};
 
 	const successor = nextNoticeStage(stage);
 
@@ -389,7 +245,7 @@ export async function runNoticeJob(
 		jobType: stage,
 		assetId: asset.id,
 		waterPurveyorId: asset.waterPurveyorId,
-		customerId: current.deliveryPayload?.recipientId ?? rendered?.customerId,
+		customerId: settlement.recipientId ?? rendered?.customerId,
 		extra: {
 			idempotency_key: idempotencyKey,
 			provider_message_id: delivery.providerMessageId,
@@ -414,7 +270,7 @@ export async function runNoticeJob(
 }
 
 type DeliveryPass = {
-	pass: "first_attempt" | "idempotent_retry" | "already_recorded";
+	pass: DeliveryPassKind;
 	providerMessageId: string;
 };
 
@@ -499,69 +355,6 @@ async function renderNotice(
 }
 
 /**
- * What a frozen payload says about its sender, told apart by whether the JSON
- * object *has* a `sender` key — never by collapsing absent and `null`:
- *
- * - `pinned` — `{ from, replyTo }` frozen before the first provider call.
- * - `none` — an explicit `null`: frozen under a driver with no sender to pin.
- *   Safe to replay; the driver supplies its own.
- * - `legacy` — no key at all: frozen by the version of this handler that did
- *   not store the sender. The first request's sender is unknowable.
- */
-type FrozenSender =
-	| { kind: "pinned"; sender: EmailSender }
-	| { kind: "none" }
-	| { kind: "legacy" };
-
-function frozenSender(payload: FrozenEmailPayload): FrozenSender {
-	if (!Object.hasOwn(payload, "sender")) return { kind: "legacy" };
-
-	const { sender } = payload;
-
-	return sender ? { kind: "pinned", sender } : { kind: "none" };
-}
-
-const UNCONFIRMED_REASONS = {
-	idempotency_window_expired:
-		"Delivery outcome unknown: the first send attempt is older than the provider's 24-hour idempotency window, so a retry could send a duplicate. Check the provider's log for this idempotency key before resending.",
-	legacy_sender_not_frozen:
-		"Delivery outcome unknown: this job's payload was frozen by an earlier version that did not store the sender identity (from / reply-to) of its first provider request, so that request cannot be replayed identically and a safe retry is impossible. Check the provider's log for this idempotency key before resending.",
-} as const;
-
-/**
- * Ends a job whose first attempt cannot be safely replayed, without sending:
- * its attempt is older than the provider's de-duplication window, or its
- * payload predates the frozen sender identity.
- */
-async function deliveryUnconfirmed(
-	job: ScheduledJob,
-	stage: NoticeType,
-	idempotencyKey: string,
-	attemptedAt: Date,
-	cause: keyof typeof UNCONFIRMED_REASONS,
-): Promise<NoticeJobOutcome> {
-	const reason = UNCONFIRMED_REASONS[cause];
-	const failed = await failRunningJob({ jobId: job.id, reason });
-
-	if (!failed) return { kind: "superseded" };
-
-	logSchedulerEvent("scheduler_delivery_unconfirmed", {
-		jobId: job.id,
-		jobType: stage,
-		assetId: job.bfaAssetId,
-		waterPurveyorId: job.waterPurveyorId,
-		extra: {
-			idempotency_key: idempotencyKey,
-			delivery_attempted_at: attemptedAt.toISOString(),
-			cause,
-			reason,
-		},
-	});
-
-	return { kind: "delivery_unconfirmed", reason };
-}
-
-/**
  * Whether this purveyor has the `automated_notices` add-on switched on.
  *
  * A missing row is off. Automated notices are a paid add-on the Super-Admin
@@ -586,12 +379,12 @@ async function automatedNoticesEnabled(
 	return flag?.isEnabled === true;
 }
 
-type RecipientResult =
+export type RecipientResult =
 	| { customer: { id: string; name: string; email: string } }
 	| { hold: string };
 
 /**
- * Who this notice goes to: the customer *currently* attached to the asset.
+ * Who a notice goes to: the customer *currently* attached to the asset.
  *
  * Scoped to the asset's own purveyor as well as by id. `current_customer_id` is
  * a foreign key and nothing in it says the customer shares the asset's tenant;
@@ -602,8 +395,12 @@ type RecipientResult =
  * Suspension holds the asset's whole pipeline rather than skipping one email
  * (PRD § 9). The stage stays pending and the chain does not advance, so
  * nothing later in the escalation is consumed by a notice that was never sent.
+ *
+ * Exported because the failure notice resolves its recipient by exactly these
+ * rules — same tenant scoping, same holds — and a second copy of them would be
+ * a second place for one of the holds to be forgotten.
  */
-async function resolveRecipient(asset: {
+export async function resolveRecipient(asset: {
 	waterPurveyorId: string;
 	currentCustomerId: string | null;
 }): Promise<RecipientResult> {
@@ -748,42 +545,4 @@ async function cancel(
 	});
 
 	return { kind: "cancelled", reason };
-}
-
-async function superseded(
-	job: ScheduledJob,
-	stage: NoticeType,
-	reason: string,
-): Promise<NoticeJobOutcome> {
-	logSchedulerEvent("scheduler_job_superseded", {
-		jobId: job.id,
-		jobType: stage,
-		assetId: job.bfaAssetId,
-		waterPurveyorId: job.waterPurveyorId,
-		extra: { reason, idempotency_key: noticeIdempotencyKey(job.id) },
-	});
-
-	return { kind: "superseded" };
-}
-
-async function hold(
-	job: ScheduledJob,
-	stage: NoticeType,
-	reason: string,
-	now: Date,
-): Promise<NoticeJobOutcome> {
-	const runAt = new Date(now.getTime() + RECIPIENT_HOLD_MS);
-	const held = await holdRunningJob({ jobId: job.id, reason, runAt });
-
-	if (!held) return { kind: "superseded" };
-
-	logSchedulerEvent("scheduler_job_held", {
-		jobId: job.id,
-		jobType: stage,
-		assetId: job.bfaAssetId,
-		waterPurveyorId: job.waterPurveyorId,
-		extra: { reason, held_until: runAt.toISOString() },
-	});
-
-	return { kind: "held", reason };
 }

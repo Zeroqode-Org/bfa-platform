@@ -188,6 +188,29 @@ Three further rules on that mutation:
 What the certifier typed is kept, not overwritten by the BIN it resolved to.
 `submitted_bin_text` records what was written on the day.
 
+## Corrections and links drive the notice machinery
+
+Both mutations end by calling one exported lifecycle helper,
+`applySubmittedTestResult` (documented in full on the
+[notice workflow page](/docs/notice-workflow#one-lifecycle-helper-for-a-submitted-result)),
+inside their own transaction. In this screen's terms:
+
+- **Correcting a linked test to a pass** — or linking a passing no-BIN
+  submission — ends the assembly's escalation chain, and withdraws that
+  submission's own failure notice if one is still unsent.
+- **Correcting a linked test to a fail** — or linking a failing no-BIN
+  submission, which is the late-link flow above — queues that submission's
+  failure notice, due immediately, and puts the assembly on the
+  [fail list](/docs/wp-dashboard#the-fail-list) at once (the list is computed
+  from submitted history, so the link itself is the entry).
+- **Correcting a fail away again** before the email went out withdraws it; a
+  notice already delivered stays on the record.
+
+Because every query here pins `status = 'submitted'`, a draft can trigger none
+of this — a failed draft sends nothing and appears on no list. And because the
+correction path short-circuits on a save that changed nothing, a no-op save
+schedules nothing either.
+
 ## Procedures
 
 | Procedure | Who | What it does |

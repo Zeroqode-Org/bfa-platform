@@ -48,6 +48,10 @@ const assetA = randomUUID();
 const assetB = randomUUID();
 const jobA = randomUUID();
 const jobB = randomUUID();
+const submissionA = randomUUID();
+const submissionB = randomUUID();
+const failureJobA = randomUUID();
+const failureJobB = randomUUID();
 
 let pool: pg.Pool;
 
@@ -141,6 +145,23 @@ describeDb("RLS — scheduled_jobs", () => {
 				[jobA, assetA, wpA, jobB, assetB, wpB],
 			);
 
+			// A submitted failing test per tenant, and the failure-notice job
+			// answering it (0016): submission-scoped, no asset on the row. The new
+			// column rides on 0012's table-level SELECT, and these rows prove the
+			// same tenancy story holds for it.
+			await client.query(
+				`insert into test_submissions (id, bfa_asset_id, certifier_id, water_purveyor_id, status, bfa_type, wizard_data, test_result)
+				 values ($1, $2, $3, $4, 'submitted', 'RP', '{}'::jsonb, 'fail'),
+				        ($5, $6, $3, $7, 'submitted', 'RP', '{}'::jsonb, 'fail')`,
+				[submissionA, assetA, certifierId, wpA, submissionB, assetB, wpB],
+			);
+			await client.query(
+				`insert into scheduled_jobs (id, job_type, test_submission_id, water_purveyor_id, run_at, status)
+				 values ($1, 'failure_notice', $2, $3, '2026-11-15T10:00:00Z', 'pending'),
+				        ($4, 'failure_notice', $5, $6, '2026-11-15T10:00:00Z', 'pending')`,
+				[failureJobA, submissionA, wpA, failureJobB, submissionB, wpB],
+			);
+
 			await client.query("commit");
 		} catch (error) {
 			await client.query("rollback").catch(() => undefined);
@@ -154,8 +175,12 @@ describeDb("RLS — scheduled_jobs", () => {
 		if (!pool) return;
 
 		await pool.query("delete from scheduled_jobs where id = any($1::uuid[])", [
-			[jobA, jobB],
+			[jobA, jobB, failureJobA, failureJobB],
 		]);
+		await pool.query(
+			"delete from test_submissions where id = any($1::uuid[])",
+			[[submissionA, submissionB]],
+		);
 		await pool.query("delete from bfa_assets where id = any($1::uuid[])", [
 			[assetA, assetB],
 		]);
@@ -190,6 +215,17 @@ describeDb("RLS — scheduled_jobs", () => {
 				expect(seen).toContain(jobA);
 				expect(seen).not.toContain(jobB);
 			}
+		});
+
+		it("shows a WP its own failure notice — with the submission it answers — and not the neighbour's", async () => {
+			const rows = await rowsFor(
+				ids.adminA,
+				"select id, test_submission_id from scheduled_jobs where job_type = 'failure_notice'",
+			);
+
+			expect(rows).toEqual([
+				{ id: failureJobA, test_submission_id: submissionA },
+			]);
 		});
 
 		it("does not let a WP read another purveyor's job by naming its id", async () => {

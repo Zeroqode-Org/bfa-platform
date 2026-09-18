@@ -22,6 +22,9 @@ export type IncomingReport =
 export type DelinquentAsset =
 	RouterOutputs["dashboard"]["delinquentAssets"][number];
 
+/** One asset on the fail list, with the day its failure episode began. */
+export type FailListRow = RouterOutputs["dashboard"]["failList"][number];
+
 /**
  * Where a row of the incoming list goes when it is clicked.
  *
@@ -48,6 +51,19 @@ export function submittedTestHref(submissionId: string): Route {
 /** Where a delinquent row goes: the asset's own detail route. */
 export function assetHref(assetId: string): Route {
 	return `/wp/assets/${encodeURIComponent(assetId)}` as Route;
+}
+
+/**
+ * The fail-list page, reached from the Past due card. One helper rather than a
+ * string literal in the card, so the card and any future caller name the same
+ * route. The build plan fixes the handoff, not the URL; `/wp/fail-list` is the
+ * minimal default and is documented as such.
+ */
+export function failListHref(): Route {
+	// The same cast the other helpers make: `typedRoutes`' generated union is
+	// refreshed by the Next dev server / build, so a route added in the same
+	// change as its first caller does not exist in the union a bare `tsc` sees.
+	return "/wp/fail-list" as Route;
 }
 
 /**
@@ -227,4 +243,37 @@ export function daysOverdue(
 	// just-corrected test date, most likely. Report nothing rather than a
 	// negative number of days overdue.
 	return days > 0 ? days : null;
+}
+
+/**
+ * How long an asset has been failing, in whole days.
+ *
+ * Both sides are UTC calendar days — `failingSince` comes off the procedure as
+ * one, `today` is decided once on the server — pinned to the same instant
+ * before subtracting, exactly as {@link daysOverdue} does it. Clamped at zero:
+ * a failure filed later today is zero days old, and a clock skew that says
+ * otherwise is not worth a negative age.
+ */
+export function failingDays(failingSince: string, today: string): number {
+	const since = Date.parse(`${failingSince}T00:00:00Z`);
+	const now = Date.parse(`${today}T00:00:00Z`);
+
+	if (Number.isNaN(since) || Number.isNaN(now)) return 0;
+
+	return Math.max(0, Math.floor((now - since) / 86_400_000));
+}
+
+export type FailAgeBand = "under_30" | "days_30_to_60" | "over_60";
+
+/**
+ * The build plan's three age bands, from days since the failure episode began:
+ * under 30 days the danger tint, 30 to 60 inclusive the stronger tint, past 60
+ * the full danger colour. Day 30 is the first day of the middle band and day
+ * 61 the first of the last, so "a row crossing 30 and 60 days changes colour"
+ * is literally true of those two mornings.
+ */
+export function failAgeBand(days: number): FailAgeBand {
+	if (days > 60) return "over_60";
+
+	return days >= 30 ? "days_30_to_60" : "under_30";
 }

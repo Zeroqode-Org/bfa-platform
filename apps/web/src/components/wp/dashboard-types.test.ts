@@ -4,6 +4,9 @@ import {
 	assetHref,
 	daysOverdue,
 	defaultBreakdownRange,
+	failAgeBand,
+	failingDays,
+	failListHref,
 	formatCount,
 	formatDay,
 	formatMonth,
@@ -185,5 +188,48 @@ describe("daysOverdue", () => {
 
 	it("crosses a year boundary without drifting", () => {
 		expect(daysOverdue("2025-12-31", "2026-01-01")).toBe(1);
+	});
+});
+
+describe("failListHref", () => {
+	it("is the fail-list page, the Past due card's destination", () => {
+		expect(failListHref()).toBe("/wp/fail-list");
+	});
+});
+
+describe("failingDays", () => {
+	it("counts whole days between the episode start and today", () => {
+		expect(failingDays("2026-09-01", "2026-09-11")).toBe(10);
+	});
+
+	it("is zero on the day the failure was filed", () => {
+		expect(failingDays("2026-09-11", "2026-09-11")).toBe(0);
+	});
+
+	it("clamps at zero rather than going negative", () => {
+		expect(failingDays("2026-09-12", "2026-09-11")).toBe(0);
+	});
+
+	it("crosses a year boundary without drifting", () => {
+		expect(failingDays("2025-12-31", "2026-01-01")).toBe(1);
+	});
+});
+
+describe("failAgeBand", () => {
+	it("uses the danger tint under 30 days", () => {
+		expect(failAgeBand(0)).toBe("under_30");
+		expect(failAgeBand(29)).toBe("under_30");
+	});
+
+	// The build plan's "a row crossing 30 and 60 days changes colour", pinned
+	// to the exact mornings it happens on.
+	it("moves to the stronger tint on day 30 and stays through day 60", () => {
+		expect(failAgeBand(30)).toBe("days_30_to_60");
+		expect(failAgeBand(60)).toBe("days_30_to_60");
+	});
+
+	it("moves to the full danger colour past 60 days", () => {
+		expect(failAgeBand(61)).toBe("over_60");
+		expect(failAgeBand(400)).toBe("over_60");
 	});
 });

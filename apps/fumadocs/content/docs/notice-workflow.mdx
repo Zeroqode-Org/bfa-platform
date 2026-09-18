@@ -1,11 +1,13 @@
 ---
 title: Notice Workflow & Scheduler
-description: "Workflow 1 — the reminder and the escalating late notices — and the Node-native scheduler that runs them: the four stage dates in Pacific/Honolulu, the feature-flag gate at execution, recipient resolution at send time, the hold-and-resume rule, idempotency, retries and the row policies on scheduled_jobs"
+description: "Workflows 1 and 3 — the reminder chain and the failure notice — and the Node-native scheduler that runs them: the four stage dates in Pacific/Honolulu, the feature-flag gate at execution, recipient resolution at send time, the hold-and-resume rule, idempotency, retries and the row policies on scheduled_jobs"
 ---
 
 This page describes the automated notice pipeline as built. It covers the
-[build plan](/docs/build-plan)'s *Node-native scheduler* and *Workflow —
-reminder and escalating late notices*, and PRD § 6.7.
+[build plan](/docs/build-plan)'s *Node-native scheduler*, *Workflow — reminder
+and escalating late notices*, and the delivery half of *Workflow — failure
+notice and fail list* ([the fail list itself is on the dashboard
+page](/docs/wp-dashboard#the-fail-list)), and PRD § 6.7.
 
 The pipeline replaces the water purveyor's paper-mail process with four emails
 derived from one field:
@@ -125,11 +127,14 @@ the claim is atomic.
 |---|---|---|---|
 | `SCHEDULER_ENABLED` | no | `false` | `true` makes this process run the tick loop. Validated in `packages/env/src/server.ts` |
 
-Two other things have to be true before a customer receives anything, and
-neither is configuration this feature owns: `EMAIL_DRIVER=provider` (otherwise
-every notice is written to a structured log line instead of being delivered —
-see [the email layer](/docs/invitations-onboarding#configuration)), and
-`wp_feature_flags.automated_notices` switched on for the purveyor.
+Two other things have to be true before a customer receives a *reminder-chain*
+notice, and neither is configuration this feature owns:
+`EMAIL_DRIVER=provider` (otherwise every notice is written to a structured log
+line instead of being delivered — see
+[the email layer](/docs/invitations-onboarding#configuration)), and
+`wp_feature_flags.automated_notices` switched on for the purveyor. The
+[failure notice](#workflow-3--the-failure-notice) needs only the first: it is
+not an optional add-on and checks no flag.
 
 ### Startup recovery
 
@@ -561,9 +566,114 @@ passing test arrives while the reminder is mid-send: the cancellation wins, and 
 late notice is queued behind it.
 
 The certifier wizard (PRD § 6.5) does not exist yet, so the only paths that turn a
-submission into a passing test today are the two WP corrections above.
-`cancelNoticeChainForPassingTest` is exported for the wizard's submit path to call
-when it lands.
+submission into a passing test today are the two WP corrections above. Both now
+route through one exported lifecycle helper — see the next section — which the
+wizard's submit path calls when it lands.
+
+## One lifecycle helper for a submitted result
+
+`applySubmittedTestResult` (`scheduler/submission-lifecycle.ts`) states, once,
+what a submitted test's `(bfa_asset_id, test_result)` pair means for the notice
+machinery. `updateSubmittedTest` and `linkSubmissionAsset` both call it inside
+their own transaction, and the certifier wizard's submit calls the same
+function when it lands — no caller re-derives which chains to cancel and which
+notices to queue:
+
+| The row is now | What happens |
+|---|---|
+| a **linked pass** | the assembly's escalation chain is cancelled, and this submission's own *unsent* failure notice is withdrawn (a correction just un-failed it) |
+| a **linked fail** | this submission's one failure notice is queued, due immediately. Nothing is cancelled — the assembly is still untested as far as the escalation is concerned |
+| **neither** (result cleared, or still unlinked) | its unsent failure notice, if any, is withdrawn; no chain is touched |
+
+Drafts never reach it: the submitted-tests router pins `status = 'submitted'`
+on every query, and the wizard calls it only at submit — so a failed draft
+sends nothing and appears nowhere, by construction.
+
+## Workflow 3 — the failure notice
+
+Not a chain: one email per submitted failing test, sent to the assembly's
+current customer, listing the purveyor's active repair companies. **Not
+gated** — the client named automated reminders and the AG renewal as the
+optional paid features, not the failure notice, so no `wp_feature_flags` check
+runs anywhere in this path. If that turns out to be wrong it is one flag check
+at the top of the handler.
+
+### Delivered through the scheduler, not inline
+
+The mutation that records a linked fail does not send mail. It queues one
+`failure_notice` job — due immediately, in the same transaction as the write
+that justifies it — and the next tick (at most a minute later) delivers it. An
+email is an external side effect the transaction cannot take back, and the
+scheduler already owns everything that makes a send survive crashes without
+duplicating: the frozen payload, the provider idempotency key, retry with
+backoff, startup recovery. A rolled-back correction leaves no job behind.
+
+That machinery is now literally shared: the freeze/replay/record sequence was
+extracted from the notice handler into `scheduler/delivery.ts`
+(`settleJobDelivery`), and both handlers run their delivery through it. The
+[delivery guarantee](#delivery-guarantee--provider-idempotency-keys) above —
+one email per job, outcome recorded only from the provider's answer, *delivery
+outcome unknown* rather than a guess past the idempotency window — applies to
+the failure notice verbatim.
+
+### The job carries the submission, not the asset
+
+`scheduled_jobs.test_submission_id` (migration `0014`) names the submitted
+failing test the job answers; `bfa_asset_id` is deliberately null on these
+rows. The live-asset uniqueness rule allows one live job per (asset, type), and
+two failing submissions for one assembly in quick succession are **two failure
+notices** — each submitted fail triggers its own — so the job is keyed by what
+it actually answers.
+
+Its own uniqueness rule is stricter in the other direction: a partial unique
+index over `(test_submission_id, job_type)` covering every status **except
+`cancelled`** makes "at most one non-cancelled failure notice per submission" a
+database fact. Scheduling is an upsert-do-nothing against it, so a still-failing
+row saved again, a retried mutation, or two clerks at once cannot queue a second
+email about a fail the customer was already told about — even after the first
+one was delivered. Only a cancellation (the fail was corrected away) frees the
+slot, so correcting a result to pass and back to fail earns exactly one fresh
+notice.
+
+### What the failure handler checks, in order
+
+Everything is re-decided from current state on every pass, including a retry:
+
+1. **The submission**, scoped to the job's purveyor. Gone, no longer submitted,
+   no longer a fail, or never linked — `cancelled`, not failed.
+2. **The assembly**, through the submission's own link and tenant-checked
+   against the submission's purveyor. A link that crossed tenants is never
+   mailed.
+3. **The relevance check**: a submitted *pass* filed after this fail — in
+   submission-event order, `(created_at, id)`, never the certifier-typed
+   `test_date` — cancels the notice instead of sending it. The same comparison
+   the [fail list](/docs/wp-dashboard#the-fail-list) makes, so a customer whose
+   assembly has since passed is not told to arrange repairs.
+4. **The recipient** — the asset's *current* customer, resolved through exactly
+   the same exported rules as the reminder chain (`resolveRecipient`): tenant
+   scoped, and a missing, suspended or email-less customer **holds** the job
+   (pending again, a day later, no attempt consumed) rather than failing it.
+5. **The delivery**, through the shared settlement above.
+6. **Completion**, with no successor.
+
+### What the email contains
+
+Fixed copy in `lib/failure-notice-copy.ts` — provisional wording in the same
+register as the notice defaults, flagged for client approval. There is
+deliberately **no `notice_templates` row and no editor** for it: the
+`notice_type` enum names the four escalation stages only, and a configurable
+failure template is not a specified feature.
+
+The repair-company block is resolved **at send time** — the purveyor's
+`repair_companies` rows with `status = 'active'`, never cached and never stored
+on the submission, so a company deactivated yesterday is not in today's email.
+Each entry is **name and phone only**: the entry type has no email field at
+all, so a repair company's address cannot reach a customer's inbox without two
+files changing on purpose. With nobody active to list, the block is omitted
+rather than rendered empty, and the notice still goes out.
+
+Everything renders through `renderTextEmail` — the one escaped path every
+automated message takes — so markup in a customer or company name is inert.
 
 ## `asset_status` is scheduler-owned
 
@@ -660,10 +770,12 @@ for the other. `packages/db/src/scheduled-jobs-rls.test.ts` covers the second.
 | `packages/api/src/lib/notice-defaults.test.ts` | the certifier block's lines, and the empty case that omits the heading |
 | `packages/api/src/scheduler/notice-workflow.db.test.ts` | the workflow against real Postgres — scheduling and reconciliation, the flag at execution, recipient routing after a reassignment, cross-tenant refusal, hold and resume, certifier filtering, customized and fallback templates, escaping, one successor per stage, passing-test cancellation, a running reminder withdrawn by a date change, retries, restart recovery, concurrent claim, the live-job constraint, `asset_status` — and delivery: a stand-in provider implementing Resend's idempotency contract over the full request body (sender included) proves one email and one successor across a crash after acceptance, the same after the configured sender changed between attempts, a legacy payload with no `sender` key failed without a provider call, an explicit `null` sender still retried through the console driver, a refusal that stays retryable with no successor, a recorded outcome, no re-send on a later tick, and an explicit failure past the 24-hour window |
 | `packages/api/src/lib/email.test.ts` | a pinned sender reaching Resend in place of the environment's, ordinary mail still sending as the configured sender, the sender never logged; the key reaching Resend as the SDK's `idempotencyKey` option (and unkeyed mail unchanged), the key on the attempt log line, and the console driver's per-key de-duplication |
-| `packages/db/src/scheduled-jobs-rls.test.ts` | the row policies: cross-tenant reads, a certifier, a blocked admin, and every write path refused for want of the privilege |
+| `packages/api/src/lib/failure-notice-copy.test.ts` | the failure copy: the repair-company lines and heading, the empty case omitting the block, the no-email-field rule, escaping through the shared rendering path |
+| `packages/api/src/scheduler/failure-workflow.db.test.ts` | Workflow 3 against real Postgres — a correction and a late link each queuing one immediate job, drafts queuing nothing, the settled-submission constraint refusing a duplicate before *and after* delivery, fail→pass withdrawing the unsent notice and pass→fail earning one fresh one, two fails being two notices, active-companies-only content with no repair email, send-time recipient resolution, the three holds, the later-pass cancellation, cross-tenant refusal, refused-send retry and lost-response replay each delivering exactly one email under one key, a correction racing the handler, the fail list's membership, episode arithmetic, event-order-not-test-date rule, tenant isolation and default sort, and a regression pass over the chain's own cancellation rules |
+| `packages/db/src/scheduled-jobs-rls.test.ts` | the row policies: cross-tenant reads (failure-notice rows and their `test_submission_id` included), a certifier, a blocked admin, and every write path refused for want of the privilege |
 
-The first three run under `npm test`. The last two write real rows and run under
-`npm run test:db`.
+The unit suites run under `npm test`. The database-backed ones write real rows
+and run under `npm run test:db`.
 
 ## Remaining product decisions
 
@@ -688,6 +800,15 @@ The first three run under `npm test`. The last two write real rows and run under
   is the feature flag alone; `water_purveyors.status` is not consulted, because
   no requirement asks for it and what blocking a purveyor means for their
   customers' compliance deadlines has not been decided.
+- **The failure notice's customer-facing copy.** Provisional in
+  `lib/failure-notice-copy.ts`, same register and same caveat as the notice
+  defaults: plain statements, no compliance claim, awaiting client wording.
+- **The failure-episode rule.** An episode starts at the first submitted fail
+  after the last submitted pass, and later fails inside it do not reset the
+  fail list's age — a stated project default
+  ([details](/docs/wp-dashboard#membership-is-computed-never-stored)), chosen
+  because no existing test or requirement pinned it down. Changing it is one
+  SQL expression and its tests.
 
 ## Related pages
 

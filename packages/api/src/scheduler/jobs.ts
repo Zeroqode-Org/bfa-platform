@@ -139,6 +139,102 @@ export async function scheduleNoticeJob({
 }
 
 /**
+ * The settled-submission index from `0014`, as an `ON CONFLICT` target
+ * predicate. The same third-statement cost as {@link LIVE_ASSET_JOB_CONFLICT},
+ * for the same reason: Postgres needs the exact predicate to choose a partial
+ * index for conflict resolution.
+ */
+const SETTLED_SUBMISSION_JOB_CONFLICT = sql`${scheduledJobs.testSubmissionId} is not null and ${scheduledJobs.status} <> 'cancelled'`;
+
+/**
+ * Creates the one `failure_notice` job for a submitted failing test, due
+ * immediately — or leaves whatever already answers it alone.
+ *
+ * The conflict target is the settled-submission index, which covers every
+ * status except `cancelled`. That is the idempotency of *scheduling*: a
+ * correction that saves a still-failing row again, a retried mutation, or two
+ * clerks editing at once all land on the row that already exists — pending,
+ * running, completed or terminally failed — and write nothing. Only a
+ * cancelled slot (the fail was corrected away and later re-asserted) admits a
+ * fresh job, which is the case that genuinely deserves a fresh email.
+ *
+ * `bfa_asset_id` is deliberately left null: the live-asset index allows one
+ * live job per (asset, type), and two failing submissions for one assembly are
+ * two notices. The handler resolves the asset from the submission at send
+ * time.
+ *
+ * Returns the new row, or `null` when the submission's notice already exists.
+ */
+export async function scheduleFailureNoticeJob({
+	executor = db,
+	submissionId,
+	waterPurveyorId,
+	runAt,
+}: {
+	executor?: JobExecutor;
+	submissionId: string;
+	waterPurveyorId: string;
+	runAt: Date;
+}): Promise<ScheduledJob | null> {
+	const [row] = await executor
+		.insert(scheduledJobs)
+		.values({
+			jobType: "failure_notice",
+			testSubmissionId: submissionId,
+			waterPurveyorId,
+			runAt,
+			status: "pending",
+		})
+		.onConflictDoNothing({
+			target: [scheduledJobs.testSubmissionId, scheduledJobs.jobType],
+			// `where` here is the *index* predicate — `onConflictDoNothing` has no
+			// update to condition, so this names the partial index, the way
+			// `targetWhere` does on the upsert above.
+			where: SETTLED_SUBMISSION_JOB_CONFLICT,
+		})
+		.returning();
+
+	return row ?? null;
+}
+
+/**
+ * Withdraws the live `failure_notice` job for one submission, if any.
+ *
+ * Called when a correction takes the submitted row out of the "failing" state
+ * — the result is no longer `fail`. `cancelled`, never `failed`: the purveyor
+ * told the system the fail was wrong, and the reason lands in `last_error` for
+ * whoever asks why no email went out. A `running` row is cancelled too;
+ * `completeRunningJob` refuses to complete it afterwards, so a send racing the
+ * correction loses. A completed row is untouched — an email that went out is a
+ * fact, and the record keeps saying so.
+ */
+export async function cancelFailureNoticeJobs({
+	executor = db,
+	submissionId,
+	reason,
+}: {
+	executor?: JobExecutor;
+	submissionId: string;
+	reason: string;
+}): Promise<ScheduledJob[]> {
+	return executor
+		.update(scheduledJobs)
+		.set({
+			status: "cancelled",
+			lastError: reason,
+			completedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(scheduledJobs.testSubmissionId, submissionId),
+				eq(scheduledJobs.jobType, "failure_notice"),
+				isLive(),
+			),
+		)
+		.returning();
+}
+
+/**
  * Inserts a new pending job for `stage`. A plain insert, not an upsert.
  *
  * Used where the caller has just withdrawn every live job for the asset under
