@@ -12,12 +12,16 @@
  * rolled-back correction leaves no job behind; a crash mid-send is settled by
  * asking the provider again under the same key.
  *
- * There is deliberately **no stored fail-list state anywhere in this module**.
- * The job is the pending delivery of one email, nothing more: fail-list
- * membership is computed from `test_submissions` history at read time
- * (`dashboard.failList`), and the pre-declared `fail_list_check` job type
- * stays unused because there is no delay to schedule and no membership to
- * recheck.
+ * The email and the fail list are separate clocks. The email goes out now;
+ * the asset reaches the WP's fail list only after its failure has gone 30
+ * days without a later submitted pass (PRD § 6.8). There is deliberately **no
+ * stored fail-list state anywhere in this module**: the job is the pending
+ * delivery of one email, nothing more. Fail-list membership — the 30 days
+ * included — is computed from `test_submissions` history at read time
+ * (`listFailingAssets` behind `dashboard.failList`), so an episode crosses
+ * the boundary because time passed, not because anything was written. That
+ * is also why the pre-declared `fail_list_check` job type stays unused:
+ * there is nothing on day 30 for a job to do.
  *
  * Everything the email contains is resolved **at send time** from current
  * state, exactly as the escalation handler does it. The job carries only which

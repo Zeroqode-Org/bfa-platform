@@ -251,12 +251,13 @@ purveyor's **active** repair companies, resolved at send time, name and phone
 only — never a repair company's email — and a pass submitted after the fail
 cancels the unsent notice. Not gated: the failure notice is not a paid add-on
 and checks no feature flag. The fail list ships as `dashboard.failList` — an
-asset is listed while its latest submitted, resulted test is a fail, computed
-from history on every read with **no stored membership and no waiting
-period** — and as `/wp/fail-list`, a drill-down behind the dashboard's Past due
-card, oldest unresolved failure first, with the build plan's three age bands as
-row colouring driven by design tokens (30 and 60 days are presentation, never
-entry rules). Copy is provisional pending client wording, like the four notice
+asset is listed once its failure has gone **30 days without a passing
+re-test** (PRD § 6.8), computed from history on every read with **no stored
+membership and no scheduled job**, and cleared by the next submitted pass —
+and as `/wp/fail-list`, a drill-down behind the dashboard's Past due card,
+oldest failure first, with two reachable age bands (30–60 days, over 60) as
+row colouring driven by design tokens. An earlier cut listed assets the moment
+the failure was submitted; that contradicted the PRD and was corrected. Copy is provisional pending client wording, like the four notice
 defaults. Full writeups:
 [Notice Workflow & Scheduler](/docs/notice-workflow#workflow-3--the-failure-notice)
 and [WP Dashboard](/docs/wp-dashboard#the-fail-list).

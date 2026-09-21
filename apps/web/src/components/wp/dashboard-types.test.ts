@@ -213,23 +213,32 @@ describe("failingDays", () => {
 	it("crosses a year boundary without drifting", () => {
 		expect(failingDays("2025-12-31", "2026-01-01")).toBe(1);
 	});
+
+	it("reads 30 on the day an asset becomes eligible for the list", () => {
+		expect(failingDays("2026-08-12", "2026-09-11")).toBe(30);
+	});
 });
 
 describe("failAgeBand", () => {
-	it("uses the danger tint under 30 days", () => {
-		expect(failAgeBand(0)).toBe("under_30");
-		expect(failAgeBand(29)).toBe("under_30");
-	});
-
-	// The build plan's "a row crossing 30 and 60 days changes colour", pinned
-	// to the exact mornings it happens on.
-	it("moves to the stronger tint on day 30 and stays through day 60", () => {
+	// A row reaches the list only after 30 days without a passing re-test, so
+	// its first reachable band starts on day 30 — the entry morning itself.
+	it("uses the stronger danger tint from entry on day 30 through day 60", () => {
 		expect(failAgeBand(30)).toBe("days_30_to_60");
+		expect(failAgeBand(45)).toBe("days_30_to_60");
 		expect(failAgeBand(60)).toBe("days_30_to_60");
 	});
 
-	it("moves to the full danger colour past 60 days", () => {
+	// The build plan's "a row crossing 60 days changes colour", pinned to the
+	// exact morning it happens on.
+	it("moves to the full danger colour on day 61", () => {
 		expect(failAgeBand(61)).toBe("over_60");
 		expect(failAgeBand(400)).toBe("over_60");
+	});
+
+	// Only a stale `today` on a page left open can produce these; they must not
+	// render as an "under 30 days" state the list never actually shows.
+	it("has no under-30 band: a stale figure falls into the first band", () => {
+		expect(failAgeBand(0)).toBe("days_30_to_60");
+		expect(failAgeBand(29)).toBe("days_30_to_60");
 	});
 });

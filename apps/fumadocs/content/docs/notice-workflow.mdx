@@ -598,6 +598,15 @@ optional paid features, not the failure notice, so no `wp_feature_flags` check
 runs anywhere in this path. If that turns out to be wrong it is one flag check
 at the top of the handler.
 
+**The email is immediate; the fail list is not.** The notice is queued the
+moment a failed test is submitted. The assembly reaches the WP's
+[fail list](/docs/wp-dashboard#the-fail-list) only once that failure has gone
+30 days without a passing re-test (PRD § 6.8) — a rule applied when the list
+is read, not by anything this path writes or schedules. A passing re-test is a
+new submitted record; when it arrives, the earlier fail's still-unsent notice
+is cancelled by the handler's later-pass check below rather than by the
+lifecycle helper.
+
 ### Delivered through the scheduler, not inline
 
 The mutation that records a linked fail does not send mail. It queues one
@@ -771,7 +780,8 @@ for the other. `packages/db/src/scheduled-jobs-rls.test.ts` covers the second.
 | `packages/api/src/scheduler/notice-workflow.db.test.ts` | the workflow against real Postgres — scheduling and reconciliation, the flag at execution, recipient routing after a reassignment, cross-tenant refusal, hold and resume, certifier filtering, customized and fallback templates, escaping, one successor per stage, passing-test cancellation, a running reminder withdrawn by a date change, retries, restart recovery, concurrent claim, the live-job constraint, `asset_status` — and delivery: a stand-in provider implementing Resend's idempotency contract over the full request body (sender included) proves one email and one successor across a crash after acceptance, the same after the configured sender changed between attempts, a legacy payload with no `sender` key failed without a provider call, an explicit `null` sender still retried through the console driver, a refusal that stays retryable with no successor, a recorded outcome, no re-send on a later tick, and an explicit failure past the 24-hour window |
 | `packages/api/src/lib/email.test.ts` | a pinned sender reaching Resend in place of the environment's, ordinary mail still sending as the configured sender, the sender never logged; the key reaching Resend as the SDK's `idempotencyKey` option (and unkeyed mail unchanged), the key on the attempt log line, and the console driver's per-key de-duplication |
 | `packages/api/src/lib/failure-notice-copy.test.ts` | the failure copy: the repair-company lines and heading, the empty case omitting the block, the no-email-field rule, escaping through the shared rendering path |
-| `packages/api/src/scheduler/failure-workflow.db.test.ts` | Workflow 3 against real Postgres — a correction and a late link each queuing one immediate job, drafts queuing nothing, the settled-submission constraint refusing a duplicate before *and after* delivery, fail→pass withdrawing the unsent notice and pass→fail earning one fresh one, two fails being two notices, active-companies-only content with no repair email, send-time recipient resolution, the three holds, the later-pass cancellation, cross-tenant refusal, refused-send retry and lost-response replay each delivering exactly one email under one key, a correction racing the handler, the fail list's membership, episode arithmetic, event-order-not-test-date rule, tenant isolation and default sort, and a regression pass over the chain's own cancellation rules |
+| `packages/api/src/scheduler/failure-workflow.db.test.ts` | Workflow 3 against real Postgres, with every re-test modelled as a **new submitted record** through `applySubmittedTestResult` — a submitted fail and a late link each queuing one immediate job, drafts queuing nothing, two fails being two notices, active-companies-only content with no repair email, send-time recipient resolution, the three holds, a later passing re-test cancelling the unsent notice (including one racing the handler), cross-tenant refusal, refused-send retry and lost-response replay each delivering exactly one email under one key; the fail list's 30-day rule at an explicit clock — absent at 29 days and 1 ms short of 30, present at exactly 30, never listed after an earlier pass, cleared by a pass after entry, not reset by a second fail, restarted by fail→pass→fail — plus drafts, unlinked submissions, event-order-not-test-date, tenant isolation, default sort, and the procedure applying the rule to the real clock; the WP correction path in its own section; and a regression pass over the chain's cancellation rules |
+| `packages/api/src/lib/fail-list-rule.test.ts` | the 30-day cutoff arithmetic offline: exactly 30 × 24 h, the 29-day and 1 ms-short cases, and a daylight-saving change inside the window |
 | `packages/db/src/scheduled-jobs-rls.test.ts` | the row policies: cross-tenant reads (failure-notice rows and their `test_submission_id` included), a certifier, a blocked admin, and every write path refused for want of the privilege |
 
 The unit suites run under `npm test`. The database-backed ones write real rows
@@ -810,7 +820,7 @@ recomputes `asset_status` table-wide while suites run. See
   defaults: plain statements, no compliance claim, awaiting client wording.
 - **The failure-episode rule.** An episode starts at the first submitted fail
   after the last submitted pass, and later fails inside it do not reset the
-  fail list's age — a stated project default
+  fail list's 30-day clock or its age — a stated project default
   ([details](/docs/wp-dashboard#membership-is-computed-never-stored)), chosen
   because no existing test or requirement pinned it down. Changing it is one
   SQL expression and its tests.

@@ -22,7 +22,10 @@ export type IncomingReport =
 export type DelinquentAsset =
 	RouterOutputs["dashboard"]["delinquentAssets"][number];
 
-/** One asset on the fail list, with the day its failure episode began. */
+/**
+ * One asset on the fail list — a failure 30 or more days old with no later
+ * submitted pass — with the day its failure episode began.
+ */
 export type FailListRow = RouterOutputs["dashboard"]["failList"][number];
 
 /**
@@ -250,9 +253,11 @@ export function daysOverdue(
  *
  * Both sides are UTC calendar days — `failingSince` comes off the procedure as
  * one, `today` is decided once on the server — pinned to the same instant
- * before subtracting, exactly as {@link daysOverdue} does it. Clamped at zero:
- * a failure filed later today is zero days old, and a clock skew that says
- * otherwise is not worth a negative age.
+ * before subtracting, exactly as {@link daysOverdue} does it. A listed row has
+ * been failing at least 30 days by the server's clock, but `today` is fixed at
+ * page render while the list is fetched afterwards, so a page left open
+ * across midnight can compute a smaller number; it is clamped at zero rather
+ * than trusted to be 30 or more.
  */
 export function failingDays(failingSince: string, today: string): number {
 	const since = Date.parse(`${failingSince}T00:00:00Z`);
@@ -263,17 +268,23 @@ export function failingDays(failingSince: string, today: string): number {
 	return Math.max(0, Math.floor((now - since) / 86_400_000));
 }
 
-export type FailAgeBand = "under_30" | "days_30_to_60" | "over_60";
+export type FailAgeBand = "days_30_to_60" | "over_60";
 
 /**
- * The build plan's three age bands, from days since the failure episode began:
- * under 30 days the danger tint, 30 to 60 inclusive the stronger tint, past 60
- * the full danger colour. Day 30 is the first day of the middle band and day
- * 61 the first of the last, so "a row crossing 30 and 60 days changes colour"
- * is literally true of those two mornings.
+ * The age bands a fail-list row can actually be in, from days since the
+ * failure episode began.
+ *
+ * An asset reaches the list only after 30 days without a passing re-test
+ * (PRD § 6.8), so the build plan's original "under 30 days" band cannot occur
+ * and is not modelled. The two it keeps are the build plan's own mappings:
+ * 30 to 60 days inclusive is the stronger danger tint, past 60 the full danger
+ * colour. Day 61 is the first morning of the second band, so a row crossing
+ * 60 days visibly changes colour.
+ *
+ * A figure under 30 — only possible from a `today` gone stale on a page left
+ * open, see {@link failingDays} — is treated as the first band rather than
+ * rendered as a state the list never shows.
  */
 export function failAgeBand(days: number): FailAgeBand {
-	if (days > 60) return "over_60";
-
-	return days >= 30 ? "days_30_to_60" : "under_30";
+	return days > 60 ? "over_60" : "days_30_to_60";
 }

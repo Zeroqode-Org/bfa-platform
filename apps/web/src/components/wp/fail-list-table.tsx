@@ -35,13 +35,15 @@ import {
 } from "./dashboard-types";
 
 /**
- * The fail list: every assembly whose latest submitted, resulted test is a
- * fail, aged from the start of its failure episode.
+ * The fail list: every assembly whose failure has gone 30 days without a
+ * later submitted passing test, aged from the start of its failure episode.
  *
  * Everything about membership is the server's (`dashboard.failList`): computed
  * from submitted test history on every read, one row per asset, no stored
- * flag, no waiting period. What this component owns is presentation — the
- * three age bands and the sorting.
+ * flag. The 30 days are the entry rule, applied there — the failure email went
+ * out on the day of the fail, and this list is the follow-up for the ones
+ * still unresolved a month later. What this component owns is presentation —
+ * the two reachable age bands and the sorting.
  *
  * **Sorting is client-side over the full response.** The procedure returns the
  * whole list — a work queue bounded by the purveyor's assemblies with an
@@ -50,11 +52,12 @@ import {
  * presentation choice, so it does not cost a round trip, and the default
  * state renders the server's order untouched.
  *
- * **The age bands are backgrounds, never the information.** Under 30 days the
- * danger tint, 30–60 the stronger tint, past 60 the full danger colour — all
- * design-system tokens (`danger-bg`, `danger-bg-strong`, `danger` with its
- * contrast foreground). The age itself is printed in the row, so the bands
- * remain a glance aid rather than the only carrier of the fact.
+ * **The age bands are backgrounds, never the information.** Rows enter at 30
+ * days, so there are two reachable bands: 30–60 days the stronger danger tint,
+ * past 60 the full danger colour — design-system tokens (`danger-bg-strong`,
+ * `danger` with its contrast foreground). The age itself is printed in the
+ * row, so the bands remain a glance aid rather than the only carrier of the
+ * fact.
  *
  * Each row leads to the existing asset detail route — the next action on a
  * failing assembly is on the asset, and a parallel detail view here would be a
@@ -123,11 +126,12 @@ export function FailListTable({ today }: { today: string }) {
 									<EmptyMedia variant="icon">
 										<CircleCheck className="text-success" />
 									</EmptyMedia>
-									<EmptyTitle>No failing assemblies</EmptyTitle>
+									<EmptyTitle>Nothing on the fail list</EmptyTitle>
 									<EmptyDescription>
-										An assembly appears here the moment a failing test is
-										submitted for it, and leaves the moment a passing test is
-										filed. Drafts never count.
+										An assembly appears here once a failed test has gone 30 days
+										without a passing re-test, and leaves as soon as a passing
+										test is submitted. Newer failures are not listed yet — their
+										failure email has already gone out. Drafts never count.
 									</EmptyDescription>
 								</EmptyHeader>
 							</Empty>
@@ -250,12 +254,6 @@ const BAND_STYLES: Record<
 	FailAgeBand,
 	{ row: string; cell: string; secondary: string; link: string }
 > = {
-	under_30: {
-		row: "bg-danger-bg",
-		cell: "",
-		secondary: "text-muted-foreground",
-		link: "text-primary hover:underline",
-	},
 	days_30_to_60: {
 		row: "bg-danger-bg-strong",
 		cell: "",

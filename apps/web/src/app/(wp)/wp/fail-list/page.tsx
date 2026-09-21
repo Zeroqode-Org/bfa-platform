@@ -28,10 +28,11 @@ export default async function Page() {
 			<div className="flex flex-col gap-1.5">
 				<PageTitle>Fail List</PageTitle>
 				<p className="text-[13px] text-muted-foreground">
-					Assemblies whose latest submitted test failed, oldest failure first.
-					An assembly joins the moment a failing test is submitted and leaves
-					the moment a passing one is filed — there is no waiting period, and
-					the 30- and 60-day colours are age, not entry rules.
+					Assemblies with a failed test that has gone 30 days without a passing
+					re-test, oldest failure first. The failure email goes to the customer
+					as soon as the test is submitted; an assembly joins this list only
+					once 30 days pass with no passing test filed, and leaves as soon as
+					one is. The colours mark failures past 60 days.
 				</p>
 			</div>
 

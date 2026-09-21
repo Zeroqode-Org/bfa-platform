@@ -13,11 +13,19 @@
  * - A **linked pass** ends the assembly's escalation chain, and withdraws the
  *   unsent failure notice of *this* submission if a correction just turned it
  *   from a fail into a pass. (A failure notice already delivered is a fact and
- *   stays on the record.)
+ *   stays on the record.) A re-test is a *new* submitted record, not an edit:
+ *   when that new pass arrives, the earlier fail's still-unsent notice is
+ *   cancelled by the failure-notice handler, which re-checks for a later pass
+ *   before every send.
  * - A **linked fail** queues that submission's one failure notice, due now.
  *   Idempotent at the database: a still-failing row saved again writes
  *   nothing. It cancels nothing — the assembly is still untested as far as the
  *   escalation is concerned.
+ *
+ * Nothing here writes fail-list state, and nothing needs to: the list is read
+ * from submitted history, and an asset appears on it only after its failure
+ * has gone 30 days without a later submitted pass (`listFailingAssets`). The
+ * email is immediate; the list is not.
  * - A submitted row that is **neither** (result cleared, or corrected while
  *   unlinked) withdraws its own unsent failure notice and touches no chain.
  * - An **unlinked** submission of any result touches nothing else: it

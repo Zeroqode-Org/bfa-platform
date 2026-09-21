@@ -57,10 +57,11 @@
 	--danger: #dd2c3b;
 	--danger-bg: #fbe4e6;
 	/*
-	 * The fail list's three age bands (build plan, Workflow 3) escalate the
-	 * danger pair: the tint under 30 days, this stronger tint from 30 to 60,
-	 * and the full danger colour past 60 — the one sanctioned solid fill,
-	 * which is why it needs a contrast foreground.
+	 * The fail list's age bands (build plan, Workflow 3) escalate the danger
+	 * pair. Rows enter only after 30 days without a passing re-test, so the
+	 * two reachable bands are this stronger tint from 30 to 60 days and the
+	 * full danger colour past 60 — the one sanctioned solid fill, which is
+	 * why it needs a contrast foreground.
 	 */
 	--danger-bg-strong: #f6c6cc;
 	--danger-foreground: #ffffff;

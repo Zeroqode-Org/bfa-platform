@@ -96,8 +96,9 @@ type JobHandler = (
  *
  * Partial on purpose. `ag_renewal` (Workflow 2) is declared in the `job_type`
  * enum and not implemented here, and `fail_list_check` is declared and
- * *deliberately never implemented*: fail-list membership is computed from test
- * history at read time, so there is nothing for a scheduled recheck to do. A
+ * *deliberately never implemented*: fail-list membership — including its
+ * 30-day entry rule — is computed from test history at read time, so there is
+ * nothing for a scheduled recheck to do. A
  * job of an unhandled type is left alone and logged rather than being claimed
  * and failed, so shipping this workflow cannot consume the retry budget of a
  * row a later workflow will want.

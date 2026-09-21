@@ -29,6 +29,22 @@ import type { AppRouter } from "../routers/index";
  * query computed from history. None of that is observable through a mocked
  * database.
  *
+ * Two clocks are under test and they are deliberately different: the failure
+ * email is queued the moment a failed test is submitted, while the fail list
+ * shows an asset only once that failure has gone 30 days without a later
+ * submitted pass (PRD § 6.8). The list's boundary is asserted against
+ * `listFailingAssets` with an explicit `now`, so "29 days", "one millisecond
+ * short of 30" and "exactly 30" are exact rather than racing the wall clock;
+ * one test goes through `dashboard.failList` itself to prove the procedure
+ * applies the same rule to the real clock.
+ *
+ * **A re-test is a new submitted record.** Workflow scenarios go through
+ * `submitTest`, which inserts a new submitted row and then runs
+ * `applySubmittedTestResult` for it — exactly what the wizard's submit will
+ * do. No scenario edits an earlier submission's result to stand in for a
+ * re-test. The WP correction feature, which *does* rewrite a submitted row by
+ * design, has its own section and is exercised only as a correction.
+ *
  * Two purveyors are seeded with interchangeable data so a leak looks like a
  * leak. Deliberately, **neither has any `wp_feature_flags` row**: the failure
  * notice is not gated on `automated_notices`, and every email this suite sees
@@ -42,6 +58,8 @@ const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 let db: typeof import("@bfa-platform/db")["db"];
 let runFailureNoticeJob: typeof import("./failure-notice")["runFailureNoticeJob"];
 let runSchedulerTick: typeof import("./index")["runSchedulerTick"];
+let applySubmittedTestResult: typeof import("./submission-lifecycle")["applySubmittedTestResult"];
+let listFailingAssets: typeof import("../routers/dashboard")["listFailingAssets"];
 
 type SubmittedTests = AppRouter["submittedTests"];
 type UpdateInput = inferProcedureInput<SubmittedTests["updateSubmittedTest"]>;
@@ -195,6 +213,45 @@ async function seedSubmission({
 	return id;
 }
 
+/**
+ * Submits a **new** test record, the way the certifier wizard's submit will:
+ * insert the submitted row, then apply what its result means through the one
+ * exported lifecycle helper. A re-test is always a call to this — never an
+ * edit of an earlier submission's `test_result`.
+ */
+async function submitTest({
+	assetId,
+	result,
+	waterPurveyorId = wpA,
+	createdAt,
+	testDate = null,
+}: {
+	assetId: string | null;
+	result: "pass" | "fail";
+	waterPurveyorId?: string;
+	createdAt?: string | Date;
+	testDate?: string | null;
+}) {
+	const id = await seedSubmission({
+		assetId,
+		status: "submitted",
+		result,
+		waterPurveyorId,
+		createdAt: createdAt instanceof Date ? createdAt.toISOString() : createdAt,
+		testDate,
+	});
+
+	await applySubmittedTestResult({
+		submissionId: id,
+		bfaAssetId: assetId,
+		testResult: result,
+		waterPurveyorId,
+		trigger: "test_submitted",
+	});
+
+	return id;
+}
+
 /** The correction form's whole record, defaulted to an untouched fail. */
 function correction(
 	id: string,
@@ -328,6 +385,8 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 		({ db } = await import("@bfa-platform/db"));
 		({ runFailureNoticeJob } = await import("./failure-notice"));
 		({ runSchedulerTick } = await import("./index"));
+		({ applySubmittedTestResult } = await import("./submission-lifecycle"));
+		({ listFailingAssets } = await import("../routers/dashboard"));
 
 		const { t } = await import("../index");
 		const { appRouter } = await import("../routers/index");
@@ -507,19 +566,15 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 	});
 
 	describe("what queues a failure notice, and what never does", () => {
-		it("queues one job, due immediately, when a correction records a fail", async () => {
+		it("a newly submitted failed test queues one job, due immediately", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: null,
-			});
 
 			const lines = captureLogs();
 			const before = Date.now();
-			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
-				correction(submissionId),
-			);
+			const submissionId = await submitTest({
+				assetId: asset.id,
+				result: "fail",
+			});
 
 			const jobs = await jobsForSubmission(submissionId);
 			expect(jobs).toHaveLength(1);
@@ -530,6 +585,8 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 				// notices, and the live-asset uniqueness rule must not collapse them.
 				bfa_asset_id: null,
 			});
+			// Due now — not in 30 days. The email and the fail list are separate
+			// clocks.
 			expect(jobs[0]?.run_at.getTime()).toBeGreaterThanOrEqual(before - 1000);
 			expect(jobs[0]?.run_at.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
 
@@ -537,22 +594,18 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			expect(scheduled).toHaveLength(1);
 			expect(scheduled[0]).toMatchObject({
 				job_type: "failure_notice",
-				actor_id: ids.adminA,
 				wp_id: wpA,
 				asset_id: asset.id,
 				submission_id: submissionId,
-				trigger: "test_submission_corrected",
+				trigger: "test_submitted",
 			});
 		});
 
 		it("queues the notice when a failed no-BIN submission is later linked", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
-				assetId: null,
-				status: "submitted",
-				result: "fail",
-			});
+			const submissionId = await submitTest({ assetId: null, result: "fail" });
 
+			// Unlinked, it represents no assembly and queues nothing.
 			expect(await jobsForSubmission(submissionId)).toHaveLength(0);
 
 			await callerFor(ids.adminA).submittedTests.linkSubmissionAsset({
@@ -581,18 +634,53 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			expect(deliveries(lines)).toHaveLength(0);
 		});
 
-		it("saving a still-failing correction again queues no second notice", async () => {
+		it("two failed tests for one assembly are two notices — the live-asset rule does not collapse them", async () => {
+			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
+
+			const first = await submitTest({ assetId: asset.id, result: "fail" });
+			const second = await submitTest({ assetId: asset.id, result: "fail" });
+
+			expect(await jobsForSubmission(first)).toHaveLength(1);
+			expect(await jobsForSubmission(second)).toHaveLength(1);
+		});
+	});
+
+	describe("the WP correction path (a correction, not a re-test)", () => {
+		// These exercise the purveyor's correction feature, which rewrites a
+		// submitted row by design. They are about what a correction does to that
+		// row's own notice — not a stand-in for a re-test, which is always a new
+		// submitted record (`submitTest`).
+
+		it("a correction that records a fail queues the notice, attributed to the WP actor", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
 			const submissionId = await seedSubmission({
 				assetId: asset.id,
 				status: "submitted",
 				result: null,
 			});
-			const caller = callerFor(ids.adminA);
 
-			await caller.submittedTests.updateSubmittedTest(correction(submissionId));
+			const lines = captureLogs();
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				correction(submissionId),
+			);
+
+			expect(await jobsForSubmission(submissionId)).toHaveLength(1);
+			expect(eventsNamed(lines, "scheduler_job_scheduled")[0]).toMatchObject({
+				actor_id: ids.adminA,
+				submission_id: submissionId,
+				trigger: "test_submission_corrected",
+			});
+		});
+
+		it("saving a still-failing correction again queues no second notice", async () => {
+			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
+			const submissionId = await submitTest({
+				assetId: asset.id,
+				result: "fail",
+			});
+
 			// A real change that leaves the row failing.
-			await caller.submittedTests.updateSubmittedTest(
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
 				correction(submissionId, { submittedBinText: "typed on the day" }),
 			);
 
@@ -601,14 +689,11 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 
 		it("does not re-notify a fail the customer was already told about", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
+			const submissionId = await submitTest({
 				assetId: asset.id,
-				status: "submitted",
-				result: null,
+				result: "fail",
 			});
-			const caller = callerFor(ids.adminA);
 
-			await caller.submittedTests.updateSubmittedTest(correction(submissionId));
 			await runSchedulerTick();
 
 			const [sentJob] = await jobsForSubmission(submissionId);
@@ -616,81 +701,62 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 
 			// A later correction that still says fail lands on the completed slot
 			// and writes nothing — the settled-submission index at work.
-			await caller.submittedTests.updateSubmittedTest(
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
 				correction(submissionId, { submittedBinText: "second look" }),
 			);
 
 			expect(await jobsForSubmission(submissionId)).toHaveLength(1);
 		});
 
-		it("correcting a fail to pass withdraws the unsent notice; back to fail earns one fresh one", async () => {
+		it("correcting a mis-recorded fail to pass withdraws that row's unsent notice", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
+			const submissionId = await submitTest({
 				assetId: asset.id,
-				status: "submitted",
-				result: null,
+				result: "fail",
 			});
-			const caller = callerFor(ids.adminA);
 
-			await caller.submittedTests.updateSubmittedTest(correction(submissionId));
-			await caller.submittedTests.updateSubmittedTest(
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
 				correction(submissionId, { testResult: "pass" }),
 			);
 
-			let jobs = await jobsForSubmission(submissionId);
+			const jobs = await jobsForSubmission(submissionId);
 			expect(jobs).toHaveLength(1);
 			expect(jobs[0]?.status).toBe("cancelled");
 			expect(jobs[0]?.last_error).toMatch(/no longer a failing test/i);
-
-			await caller.submittedTests.updateSubmittedTest(
-				correction(submissionId, { testResult: "fail" }),
-			);
-
-			jobs = await jobsForSubmission(submissionId);
-			expect(jobs).toHaveLength(2);
-			expect(jobs[1]?.status).toBe("pending");
 		});
 
-		it("two fails for one assembly are two notices — the live-asset rule does not collapse them", async () => {
+		it("a correction to pass beats a handler already inside the job", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const first = await seedSubmission({
-				assetId: null,
-				status: "submitted",
+			const submissionId = await submitTest({
+				assetId: asset.id,
 				result: "fail",
 			});
-			const second = await seedSubmission({
-				assetId: null,
-				status: "submitted",
-				result: "fail",
-			});
-			const caller = callerFor(ids.adminA);
 
-			await caller.submittedTests.linkSubmissionAsset({
-				submissionId: first,
-				assetId: asset.id,
-			});
-			await caller.submittedTests.linkSubmissionAsset({
-				submissionId: second,
-				assetId: asset.id,
-			});
+			const job = await claimFailureJob(submissionId);
 
-			expect(await jobsForSubmission(first)).toHaveLength(1);
-			expect(await jobsForSubmission(second)).toHaveLength(1);
+			// The correction lands while the handler holds the row.
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				correction(submissionId, { testResult: "pass" }),
+			);
+
+			captureLogs();
+			const outcome = await runFailureNoticeJob(job);
+
+			expect(["cancelled", "superseded"]).toContain(outcome.kind);
+
+			const [row] = await jobsForSubmission(submissionId);
+			expect(row?.status).toBe("cancelled");
 		});
 	});
 
 	describe("the failure email", () => {
 		it("mails the current customer, listing only active repair companies by name and phone — never an email", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
+			const submissionId = await submitTest({
 				assetId: asset.id,
-				status: "submitted",
-				result: null,
+				result: "fail",
+				testDate: "2026-09-01",
 			});
-
-			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
-				correction(submissionId, { testDate: "2026-09-01" }),
-			);
 
 			const lines = captureLogs();
 			// No wp_feature_flags row exists for wpA: this send is also the proof
@@ -734,15 +800,7 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 
 		it("resolves the recipient at send time, not at fail time", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: null,
-			});
-
-			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
-				correction(submissionId),
-			);
+			await submitTest({ assetId: asset.id, result: "fail" });
 
 			// The occupant changes between the fail and the tick.
 			await pool.query(
@@ -761,15 +819,10 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			const asset = await seedAsset({
 				currentCustomerId: customerIds.suspended,
 			});
-			const submissionId = await seedSubmission({
+			const submissionId = await submitTest({
 				assetId: asset.id,
-				status: "submitted",
-				result: null,
+				result: "fail",
 			});
-
-			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
-				correction(submissionId),
-			);
 
 			const lines = captureLogs();
 			const result = await runSchedulerTick();
@@ -790,25 +843,15 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 				currentCustomerId: customerIds.noEmail,
 			});
 			const orphanAsset = await seedAsset({ currentCustomerId: null });
-			const caller = callerFor(ids.adminA);
 
-			const noEmailSubmission = await seedSubmission({
+			const noEmailSubmission = await submitTest({
 				assetId: noEmailAsset.id,
-				status: "submitted",
-				result: null,
+				result: "fail",
 			});
-			const orphanSubmission = await seedSubmission({
+			const orphanSubmission = await submitTest({
 				assetId: orphanAsset.id,
-				status: "submitted",
-				result: null,
+				result: "fail",
 			});
-
-			await caller.submittedTests.updateSubmittedTest(
-				correction(noEmailSubmission),
-			);
-			await caller.submittedTests.updateSubmittedTest(
-				correction(orphanSubmission),
-			);
 
 			const lines = captureLogs();
 			const result = await runSchedulerTick();
@@ -823,24 +866,12 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			);
 		});
 
-		it("cancels instead of sending when a pass was submitted after the fail", async () => {
+		it("cancels the unsent notice instead of sending when a passing re-test is submitted after the fail", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: null,
-			});
+			const failId = await submitTest({ assetId: asset.id, result: "fail" });
 
-			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
-				correction(submissionId),
-			);
-
-			// A passing re-test lands before the tick gets to the job.
-			await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: "pass",
-			});
+			// The re-test: a new submitted record, before the tick reaches the job.
+			await submitTest({ assetId: asset.id, result: "pass" });
 
 			const lines = captureLogs();
 			const result = await runSchedulerTick();
@@ -849,9 +880,28 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			expect(result.sent).toBe(0);
 			expect(deliveries(lines)).toHaveLength(0);
 
-			const [job] = await jobsForSubmission(submissionId);
+			const [job] = await jobsForSubmission(failId);
 			expect(job?.status).toBe("cancelled");
 			expect(job?.last_error).toMatch(/passing test.*resolves/i);
+		});
+
+		it("a passing re-test beats a handler already inside the job", async () => {
+			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
+			const failId = await submitTest({ assetId: asset.id, result: "fail" });
+
+			const job = await claimFailureJob(failId);
+
+			// The re-test lands while the handler holds the row.
+			await submitTest({ assetId: asset.id, result: "pass" });
+
+			const lines = captureLogs();
+			const outcome = await runFailureNoticeJob(job);
+
+			expect(outcome.kind).toBe("cancelled");
+			expect(deliveries(lines)).toHaveLength(0);
+
+			const [row] = await jobsForSubmission(failId);
+			expect(row?.status).toBe("cancelled");
 		});
 
 		it("never mails another tenant: a cross-tenant asset link is cancelled, not sent", async () => {
@@ -879,8 +929,6 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			expect(result.cancelled).toBe(1);
 			expect(deliveries(lines)).toHaveLength(0);
 
-			// wpA's job: the submission names a tenant the job does not, so it is
-			// not wpA's submission to mail. (The submission itself is wpB's row.)
 			const [job] = await jobsForSubmission(submissionId);
 			expect(job?.status).toBe("cancelled");
 		});
@@ -889,14 +937,10 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 	describe("delivery idempotency, retry and recovery", () => {
 		it("a refused send retries under the same key and delivers exactly one email", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
+			const submissionId = await submitTest({
 				assetId: asset.id,
-				status: "submitted",
-				result: null,
+				result: "fail",
 			});
-			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
-				correction(submissionId),
-			);
 
 			const provider = fakeProvider();
 			provider.state.refuse = true;
@@ -930,14 +974,10 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 
 		it("an accepted send whose response was lost is settled by replay, not by a second email", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
+			const submissionId = await submitTest({
 				assetId: asset.id,
-				status: "submitted",
-				result: null,
+				result: "fail",
 			});
-			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
-				correction(submissionId),
-			);
 
 			const provider = fakeProvider();
 			provider.state.acceptThenLoseResponse = true;
@@ -964,77 +1004,32 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 				key ? provider.idFor(key) : undefined,
 			);
 		});
-
-		it("a correction to pass beats a handler already inside the job", async () => {
-			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
-			const submissionId = await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: null,
-			});
-			const caller = callerFor(ids.adminA);
-			await caller.submittedTests.updateSubmittedTest(correction(submissionId));
-
-			const job = await claimFailureJob(submissionId);
-
-			// The correction lands while the handler holds the row.
-			await caller.submittedTests.updateSubmittedTest(
-				correction(submissionId, { testResult: "pass" }),
-			);
-
-			captureLogs();
-			const outcome = await runFailureNoticeJob(job);
-
-			// The handler re-reads the submission and finds it is no longer a
-			// failing test; the row was already cancelled underneath it.
-			expect(["cancelled", "superseded"]).toContain(outcome.kind);
-
-			const [row] = await jobsForSubmission(submissionId);
-			expect(row?.status).toBe("cancelled");
-		});
 	});
 
-	describe("dashboard.failList — membership computed from history", () => {
-		/** Minutes after a fixed origin, so event order is explicit. */
-		function at(minutes: number) {
-			return new Date(Date.UTC(2026, 0, 10, 12, minutes)).toISOString();
+	describe("the fail list — 30 days without a passing re-test", () => {
+		// Every scenario submits new records at explicit instants and reads the
+		// list at an explicit `now`, so the 30-day boundary is exact. A re-test is
+		// a new `submitTest` call, never an edit of an earlier row.
+
+		const T0 = new Date("2026-01-10T12:00:00.000Z");
+		const DAY = 86_400_000;
+		const after = (ms: number) => new Date(T0.getTime() + ms);
+
+		async function listedAt(now: Date, assetId: string) {
+			const rows = await listFailingAssets({ waterPurveyorId: wpA, now });
+
+			return rows.filter((row) => row.id === assetId);
 		}
 
-		it("lists a failing asset once, aged from the first fail after the last pass", async () => {
-			const caller = callerFor(ids.adminA);
+		it("is absent at 29 days and one millisecond short of 30, and present at exactly 30", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
+			await submitTest({ assetId: asset.id, result: "fail", createdAt: T0 });
 
-			expect(
-				(await caller.dashboard.failList()).filter(
-					(row) => row.id === asset.id,
-				),
-			).toEqual([]);
+			expect(await listedAt(after(0), asset.id)).toEqual([]);
+			expect(await listedAt(after(29 * DAY), asset.id)).toEqual([]);
+			expect(await listedAt(after(30 * DAY - 1), asset.id)).toEqual([]);
 
-			await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: "pass",
-				createdAt: at(0),
-			});
-			await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: "fail",
-				createdAt: at(10),
-			});
-			// A second fail in the same episode: its own notice, but not a second
-			// row and not a younger age.
-			await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: "fail",
-				createdAt: at(20),
-			});
-
-			const rows = (await caller.dashboard.failList()).filter(
-				(row) => row.id === asset.id,
-			);
-
+			const rows = await listedAt(after(30 * DAY), asset.id);
 			expect(rows).toHaveLength(1);
 			expect(rows[0]).toMatchObject({
 				bin: asset.bin,
@@ -1045,114 +1040,180 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			});
 		});
 
-		it("clears on the next submitted pass and re-enters on a later fail with a fresh age", async () => {
-			const caller = callerFor(ids.adminA);
+		it("never lists an asset whose passing re-test arrived before day 30", async () => {
 			const asset = await seedAsset();
-
-			await seedSubmission({
+			await submitTest({ assetId: asset.id, result: "fail", createdAt: T0 });
+			await submitTest({
 				assetId: asset.id,
-				status: "submitted",
-				result: "fail",
-				createdAt: at(0),
-			});
-			expect(
-				(await caller.dashboard.failList()).some((row) => row.id === asset.id),
-			).toBe(true);
-
-			await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
 				result: "pass",
-				createdAt: at(10),
+				createdAt: after(10 * DAY),
 			});
-			expect(
-				(await caller.dashboard.failList()).some((row) => row.id === asset.id),
-			).toBe(false);
 
-			await seedSubmission({
+			expect(await listedAt(after(30 * DAY), asset.id)).toEqual([]);
+			expect(await listedAt(after(90 * DAY), asset.id)).toEqual([]);
+		});
+
+		it("removes an asset that had already entered as soon as a passing re-test is submitted", async () => {
+			const asset = await seedAsset();
+			await submitTest({ assetId: asset.id, result: "fail", createdAt: T0 });
+
+			expect(await listedAt(after(31 * DAY), asset.id)).toHaveLength(1);
+
+			await submitTest({
 				assetId: asset.id,
-				status: "submitted",
-				result: "fail",
-				createdAt: "2026-02-01T12:00:00.000Z",
+				result: "pass",
+				createdAt: after(32 * DAY),
 			});
 
-			const rows = (await caller.dashboard.failList()).filter(
-				(row) => row.id === asset.id,
-			);
+			expect(await listedAt(after(32 * DAY), asset.id)).toEqual([]);
+			expect(await listedAt(after(60 * DAY), asset.id)).toEqual([]);
+		});
+
+		it("does not reset the 30-day clock or add a row for a later fail in the same episode", async () => {
+			const asset = await seedAsset();
+			await submitTest({ assetId: asset.id, result: "fail", createdAt: T0 });
+			await submitTest({
+				assetId: asset.id,
+				result: "fail",
+				createdAt: after(20 * DAY),
+			});
+
+			// Were the second fail to restart the clock, this would be day 10.
+			expect(await listedAt(after(29 * DAY), asset.id)).toEqual([]);
+
+			const rows = await listedAt(after(30 * DAY), asset.id);
 			expect(rows).toHaveLength(1);
-			expect(rows[0]?.failingSince).toBe("2026-02-01");
+			expect(rows[0]?.failingSince).toBe("2026-01-10");
+		});
+
+		it("starts a fresh 30-day episode for a failure after a passing re-test", async () => {
+			const asset = await seedAsset();
+			await submitTest({ assetId: asset.id, result: "fail", createdAt: T0 });
+			await submitTest({
+				assetId: asset.id,
+				result: "pass",
+				createdAt: after(5 * DAY),
+			});
+			await submitTest({
+				assetId: asset.id,
+				result: "fail",
+				createdAt: after(10 * DAY),
+			});
+
+			// 35 days after the first fail, but only 25 into the new episode.
+			expect(await listedAt(after(35 * DAY), asset.id)).toEqual([]);
+
+			const rows = await listedAt(after(40 * DAY), asset.id);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.failingSince).toBe("2026-01-20");
 		});
 
 		it("counts submitted rows only: a failed draft and an unlinked fail put nothing on the list", async () => {
-			const caller = callerFor(ids.adminA);
 			const asset = await seedAsset();
 
 			await seedSubmission({
 				assetId: asset.id,
 				status: "draft",
 				result: "fail",
+				createdAt: T0.toISOString(),
 			});
-			const unlinked = await seedSubmission({
+			const unlinked = await submitTest({
 				assetId: null,
-				status: "submitted",
 				result: "fail",
+				createdAt: T0,
 			});
 
-			expect(
-				(await caller.dashboard.failList()).some((row) => row.id === asset.id),
-			).toBe(false);
+			expect(await listedAt(after(60 * DAY), asset.id)).toEqual([]);
 
-			// The moment the WP resolves the no-BIN fail to this asset, it counts.
-			await caller.submittedTests.linkSubmissionAsset({
+			// Once the WP resolves the no-BIN fail to this asset, it counts from
+			// its own submission time — already more than 30 days ago here.
+			await callerFor(ids.adminA).submittedTests.linkSubmissionAsset({
 				submissionId: unlinked,
 				assetId: asset.id,
 			});
 
-			expect(
-				(await caller.dashboard.failList()).some((row) => row.id === asset.id),
-			).toBe(true);
+			const rows = await listedAt(after(60 * DAY), asset.id);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.failingSince).toBe("2026-01-10");
 		});
 
-		it("orders by submission-event time, not by the certifier-typed test_date", async () => {
-			const caller = callerFor(ids.adminA);
-			const asset = await seedAsset();
-
-			// The fail carries a *later* test_date than the pass — a typo, or a
-			// certifier filing out of order. What settles membership is which was
-			// submitted last, and that is the pass.
-			await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
+		it("orders by submission-event time, never by the certifier-typed test_date", async () => {
+			// A pass submitted after the fail clears it, even though its
+			// test_date is earlier than the fail's.
+			const cleared = await seedAsset();
+			await submitTest({
+				assetId: cleared.id,
 				result: "fail",
-				createdAt: at(0),
+				createdAt: T0,
 				testDate: "2026-03-01",
 			});
-			await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
+			await submitTest({
+				assetId: cleared.id,
 				result: "pass",
-				createdAt: at(10),
+				createdAt: after(1 * DAY),
 				testDate: "2026-01-01",
 			});
 
-			expect(
-				(await caller.dashboard.failList()).some((row) => row.id === asset.id),
-			).toBe(false);
+			// And the reverse: a fail submitted after a pass is unresolved, even
+			// though the pass carries the later test_date.
+			const unresolved = await seedAsset();
+			await submitTest({
+				assetId: unresolved.id,
+				result: "pass",
+				createdAt: T0,
+				testDate: "2026-03-01",
+			});
+			await submitTest({
+				assetId: unresolved.id,
+				result: "fail",
+				createdAt: after(1 * DAY),
+				testDate: "2026-01-01",
+			});
+
+			expect(await listedAt(after(60 * DAY), cleared.id)).toEqual([]);
+			expect(await listedAt(after(60 * DAY), unresolved.id)).toHaveLength(1);
 		});
 
-		it("is tenant-isolated, and a cross-tenant asset link leaks nothing", async () => {
+		it("defaults to oldest unresolved failure first", async () => {
+			const older = await seedAsset();
+			const newer = await seedAsset();
+
+			await submitTest({
+				assetId: newer.id,
+				result: "fail",
+				createdAt: after(5 * DAY),
+			});
+			await submitTest({ assetId: older.id, result: "fail", createdAt: T0 });
+
+			const rows = (
+				await listFailingAssets({ waterPurveyorId: wpA, now: after(60 * DAY) })
+			).filter((row) => row.id === older.id || row.id === newer.id);
+
+			expect(rows.map((row) => row.id)).toEqual([older.id, newer.id]);
+		});
+
+		it("dashboard.failList applies the rule to the real clock, per tenant, and leaks nothing across tenants", async () => {
+			const now = Date.now();
+
+			const fresh = await seedAsset();
+			const aged = await seedAsset();
+			await submitTest({ assetId: fresh.id, result: "fail" });
+			await submitTest({
+				assetId: aged.id,
+				result: "fail",
+				createdAt: new Date(now - 31 * DAY),
+			});
+
 			const assetB = await seedAsset({
 				waterPurveyorId: wpB,
 				currentCustomerId: customerIds.foreign,
 			});
-
-			await seedSubmission({
+			await submitTest({
 				assetId: assetB.id,
-				status: "submitted",
 				result: "fail",
 				waterPurveyorId: wpB,
+				createdAt: new Date(now - 31 * DAY),
 			});
-
 			// A wpA submission pointing at wpB's asset — written directly, since
 			// the application refuses to create one.
 			await seedSubmission({
@@ -1160,46 +1221,27 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 				status: "submitted",
 				result: "fail",
 				waterPurveyorId: wpA,
+				createdAt: new Date(now - 31 * DAY).toISOString(),
 			});
 
 			const rowsA = await callerFor(ids.adminA).dashboard.failList();
 			const rowsB = await callerFor(ids.adminB).dashboard.failList();
 
-			// wpB sees its own failing asset; wpA sees nothing of it — not even
+			// Today's fail has emailed but is not on the list yet; the 31-day one is.
+			expect(rowsA.some((row) => row.id === fresh.id)).toBe(false);
+			expect(rowsA.some((row) => row.id === aged.id)).toBe(true);
+
+			// wpB sees its own aged failure; wpA sees nothing of it — not even
 			// through its own mispointed submission.
 			expect(rowsB.some((row) => row.id === assetB.id)).toBe(true);
 			expect(rowsA.some((row) => row.id === assetB.id)).toBe(false);
 			expect(rowsA.some((row) => row.bin === assetB.bin)).toBe(false);
-		});
-
-		it("defaults to oldest unresolved failure first", async () => {
-			const caller = callerFor(ids.adminA);
-			const older = await seedAsset();
-			const newer = await seedAsset();
-
-			await seedSubmission({
-				assetId: newer.id,
-				status: "submitted",
-				result: "fail",
-				createdAt: "2026-03-05T12:00:00.000Z",
-			});
-			await seedSubmission({
-				assetId: older.id,
-				status: "submitted",
-				result: "fail",
-				createdAt: "2026-03-01T12:00:00.000Z",
-			});
-
-			const rows = (await caller.dashboard.failList()).filter(
-				(row) => row.id === older.id || row.id === newer.id,
-			);
-
-			expect(rows.map((row) => row.id)).toEqual([older.id, newer.id]);
+			expect(rowsB.some((row) => row.id === aged.id)).toBe(false);
 		});
 	});
 
 	describe("regression — the escalation chain is untouched", () => {
-		it("a linked fail cancels nothing an escalation had pending", async () => {
+		it("a submitted fail cancels nothing an escalation had pending", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
 
 			// A live reminder, as the chain would have queued it.
@@ -1209,14 +1251,7 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 				[asset.id, wpA],
 			);
 
-			const submissionId = await seedSubmission({
-				assetId: asset.id,
-				status: "submitted",
-				result: null,
-			});
-			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
-				correction(submissionId),
-			);
+			await submitTest({ assetId: asset.id, result: "fail" });
 
 			const { rows } = await pool.query(
 				"select status from scheduled_jobs where bfa_asset_id = $1 and job_type = 'reminder'",
@@ -1225,7 +1260,26 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			expect(rows[0]?.status).toBe("pending");
 		});
 
-		it("a corrected pass still cancels the chain, exactly as before", async () => {
+		it("a submitted passing re-test cancels the chain", async () => {
+			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
+
+			await pool.query(
+				`insert into scheduled_jobs (job_type, bfa_asset_id, water_purveyor_id, run_at, status)
+				 values ('late_notice_1', $1, $2, '2027-01-01T10:00:00Z', 'pending')`,
+				[asset.id, wpA],
+			);
+
+			await submitTest({ assetId: asset.id, result: "pass" });
+
+			const { rows } = await pool.query(
+				"select status, last_error from scheduled_jobs where bfa_asset_id = $1 and job_type = 'late_notice_1'",
+				[asset.id],
+			);
+			expect(rows[0]?.status).toBe("cancelled");
+			expect(String(rows[0]?.last_error)).toMatch(/passing test/i);
+		});
+
+		it("a WP correction to pass still cancels the chain, exactly as before", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
 
 			await pool.query(

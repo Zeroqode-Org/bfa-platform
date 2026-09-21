@@ -202,31 +202,51 @@ sidebar item**: it is a drill-down of the card, not a section.
 The page carries the standard WP gate (`requireAccount`) and renders inside the
 existing WP shell.
 
+### Who is on it: 30 days without a passing re-test
+
+The product rule (PRD § 6.8, flow 5): a failed test triggers the failure email
+**immediately**, and the asset appears on the fail list only after **30 days
+without a passing re-test**. A later submitted passing test removes it at once
+— whether it had already appeared or was still inside its 30 days. A re-test
+is a new submitted record; the platform does not track whether a repair
+happened, only whether a pass has been filed since. (An earlier version of
+this page and of the code put assets on the list the moment the failure was
+submitted; that was wrong and has been corrected.)
+
 ### Membership is computed, never stored
 
-`dashboard.failList` returns every asset whose **latest submitted, resulted
-test is a fail** — computed from `test_submissions` history on every read.
-There is no membership flag, no membership table, and no waiting period: an
-asset joins the list the moment a failing test is submitted for it (or a
-failing no-BIN submission is linked to it), and leaves the moment a later
-passing test is submitted. The pre-declared `fail_list_check` job type remains
-deliberately unused — there is nothing to schedule and nothing to recheck.
+`dashboard.failList` (`listFailingAssets` in `routers/dashboard.ts`) computes
+membership from `test_submissions` history on every read. There is no
+membership flag, no membership table, and no scheduled job that adds an asset
+on day 30: an episode crosses the boundary because time passed, not because
+anything was written, so the read is the only place the rule needs to live.
+The pre-declared `fail_list_check` job type remains deliberately unused. No
+migration was needed — `test_submissions_asset_result_event_idx` already
+covers the query.
 
 The definitions, which the [failure notice](/docs/notice-workflow#workflow-3--the-failure-notice)
 shares so the list and the email always agree on what "resolved" means:
 
-- Only rows with `status = 'submitted'` **and** a non-null `test_result`
-  participate. Drafts and result-less records decide nothing.
+- Only rows with `status = 'submitted'` **and** a non-null `test_result`,
+  linked to an asset, participate. Drafts, result-less records and unlinked
+  no-BIN submissions decide nothing; a no-BIN fail counts from its own
+  submission time once a WP links it.
 - Event order is `(created_at, id)` — when the submission happened, with the id
   as a deterministic tie-breaker — **never `test_date`**, which is nullable and
   certifier-typed. "The next passing test submitted" means submitted next, not
   dated next.
 - A **failure episode** starts at the first submitted fail after the asset's
   last submitted pass. Later fails inside the same episode do not reset its
-  start — each triggers its own failure notice, but the list shows one row per
-  asset, aged from the episode's beginning. This episode rule is a project
-  default stated here, not a client requirement; changing it is an edit to one
-  SQL expression and its tests.
+  start or its 30-day clock — each triggers its own failure notice, but the
+  list shows one row per asset, aged from the episode's beginning. This episode
+  rule is a project default stated here, not a client requirement; changing it
+  is an edit to one SQL expression and its tests.
+- **The 30-day boundary is exact:** an episode is listed when its first
+  failure's `created_at` is at or before `now − 30 × 24 hours`
+  (`failListEntryCutoff` in `lib/fail-list-rule.ts`). At exactly 30 days
+  elapsed it is listed; a millisecond earlier it is not. Fixed 24-hour days
+  are computed in TypeScript and bound as a `timestamptz`, so neither a
+  session time zone nor a daylight-saving change can move the boundary.
 - `failingSince` is the starting submission's **UTC calendar day**, the same
   instant-to-day convention as the rest of this page.
 
@@ -247,28 +267,31 @@ Each row shows the BIN (linking to the asset's existing detail route — no
 parallel asset view), the type, the service address, the current customer when
 safely resolvable, the episode's start date and its age in days.
 
-The server returns the whole list in its default order — **oldest unresolved
-failure first**, BIN then id breaking ties. Column sorting is client-side over
+The server returns the whole list in its default order — **oldest failure
+first**, BIN then id breaking ties. Column sorting is client-side over
 that same response: the list is a work queue bounded by the purveyor's own
 failing assemblies, so re-sorting a set already in hand costs no round trip.
 
-Age colouring follows the build plan's three bands, driven by days since the
-episode began and rendered from design-system tokens, never hex in the
-component:
+Age colouring is driven by days since the episode began and rendered from
+design-system tokens, never hex in the component. Rows enter at 30 days, so the
+build plan's original "under 30 days" band can never be shown and is not
+modelled; the two reachable bands keep the build plan's own mappings:
 
 | Age | Row background |
 |---|---|
-| under 30 days | the danger tint (`danger-bg`) |
-| 30–60 days | a stronger tint (`danger-bg-strong`, added for this screen) |
+| 30–60 days | a stronger danger tint (`danger-bg-strong`, added for this screen) |
 | over 60 days | the full danger colour (`danger`, with a contrast foreground — the system's one sanctioned solid fill) |
 
-Day 30 is the first morning of the middle band and day 61 the first of the
-last. **The bands are presentation only** — an entry is on the list from day
-zero; 30 and 60 never gate membership. The age is also printed in words on the
-row, so colour is never the only carrier.
+Day 61 is the first morning of the second band. A figure under 30 can only come
+from a stale `today` on a page left open past midnight, and is shown in the
+first band rather than as a state the list never has. The age is also printed
+in words on the row, so colour is never the only carrier.
 
 The table has the standard loading, error and empty states, and the sortable
-headers carry `aria-sort` with a real button as the control.
+headers carry `aria-sort` with a real button as the control. The empty state
+and the page description both state the 30-day rule, so an empty list is not
+misread as "no failures": newer failures exist, have already been emailed, and
+are simply not listed yet.
 
 ## Compliance trend
 
