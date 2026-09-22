@@ -94,6 +94,11 @@ export const jobType = pgEnum("job_type", [
 	...noticeTypeValues,
 	"ag_renewal",
 	"fail_list_check",
+	// Workflow 3's immediate failure notice. Appended (0016) so the migration is
+	// a plain ALTER TYPE ... ADD VALUE. `fail_list_check` above stays unused on
+	// purpose: fail-list membership is computed from test history, never from a
+	// scheduled recheck — see failure-notice.ts.
+	"failure_notice",
 ]);
 
 export const jobStatus = pgEnum("job_status", [

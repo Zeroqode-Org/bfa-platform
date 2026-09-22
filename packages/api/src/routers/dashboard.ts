@@ -6,7 +6,8 @@ import {
 	profiles,
 	testSubmissions,
 } from "@bfa-platform/db/schema";
-import { and, asc, eq, gte, isNotNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, lte, notExists, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { router, wpProcedure } from "../index";
 import {
@@ -16,6 +17,7 @@ import {
 	trailingMonthsRange,
 } from "../lib/dashboard-calendar";
 import { homeListInput, passFailBreakdownInput } from "../lib/dashboard-input";
+import { failListEntryCutoff } from "../lib/fail-list-rule";
 import { newestSubmittedTestFirst } from "./submitted-tests";
 
 /**
@@ -410,6 +412,18 @@ export const dashboardRouter = router({
 				.limit(input.limit)
 		);
 	}),
+
+	/**
+	 * The fail list — assets with a failure 30 days unresolved. The rule, the
+	 * definitions and the tenant boundary are documented on
+	 * {@link listFailingAssets}, which this calls with the real clock.
+	 */
+	failList: wpProcedure.query(({ ctx }) => {
+		return listFailingAssets({
+			waterPurveyorId: ctx.caller.waterPurveyorId,
+			now: new Date(),
+		});
+	}),
 });
 
 /**
@@ -441,5 +455,156 @@ function submittedRowsOf(waterPurveyorId: string) {
 	return and(
 		eq(testSubmissions.waterPurveyorId, waterPurveyorId),
 		eq(testSubmissions.status, "submitted"),
+	);
+}
+
+/**
+ * The fail list: every asset with a failure episode that has gone **30 days
+ * without a later submitted passing test**, with the calendar day that
+ * episode began.
+ *
+ * The product rule (PRD § 6.8, flow 5): the failure *email* goes out
+ * immediately on a submitted fail — that is the failure notice's job, not
+ * this list's — and the asset reaches this list only once 30 days have
+ * elapsed with no passing re-test. A later submitted pass removes it at once,
+ * whether it had already appeared or was still inside its 30 days. Nothing
+ * here records whether a repair happened; only whether a pass was filed.
+ *
+ * **Membership is computed from test history on every read.** There is no
+ * stored flag, no membership table, and no scheduled job that "adds" an asset
+ * on day 30: an episode crosses the boundary purely because `now` moved, so
+ * the read is the only place the rule needs to live. The pre-declared
+ * `fail_list_check` job type stays unused.
+ *
+ * The definitions, stated once because two features depend on them agreeing
+ * (the failure-notice handler makes the same later-pass comparison at send
+ * time):
+ *
+ * - Only rows with `status = 'submitted'` and a non-null `test_result`
+ *   participate, and only rows linked to an asset. Drafts, result-less
+ *   records and unlinked no-BIN submissions decide nothing — an unlinked fail
+ *   counts from its own submission time once a WP links it.
+ * - Event order is `(created_at, id)` — when the submission *happened*,
+ *   with the id as a deterministic tie-breaker — never `test_date`, which
+ *   is nullable and certifier-typed. "A later passing test" means submitted
+ *   later, not dated later. A re-test is always a new submitted record.
+ * - A **failure episode** starts at the first submitted fail after the
+ *   asset's last submitted pass. Later fails inside the episode do not reset
+ *   its start or its 30-day clock — each still triggers its own failure
+ *   email, but the list shows one row per asset, aged from the beginning.
+ * - **The boundary:** the episode is listed when its first failure's
+ *   `created_at` is at or before `now − 30 × 24 hours`
+ *   (`failListEntryCutoff`). At exactly 30 days elapsed it is listed; a
+ *   millisecond earlier it is not.
+ * - `failingSince` is the starting submission's UTC calendar day, the same
+ *   instant-to-day convention as the page's `today`.
+ *
+ * The `min(...)` below is exactly the episode start: the earliest submitted
+ * fail with no later submitted pass. If the latest resulted test is a pass,
+ * every fail has a later pass and the asset has no group at all; the
+ * `having` then applies the 30-day rule to the groups that remain.
+ *
+ * `now` is a parameter rather than read inside so the boundary is testable to
+ * the millisecond; `dashboard.failList` passes the real clock. The cutoff is
+ * computed in TypeScript and bound as a `timestamptz`, so Postgres applies no
+ * session-zone calendar arithmetic of its own.
+ *
+ * One row per asset by construction (`group by`), the whole list in one
+ * response: this is a work queue bounded by the purveyor's own assemblies
+ * with a long-unresolved failure, and its default order — oldest failure
+ * first, BIN then id breaking ties — is the server's, so the screen and any
+ * export start from the same answer. Re-sorting by another column is
+ * presentation and happens on the client, over the same rows.
+ *
+ * Tenant boundary: the fail rows, the asset join and the customer join are
+ * each pinned to the purveyor. The joins are pinned *as well as* keyed
+ * because a foreign key proves existence, not tenancy — a submission whose
+ * link crossed tenants simply produces no row here, and a mispointed
+ * `current_customer_id` shows as no customer rather than as another
+ * purveyor's name. `waterPurveyorId` must come from the caller's own profile;
+ * the procedure takes no input that could name one.
+ */
+export function listFailingAssets({
+	waterPurveyorId,
+	now,
+}: {
+	waterPurveyorId: string;
+	now: Date;
+}) {
+	const laterPass = alias(testSubmissions, "later_pass");
+	const cutoff = failListEntryCutoff(now);
+
+	const failing = db.$with("failing").as(
+		db
+			.select({
+				assetId: testSubmissions.bfaAssetId,
+				failingSince:
+					sql<string>`to_char(min(${testSubmissions.createdAt}) at time zone 'utc', 'YYYY-MM-DD')`.as(
+						"failing_since",
+					),
+			})
+			.from(testSubmissions)
+			.where(
+				and(
+					eq(testSubmissions.waterPurveyorId, waterPurveyorId),
+					eq(testSubmissions.status, "submitted"),
+					eq(testSubmissions.testResult, "fail"),
+					isNotNull(testSubmissions.bfaAssetId),
+					notExists(
+						db
+							.select({ one: sql`1` })
+							.from(laterPass)
+							.where(
+								and(
+									eq(laterPass.bfaAssetId, testSubmissions.bfaAssetId),
+									eq(laterPass.waterPurveyorId, waterPurveyorId),
+									eq(laterPass.status, "submitted"),
+									eq(laterPass.testResult, "pass"),
+									// Row comparison, so two submissions in the same
+									// microsecond still have a total order.
+									sql`(${laterPass.createdAt}, ${laterPass.id}) > (${testSubmissions.createdAt}, ${testSubmissions.id})`,
+								),
+							),
+					),
+				),
+			)
+			.groupBy(testSubmissions.bfaAssetId)
+			// The 30-day rule, on the episode's first failure — not on the latest
+			// one, so a second fail inside the episode cannot restart the clock.
+			.having(
+				sql`min(${testSubmissions.createdAt}) <= ${cutoff.toISOString()}::timestamptz`,
+			),
+	);
+
+	return (
+		db
+			.with(failing)
+			.select({
+				id: bfaAssets.id,
+				bin: bfaAssets.bin,
+				bfaType: bfaAssets.bfaType,
+				serviceAddress: bfaAssets.serviceAddress,
+				currentCustomerName: customers.name,
+				failingSince: failing.failingSince,
+			})
+			.from(failing)
+			// Inner, unlike the two home lists' left joins: a failing submission
+			// whose asset is missing or belongs to another purveyor represents no
+			// assembly this caller may see, so there is no safe row to render.
+			.innerJoin(
+				bfaAssets,
+				and(
+					eq(bfaAssets.id, failing.assetId),
+					eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+				),
+			)
+			.leftJoin(
+				customers,
+				and(
+					eq(customers.id, bfaAssets.currentCustomerId),
+					eq(customers.waterPurveyorId, waterPurveyorId),
+				),
+			)
+			.orderBy(asc(failing.failingSince), asc(bfaAssets.bin), asc(bfaAssets.id))
 	);
 }

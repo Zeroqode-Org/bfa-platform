@@ -44,6 +44,7 @@ import {
 	Inbox,
 	TriangleAlert,
 } from "lucide-react";
+import type { Route } from "next";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -63,6 +64,7 @@ import {
 	assetHref,
 	daysOverdue,
 	defaultBreakdownRange,
+	failListHref,
 	formatCount,
 	formatDay,
 	formatMonth,
@@ -167,20 +169,44 @@ export function WpDashboard({ today }: { today: string }) {
 							</CardContent>
 						</Card>
 					) : (
-						CARDS.map((card) => (
-							<StatCard
-								key={card.key}
-								tone={card.tone}
-								icon={<card.Icon strokeWidth={1.8} />}
-								label={card.label}
-								value={formatCount(metrics.data[card.key])}
-								hint={
-									card.key === "testsThisMonth"
-										? formatMonth(metrics.data.month)
-										: card.hint
-								}
-							/>
-						))
+						CARDS.map((card) => {
+							const stat = (
+								<StatCard
+									key={card.href ? undefined : card.key}
+									tone={card.tone}
+									icon={<card.Icon strokeWidth={1.8} />}
+									label={card.label}
+									value={formatCount(metrics.data[card.key])}
+									hint={
+										card.key === "testsThisMonth"
+											? formatMonth(metrics.data.month)
+											: card.hint
+									}
+									className={
+										card.href
+											? "h-full transition-colors hover:border-danger/40"
+											: undefined
+									}
+								/>
+							);
+
+							// The Past due card doubles as the door to the fail list
+							// (build plan, Workflow 3). A link around the card rather
+							// than an onClick, so it announces as a link and keeps
+							// middle-click and open-in-new-tab.
+							return card.href ? (
+								<Link
+									key={card.key}
+									href={card.href()}
+									aria-label={`${card.label} — open the fail list`}
+									className="rounded-xl focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
+								>
+									{stat}
+								</Link>
+							) : (
+								stat
+							);
+						})
 					)}
 				</div>
 			</section>
@@ -427,7 +453,18 @@ const BREAKDOWN_RANGE_RULES: ValidationRules<DisplayedRange> = {
  * The `key` is the field name on `dashboardMetrics`, so a card cannot be
  * labelled with one number and filled from another.
  */
-const CARDS = [
+type DashboardCard = {
+	/** A counted metric only — `month`, the window label, is not a card. */
+	key: Exclude<keyof DashboardMetrics, "month">;
+	label: string;
+	tone: StatCardTone;
+	Icon: typeof ClipboardList;
+	hint: string | undefined;
+	/** Where the whole card links, for the cards that are also a door. */
+	href?: () => Route;
+};
+
+const CARDS: readonly DashboardCard[] = [
 	{
 		key: "totalAssets",
 		label: "Total assets",
@@ -449,7 +486,11 @@ const CARDS = [
 		label: "Past due",
 		tone: "danger",
 		Icon: TriangleAlert,
-		hint: "Assets outside their test window",
+		hint: "Assets outside their test window — open the fail list",
+		// The card's number is the scheduler's past-due count; the fail list it
+		// opens is the failure-based work queue. Related answers, and the build
+		// plan routes one through the other.
+		href: failListHref,
 	},
 	{
 		key: "submittedReports",
@@ -468,13 +509,7 @@ const CARDS = [
 		Icon: FileQuestion,
 		hint: "Not yet linked to an asset",
 	},
-] as const satisfies readonly {
-	key: keyof DashboardMetrics & string;
-	label: string;
-	tone: StatCardTone;
-	Icon: typeof ClipboardList;
-	hint: string | undefined;
-}[];
+];
 
 /**
  * One incoming report.

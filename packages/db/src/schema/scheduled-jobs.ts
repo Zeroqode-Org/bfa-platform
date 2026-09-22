@@ -13,6 +13,7 @@ import {
 import { bfaAssets } from "./bfa-assets";
 import { customers } from "./customers";
 import { jobStatus, jobType } from "./enums";
+import { testSubmissions } from "./test-submissions";
 import { waterPurveyors } from "./water-purveyors";
 
 /**
@@ -58,6 +59,15 @@ export const scheduledJobs = pgTable(
 		jobType: jobType("job_type").notNull(),
 		bfaAssetId: uuid("bfa_asset_id").references(() => bfaAssets.id),
 		customerId: uuid("customer_id").references(() => customers.id),
+		// The submitted test a `failure_notice` job answers. Deliberately *instead
+		// of* `bfa_asset_id` on those rows: the live-asset index below allows only
+		// one live job per (asset, type), and two failing submissions for one
+		// assembly in quick succession are two failure notices, not one. The
+		// handler resolves the asset — and everything else — from the submission
+		// at send time.
+		testSubmissionId: uuid("test_submission_id").references(
+			() => testSubmissions.id,
+		),
 		waterPurveyorId: uuid("water_purveyor_id")
 			.notNull()
 			.references(() => waterPurveyors.id),
@@ -104,6 +114,19 @@ export const scheduledJobs = pgTable(
 			.on(table.bfaAssetId, table.jobType)
 			.where(
 				sql`${table.status} in ('pending', 'running') and ${table.bfaAssetId} is not null`,
+			),
+		// At most one job per (submission, type) that has not been *cancelled* —
+		// pending, running, completed and failed all conflict. Stricter than the
+		// live-asset rule above on purpose: a failure notice answers one submitted
+		// failing test, and a correction that touches the row again must not queue
+		// a second email for a fail the customer was already told about. Only a
+		// cancellation — the fail was corrected away — frees the slot, so a WP
+		// that corrects a result to pass and then back to fail gets exactly one
+		// fresh notice. Doubles as the lookup index for a submission's jobs.
+		uniqueIndex("scheduled_jobs_settled_submission_job_type_key")
+			.on(table.testSubmissionId, table.jobType)
+			.where(
+				sql`${table.testSubmissionId} is not null and ${table.status} <> 'cancelled'`,
 			),
 	],
 ).enableRLS();

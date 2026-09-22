@@ -163,7 +163,7 @@ Estimates reflect the AI-assisted development model.
 | Certifier invite permissions | All three WP roles (Admin, SubAdmin, Employee) can invite certifiers — not Admin-only. |
 | Notice/renewal automation | Automated reminders/late notices and the AG renewal notice are **optional, paid add-ons** — off by default, switched on per WP by the Super-Admin via a feature flag, not something every WP gets automatically. |
 | AG Renewal Date auto-update | Confirmed: does not auto-advance after the notice sends. A customer who misses it reapplies; the WP sets a new date manually. |
-| Fail-list entry | No waiting period — an asset joins the fail list the instant a failed test is *submitted* (not on a draft), and leaves on the next passing test. |
+| Fail-list entry | After 30 days without a passing re-test — the failure email goes out the instant a failed test is *submitted* (not on a draft), but the asset joins the fail list only once 30 days pass with no passing test submitted, and leaves on the next passing test (§ 6.8, flow 5). Corrects an earlier answer here that said there was no waiting period. |
 | Monthly CSV export fields | Customer name, BIN, service address, BFA type, test date, result, certifier — submitted tests only (passes and failures), not a dump of every table. |
 | Audit logging | No dedicated audit-log UI in v1 (as originally confirmed) — but every sensitive write still emits a structured JSON log line, so the data exists if a visible activity feed gets added later. |
 

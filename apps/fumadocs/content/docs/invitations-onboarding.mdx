@@ -529,22 +529,26 @@ credentials file. That is the run to expect on a fresh clone and in CI.
 npm run test:db
 ```
 
-adds the three database-backed suites. They are opt-in because they **write real
-rows to whatever `DATABASE_URL` points at**: the script sets `RUN_DB_TESTS=1`,
-and only under that flag does `vitest.setup.ts` read `DATABASE_URL` from
-`apps/web/.env.local`. Point it at a scratch database rather than one somebody
-else is using. Setting the flag without a `DATABASE_URL` fails loudly rather
-than skipping — asking for these tests and silently running none of them is the
-wrong answer to a missing variable.
+adds the database-backed suites — and runs them **only against
+`TEST_DATABASE_URL`**, a dedicated, disposable database. The runner
+(`scripts/run-db-tests.mjs`) refuses to start when the variable is unset, and
+refuses a URL that names the same database as the development `DATABASE_URL`;
+the development URL is never used as a fallback and is never connected to by
+a test run. The reasoning, and how the runner bootstraps and migrates a bare
+target on its own, is written up on
+[Database Baseline & Test Isolation](/docs/database-baseline). Set
+`TEST_DATABASE_URL` in the shell or in `apps/web/.env.local` — only that one
+key is read from the file for the test connection; the rest of the file is
+still loaded under `RUN_DB_TESTS=1` for the auxiliary variables env
+validation requires, and nothing in it can redirect the run.
 
-The script also forces `EMAIL_DRIVER=console` for the test process. The suites
-send invitations and broadcasts to fixture addresses such as `@example.com`, and
-a developer's local `EMAIL_DRIVER=provider` would otherwise hand them to Resend,
-which attempts real delivery and rejects those recipients. The override is set
-before Vitest starts and `.env.local` never overwrites a variable that is already
-set, so the configured scratch `DATABASE_URL` is still used while the email
-driver is not. It applies to `npm run test:db` only; the app and production read
-`EMAIL_DRIVER` as configured.
+The runner also pins the child environment: `EMAIL_DRIVER=console`, because
+the suites send invitations and broadcasts to fixture addresses such as
+`@example.com` and a developer's local `EMAIL_DRIVER=provider` would hand
+them to Resend, which attempts real delivery and rejects those recipients;
+and `SCHEDULER_ENABLED=false`, so no test process ever starts a tick loop.
+Both apply to `npm run test:db` only; the app and production read their
+configuration as set.
 
 Arguments pass through, so `npm run test:db -- rls` runs just the RLS suite.
 Each suite cleans up its own fixtures; the RLS suite additionally rolls back

@@ -44,6 +44,10 @@ import {
 	UNHANDLED_JOB_DEFER_MS,
 } from "./config";
 import {
+	type FailureNoticeOutcome,
+	runFailureNoticeJob,
+} from "./failure-notice";
+import {
 	claimDueJobs,
 	deferUnhandledJob,
 	isNoticeJobType,
@@ -57,12 +61,21 @@ import { type NoticeJobOutcome, runNoticeJob } from "./notice-handler";
 
 export { recomputeAssetStatuses } from "./asset-status";
 export {
+	FAILURE_CANCEL_REASONS,
+	runFailureNoticeJob,
+	scheduleFailureNotice,
+} from "./failure-notice";
+export {
 	CANCEL_REASONS,
 	cancelNoticeChainForPassingTest,
 	HOLD_REASONS,
 	reconcileAssetNoticeChain,
 	resumeHeldNoticeChain,
 } from "./notice-chain";
+export {
+	applySubmittedTestResult,
+	type SubmissionLifecycleTrigger,
+} from "./submission-lifecycle";
 
 /**
  * A handler for one `job_type`.
@@ -74,13 +87,18 @@ export {
  * *throws*, because a retry policy that each handler implemented separately
  * would be four retry policies.
  */
-type JobHandler = (job: ScheduledJob) => Promise<NoticeJobOutcome>;
+type JobHandler = (
+	job: ScheduledJob,
+) => Promise<NoticeJobOutcome | FailureNoticeOutcome>;
 
 /**
  * Handlers by `job_type`.
  *
- * Partial on purpose. `ag_renewal` (Workflow 2) and `fail_list_check`
- * (Workflow 3) are declared in the `job_type` enum and not implemented here; a
+ * Partial on purpose. `ag_renewal` (Workflow 2) is declared in the `job_type`
+ * enum and not implemented here, and `fail_list_check` is declared and
+ * *deliberately never implemented*: fail-list membership — including its
+ * 30-day entry rule — is computed from test history at read time, so there is
+ * nothing for a scheduled recheck to do. A
  * job of an unhandled type is left alone and logged rather than being claimed
  * and failed, so shipping this workflow cannot consume the retry budget of a
  * row a later workflow will want.
@@ -95,6 +113,10 @@ function handlerFor(
 		return (claimed) => runNoticeJob(claimed, stage, { driver });
 	}
 
+	if (job.jobType === "failure_notice") {
+		return (claimed) => runFailureNoticeJob(claimed, { driver });
+	}
+
 	return null;
 }
 
@@ -105,9 +127,10 @@ function handlerFor(
  */
 function deliveryState(job: ScheduledJob) {
 	return {
-		idempotency_key: isNoticeJobType(job.jobType)
-			? noticeIdempotencyKey(job.id)
-			: null,
+		idempotency_key:
+			isNoticeJobType(job.jobType) || job.jobType === "failure_notice"
+				? noticeIdempotencyKey(job.id)
+				: null,
 		delivery_recorded: job.providerMessageId !== null,
 		delivery_in_doubt:
 			job.deliveryAttemptedAt !== null && job.providerMessageId === null,

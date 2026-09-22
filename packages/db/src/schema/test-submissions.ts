@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
 	type AnyPgColumn,
 	date,
@@ -96,5 +97,15 @@ export const testSubmissions = pgTable(
 			table.testDate.desc().nullsLast(),
 			table.createdAt.desc(),
 		),
+		// One asset's submitted, resulted history in submission-event order — the
+		// shape the fail list and the failure-notice handler both walk: "the fails
+		// with no later pass" and "is there a pass after this fail". Partial on
+		// exactly their shared predicate; `(created_at, id)` is the event order,
+		// because `test_date` is nullable and certifier-typed. Added in 0016.
+		index("test_submissions_asset_result_event_idx")
+			.on(table.bfaAssetId, table.createdAt, table.id)
+			.where(
+				sql`${table.status} = 'submitted' and ${table.testResult} is not null and ${table.bfaAssetId} is not null`,
+			),
 	],
 ).enableRLS();

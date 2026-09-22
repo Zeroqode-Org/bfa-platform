@@ -4,6 +4,9 @@ import {
 	assetHref,
 	daysOverdue,
 	defaultBreakdownRange,
+	failAgeBand,
+	failingDays,
+	failListHref,
 	formatCount,
 	formatDay,
 	formatMonth,
@@ -185,5 +188,57 @@ describe("daysOverdue", () => {
 
 	it("crosses a year boundary without drifting", () => {
 		expect(daysOverdue("2025-12-31", "2026-01-01")).toBe(1);
+	});
+});
+
+describe("failListHref", () => {
+	it("is the fail-list page, the Past due card's destination", () => {
+		expect(failListHref()).toBe("/wp/fail-list");
+	});
+});
+
+describe("failingDays", () => {
+	it("counts whole days between the episode start and today", () => {
+		expect(failingDays("2026-09-01", "2026-09-11")).toBe(10);
+	});
+
+	it("is zero on the day the failure was filed", () => {
+		expect(failingDays("2026-09-11", "2026-09-11")).toBe(0);
+	});
+
+	it("clamps at zero rather than going negative", () => {
+		expect(failingDays("2026-09-12", "2026-09-11")).toBe(0);
+	});
+
+	it("crosses a year boundary without drifting", () => {
+		expect(failingDays("2025-12-31", "2026-01-01")).toBe(1);
+	});
+
+	it("reads 30 on the day an asset becomes eligible for the list", () => {
+		expect(failingDays("2026-08-12", "2026-09-11")).toBe(30);
+	});
+});
+
+describe("failAgeBand", () => {
+	// A row reaches the list only after 30 days without a passing re-test, so
+	// its first reachable band starts on day 30 — the entry morning itself.
+	it("uses the stronger danger tint from entry on day 30 through day 60", () => {
+		expect(failAgeBand(30)).toBe("days_30_to_60");
+		expect(failAgeBand(45)).toBe("days_30_to_60");
+		expect(failAgeBand(60)).toBe("days_30_to_60");
+	});
+
+	// The build plan's "a row crossing 60 days changes colour", pinned to the
+	// exact morning it happens on.
+	it("moves to the full danger colour on day 61", () => {
+		expect(failAgeBand(61)).toBe("over_60");
+		expect(failAgeBand(400)).toBe("over_60");
+	});
+
+	// Only a stale `today` on a page left open can produce these; they must not
+	// render as an "under 30 days" state the list never actually shows.
+	it("has no under-30 band: a stale figure falls into the first band", () => {
+		expect(failAgeBand(0)).toBe("days_30_to_60");
+		expect(failAgeBand(29)).toBe("days_30_to_60");
 	});
 });

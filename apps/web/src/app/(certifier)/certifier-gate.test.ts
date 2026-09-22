@@ -13,8 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * identity is `/wp`, where `DashboardShell` always draws the banner.
  *
  * These run the real layout, the real pages and the real `requireGlobalRole`;
- * only Next's request APIs, the Supabase client and the shared caller resolver
- * are replaced, exactly as in `lib/auth.test.ts`.
+ * only Next's request APIs, the Supabase clients (server and browser) and the
+ * shared caller resolver are replaced, as in `lib/auth.test.ts`.
  */
 
 vi.mock("server-only", () => ({}));
@@ -44,6 +44,15 @@ const getUser = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
 	createClient: async () => ({ auth: { getUser } }),
+}));
+
+// The profile page imports `ProfileForm`, which imports the browser client —
+// and loading the real one validates the public Supabase variables at import
+// time, so an offline `npm test` could not even collect this file. The gate
+// never renders the form, so this is never called; it only keeps the import
+// from reaching env validation, the same stub the sibling web suites use.
+vi.mock("@/lib/supabase/client", () => ({
+	createClient: () => ({ auth: { updateUser: vi.fn() } }),
 }));
 
 const SESSION_ID = "5e55a000-0000-4000-8000-00000000000a";

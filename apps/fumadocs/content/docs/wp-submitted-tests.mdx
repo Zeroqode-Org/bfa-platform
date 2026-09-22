@@ -188,6 +188,37 @@ Three further rules on that mutation:
 What the certifier typed is kept, not overwritten by the BIN it resolved to.
 `submitted_bin_text` records what was written on the day.
 
+## Corrections and links drive the notice machinery
+
+Both mutations end by calling one exported lifecycle helper,
+`applySubmittedTestResult` (documented in full on the
+[notice workflow page](/docs/notice-workflow#one-lifecycle-helper-for-a-submitted-result)),
+inside their own transaction. In this screen's terms:
+
+- **Correcting a linked test to a pass** — or linking a passing no-BIN
+  submission — ends the assembly's escalation chain, and withdraws that
+  submission's own failure notice if one is still unsent.
+- **Correcting a linked test to a fail** — or linking a failing no-BIN
+  submission, which is the late-link flow above — queues that submission's
+  failure notice, due immediately. It does **not** put the assembly on the
+  [fail list](/docs/wp-dashboard#the-fail-list) yet: the list is computed from
+  submitted history and shows a failure only once it has gone 30 days without
+  a passing re-test, counted from the failing submission's own submission
+  time. A no-BIN fail linked more than 30 days after it was submitted therefore
+  appears on the list straight away.
+- **Correcting a fail away again** before the email went out withdraws it; a
+  notice already delivered stays on the record.
+
+A correction rewrites the submitted record it is made on; it is not how a
+re-test is recorded. A re-test is a new submitted record — from the wizard's
+submit, which calls the same lifecycle helper — and a passing one clears the
+fail list and cancels any still-unsent failure notice for the earlier fail.
+
+Because every query here pins `status = 'submitted'`, a draft can trigger none
+of this — a failed draft sends nothing and appears on no list. And because the
+correction path short-circuits on a save that changed nothing, a no-op save
+schedules nothing either.
+
 ## Procedures
 
 | Procedure | Who | What it does |

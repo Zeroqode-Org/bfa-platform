@@ -1,0 +1,153 @@
+---
+title: Database Baseline & Test Isolation
+description: "Why the API roles' privilege baseline is now a migration (0017), what the audited drift actually was, and how the database-backed test suites are isolated from the shared development database"
+---
+
+Two related decisions live on this page: the **privilege baseline** that
+migration `0017_explicit_privilege_baseline` makes reproducible, and the
+**dedicated test database** that `npm run test:db` now requires. Both came out
+of the same audit — database-backed suites were behaving differently depending
+on *which* database they ran against, which is exactly what a migration
+history is supposed to make impossible.
+
+## The audit, and what the drift actually was
+
+The suspicion was that `test_submissions` carried certifier read/write
+policies and a DELETE grant that no migration expressed — three
+`test-submissions-rls` tests failed against the development database on a
+pre-merge checkout. The audit compared `_journal.json`, migrations
+`0000`–`0016`, the Drizzle schema, the RLS suites, and the live database's
+`__drizzle_migrations`, `pg_policies`, `role_table_grants`, column ACLs and
+default ACLs. Two findings, with opposite verdicts:
+
+**The certifier policies were not drift.** They are
+`0012_certifier_dashboard_policies` and
+`0013_certifier_wp_authorization_policies`, which had been applied to the
+development database *from their feature branch before it merged*. Once the
+branch merged, journal and database agree row-for-row (the two
+previously-orphan journal timestamps are 0012 and 0013), the policy
+definitions match the migration text exactly, and the post-merge
+`test-submissions-rls` suite passes. Nothing was dropped and nothing needed
+legitimising — the repository had been behind the database, not the other way
+round.
+
+**The privilege *baseline* was drift — the unexpressed kind.** Every feature
+migration grants the API roles narrow privileges on the assumption they start
+with none, and every RLS suite asserts that ungranted writes fail with
+`permission denied`. That assumption held on the development database only
+because its default ACL for tables created by `postgres` in `public` had been
+modified outside migration history: the four DML privileges were stripped
+from Supabase's classic `GRANT ALL … TO anon, authenticated, service_role`
+default, leaving a `TRUNCATE, REFERENCES, TRIGGER` (and `MAINTAIN`) remainder
+on all thirteen tables. On a genuinely fresh project with classic defaults,
+`0000`–`0016` would have left `authenticated` — and `anon` — holding full DML
+everywhere. Rows would still be behind RLS, but the grant boundary the suites
+assert would not exist, and `anon` held `TRUNCATE` (which row policies do not
+constrain) on every table of an invite-only product.
+
+## The fix: `0017_explicit_privilege_baseline`
+
+Forward-only, append-after-`0016`, idempotent on any starting state:
+
+1. `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON
+   TABLES FROM anon, authenticated, service_role` — future tables start with
+   nothing for the API roles, and each feature grants what it needs, which is
+   the style every migration since `0001` already follows.
+2. `REVOKE ALL` on each of the thirteen app tables from all three API roles,
+   then a verbatim restatement of the granted surface from `0001`, `0003`,
+   `0004`, `0005`, `0006`+`0007`, `0008`+`0012`, `0010`, `0013` and `0014` —
+   table-level and column-level, because a table-level `REVOKE ALL` removes
+   column ACLs too (verified, not assumed).
+
+`anon` ends with nothing anywhere. `service_role` ends with nothing anywhere:
+the application's privileged access is the `postgres` Drizzle connection, and
+the Supabase service key is used only for the auth admin API. A future
+feature that reads app tables through PostgREST as `service_role` should say
+so with a grant of its own.
+
+Nothing existing was renamed or rewritten: `0000`–`0016` and their journal
+entries are untouched, and no `__drizzle_migrations` row was edited.
+
+## The pin that keeps it true
+
+`packages/db/src/privilege-baseline.test.ts` reads the catalog — table-level
+grants via `role_table_grants`, explicit column ACLs via
+`aclexplode(pg_attribute.attacl)`, the `public` default ACL, `relrowsecurity`
+on all thirteen tables, and the `test_submissions` policy inventory by name,
+command and kind — and compares each against a literal. The behavioural RLS
+suites prove what each role can do; this one proves the catalog contains
+exactly what the migrations say and nothing more, so a stray grant from a
+dashboard session, an abandoned feature branch, or an unrevoked platform
+default fails the suite on whatever database it runs against. Adding a grant
+in a future migration means adding it to the literal too — deliberately: a
+grant is a decision, and this is where it is recorded as one.
+
+Known, separately-tracked meta drift: `drizzle-kit generate` still re-emits
+three indexes whose hand-written migrations never had snapshots regenerated
+(`bfa_assets_wp_past_due_customer_idx`,
+`customers_water_purveyor_id_email_key`,
+`repair_companies_water_purveyor_id_email_key`) — noted in `0012`'s own
+comments. It affects codegen diffs only, never a migrated database.
+
+## The dedicated test database
+
+`npm run test:db` no longer touches the database `npm run dev` uses. The two
+sharing one database was the other half of the audit's findings: a dev server
+running with `SCHEDULER_ENABLED=true` ticks every minute, claims due
+`scheduled_jobs` rows — including test fixtures' — and recomputes
+`asset_status` across the whole table, which rewrote suites' hand-seeded
+fixtures mid-run and made one arbitrary test fail per multi-minute run.
+Conversely, test runs were claiming and advancing *real* development jobs.
+
+The contract, enforced by `scripts/run-db-tests.mjs` (the rules themselves
+live in `scripts/db-test-env.mjs` and are unit-tested offline in
+`packages/db/src/testing/db-test-env.test.ts`):
+
+- **`TEST_DATABASE_URL` is required.** The runner exits with instructions if
+  it is unset; it never falls back to `DATABASE_URL`, and the development URL
+  is resolved only to be compared against — a test run never connects to it.
+- **It must be a different database.** The runner refuses to start when
+  `TEST_DATABASE_URL` and the development `DATABASE_URL` name the same server
+  and database — disabling the scheduler inside the test process cannot
+  protect fixtures from a dev server that is already running, so the
+  isolation has to be physical.
+- **A bare target is bootstrapped.** The suites impersonate PostgREST callers
+  (`set local role authenticated`) and the policies call `auth.uid()`, so the
+  target must look Supabase-shaped. On a Supabase database everything already
+  exists and the step verifies-and-skips; on a plain PostgreSQL (connect as
+  the superuser) the runner creates the three NOLOGIN API roles and a
+  faithful `auth.uid()` shim — the `sub` claim of `request.jwt.claims`,
+  exactly what the suites set. An empty local database is a sufficient
+  prerequisite.
+- **Migrations run next, on the test database only.** Every run applies
+  `packages/db`'s migrations before Vitest starts, so every run executes
+  against the current schema — and doubles as the standing proof that a clean
+  database built from migration history alone passes the RLS and
+  privilege-baseline suites. The development database is never migrated as a
+  side effect of a test run.
+- The child Vitest process receives `DATABASE_URL` = the test URL with
+  `RUN_DB_TESTS=1`, `EMAIL_DRIVER=console` and `SCHEDULER_ENABLED=false`
+  pinned. `vitest.setup.ts` still loads `apps/web/.env.local` for the
+  auxiliary variables env validation needs, then restores the pinned four, so
+  nothing in that file can redirect a test run; invoking Vitest directly with
+  `RUN_DB_TESTS=1` and no runner-supplied URL is refused loudly.
+- Filters still pass through: `npm run test:db -- test-submissions-rls`.
+
+`npm test` is unchanged: fully offline, no credentials read, database suites
+reported as skipped.
+
+Point `TEST_DATABASE_URL` at any disposable database: a local PostgreSQL
+install, a CI service container, the Supabase local stack (`supabase start`,
+needs Docker), a [Supabase branch](https://supabase.com/docs/guides/deployment/branching)
+or a spare project. A second database on the *same* Supabase cluster does not
+work: Supavisor authenticates against the `postgres` database only, so a
+sibling database is unreachable through the pooler (verified — this was the
+first thing tried). Set the variable in the shell or in
+`apps/web/.env.local`; the runner reads that file for this one key, never for
+the development URL.
+
+## Related pages
+
+- [WP Submitted Tests](/docs/wp-submitted-tests) — the `test_submissions` policies themselves.
+- [Notice Workflow & Scheduler](/docs/notice-workflow) — the scheduler whose tick made shared-database tests nondeterministic.
+- [Invitations & Onboarding](/docs/invitations-onboarding) — configuration, including the test-run environment.
