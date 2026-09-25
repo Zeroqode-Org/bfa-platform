@@ -15,12 +15,14 @@
 	"dependencies": {
 		"@bfa-platform/db": "*",
 		"@bfa-platform/env": "*",
+		"@react-pdf/renderer": "^4.3.0",
 		"@supabase/ssr": "^0.12.5",
 		"@supabase/supabase-js": "^2.114.0",
 		"@trpc/client": "^11.18.0",
 		"@trpc/server": "^11.18.0",
 		"dotenv": "^17.4.2",
 		"next": "^16.3.0",
+		"react": "^19.2.8",
 		"resend": "^6.28.0",
 		"zod": "^4.4.3"
 	},

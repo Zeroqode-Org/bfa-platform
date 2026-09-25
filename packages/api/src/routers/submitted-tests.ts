@@ -13,6 +13,7 @@ import {
 	auditActor,
 	auditActorFields,
 } from "../lib/audit-actor";
+import { publishResultPdf } from "../lib/result-pdf/document-url";
 import {
 	changedSubmissionFields,
 	linkSubmissionAssetInput,
@@ -202,6 +203,20 @@ export const submittedTestsRouter = router({
 		.input(submissionIdInput)
 		.query(({ ctx, input }) => {
 			return readSubmission(ctx.caller.waterPurveyorId, input.id);
+		}),
+
+	/**
+	 * A short-lived link to the PDF of one submitted test, drawn from the record
+	 * as it stands now — so a correction a purveyor has made is in the file.
+	 * Readable by all three WP roles, like the document view itself, and scoped
+	 * the same way: tenant and `submitted` status, one not-found for anything else.
+	 */
+	getResultDocumentUrl: wpProcedure
+		.input(submissionIdInput)
+		.mutation(async ({ ctx, input }) => {
+			const row = await readSubmission(ctx.caller.waterPurveyorId, input.id);
+
+			return { url: await publishResultPdf(row.id) };
 		}),
 
 	/**

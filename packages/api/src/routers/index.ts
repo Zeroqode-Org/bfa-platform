@@ -1,6 +1,7 @@
 import { protectedProcedure, publicProcedure, router } from "../index";
 import { assetsRouter } from "./assets";
 import { certifierRouter } from "./certifier";
+import { certifierWizardRouter } from "./certifier-wizard";
 import { certifiersRouter } from "./certifiers";
 import { customersRouter } from "./customers";
 import { dashboardRouter } from "./dashboard";
@@ -19,6 +20,7 @@ export const appRouter = router({
 	dashboard: dashboardRouter,
 	certifiers: certifiersRouter,
 	certifier: certifierRouter,
+	certifierWizard: certifierWizardRouter,
 	repairCompanies: repairCompaniesRouter,
 	notices: noticesRouter,
 	submittedTests: submittedTestsRouter,

@@ -104,7 +104,7 @@ export function ProfileForm({ email }: { email: string | null }) {
 
 	return (
 		<div className="flex flex-col gap-5">
-			<Card className="flex w-full max-w-[640px] flex-col gap-4 p-5">
+			<Card className="flex w-full max-w-[700px] flex-col gap-4 p-5">
 				<h2 className="font-semibold text-sm">Contact info</h2>
 
 				<form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -165,7 +165,11 @@ export function ProfileForm({ email }: { email: string | null }) {
 						</Field>
 					</div>
 
-					<Button type="submit" disabled={save.isPending || profile.isPending}>
+					<Button
+						type="submit"
+						className="h-10"
+						disabled={save.isPending || profile.isPending}
+					>
 						{save.isPending ? "Saving…" : "Save changes"}
 					</Button>
 				</form>
@@ -241,7 +245,7 @@ function PasswordCard() {
 	}
 
 	return (
-		<Card className="flex w-full max-w-[640px] flex-col gap-4 p-5">
+		<Card className="flex w-full max-w-[700px] flex-col gap-4 p-5">
 			<h2 className="font-semibold text-sm">Change password</h2>
 			<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 				<Field label="New password" htmlFor="cert-new-password">
@@ -264,7 +268,7 @@ function PasswordCard() {
 						placeholder="Confirm new password"
 					/>
 				</Field>
-				<Button type="submit" disabled={isSubmitting}>
+				<Button type="submit" className="h-10" disabled={isSubmitting}>
 					{isSubmitting ? "Updating…" : "Update password"}
 				</Button>
 			</form>

@@ -86,6 +86,15 @@ vi.mock("@/utils/trpc", () => ({
 					mutationFn: (input: unknown) => linkFn(input),
 				}),
 			},
+			// The PDF button in the document header; nothing here presses it.
+			getResultDocumentUrl: {
+				mutationOptions: (options: Record<string, unknown>) => ({
+					...options,
+					mutationKey: ["submittedTests", "getResultDocumentUrl"],
+					mutationFn: () =>
+						Promise.resolve({ url: "https://example.test/x.pdf" }),
+				}),
+			},
 		},
 	},
 }));

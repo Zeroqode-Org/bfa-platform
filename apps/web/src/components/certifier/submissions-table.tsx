@@ -25,10 +25,10 @@ import {
 	TableHeader,
 	TableRow,
 } from "@bfa-platform/ui/components/table";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { FileText, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
-
+import { ResultDocumentButton } from "@/components/result-document-button";
 import { useActiveWp } from "@/lib/use-active-wp";
 import { trpc } from "@/utils/trpc";
 
@@ -268,6 +268,10 @@ function SubmissionDetailDialog({
 	onOpenChange: (open: boolean) => void;
 }) {
 	const entries = submission ? wizardEntries(submission.wizardData) : [];
+	const { active } = useActiveWp();
+	const getDocumentUrl = useMutation(
+		trpc.certifierWizard.getResultDocumentUrl.mutationOptions(),
+	);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -305,6 +309,20 @@ function SubmissionDetailDialog({
 										/>
 									))}
 								</dl>
+							) : null}
+
+							{active ? (
+								<ResultDocumentButton
+									className="self-start"
+									fetchUrl={async () =>
+										(
+											await getDocumentUrl.mutateAsync({
+												id: submission.id,
+												waterPurveyorId: active.id,
+											})
+										).url
+									}
+								/>
 							) : null}
 
 							<p className="text-[12px] text-muted-foreground">
