@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
 	date,
 	index,
+	integer,
 	pgTable,
 	text,
 	timestamp,
@@ -27,6 +28,11 @@ export const customers = pgTable(
 		agRenewalDate: date("ag_renewal_date"),
 		// suspended holds the asset's whole notice pipeline
 		status: customerStatus("status").notNull().default("active"),
+		// The optimistic lock behind the edit form (0020). Every real change —
+		// a WP save, or the AG renewal notice moving `ag_renewal_date` on a year
+		// — bumps it in the same conditional write, so a form opened before that
+		// change is refused rather than allowed to put the old record back.
+		revision: integer("revision").notNull().default(1),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),

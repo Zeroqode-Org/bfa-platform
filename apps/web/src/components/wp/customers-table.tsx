@@ -1,5 +1,6 @@
 "use client";
 
+import { isStaleCustomerError } from "@bfa-platform/api/lib/customer-revision";
 import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
@@ -123,6 +124,15 @@ export function CustomersTable() {
 			},
 			// No toast: the form shows the server's message inline, next to the
 			// fields the person still has to correct.
+			onError: async (mutationError) => {
+				// A stale record means the row moved on under the open form — most
+				// often the AG renewal notice's annual transition. Refetch so the
+				// table shows what is actually stored; the form stays open with the
+				// typed values and its form-wide message, and nothing is resent
+				// automatically, because the payload that failed is the out-of-date
+				// one.
+				if (isStaleCustomerError(mutationError)) await invalidateList();
+			},
 		}),
 	);
 
@@ -136,14 +146,22 @@ export function CustomersTable() {
 			},
 			// The query cache toasts its own errors; mutations do not. This one has
 			// no inline place to put a message, so it gets a toast.
-			onError: (mutationError) => toast.error(mutationError.message),
+			onError: async (mutationError) => {
+				toast.error(mutationError.message);
+				if (isStaleCustomerError(mutationError)) await invalidateList();
+			},
 		}),
 	);
 
-	/** The full record with one status flipped — the update takes every field. */
+	/**
+	 * The full record with one status flipped — the update takes every field,
+	 * and the revision of the row this button was rendered from, so a list that
+	 * has gone stale cannot suspend a customer using an old snapshot of it.
+	 */
 	function statusPayload(customer: Customer, status: Customer["status"]) {
 		return {
 			id: customer.id,
+			expectedRevision: customer.revision,
 			...buildCustomerPayload({ ...customerToFormValues(customer), status }),
 		};
 	}
@@ -365,6 +383,9 @@ export function CustomersTable() {
 								if (isEditing) {
 									saveCustomer.mutate({
 										id: formTarget.customer.id,
+										// The version this form was opened with, not whatever the
+										// list holds now: that is the whole point of the check.
+										expectedRevision: formTarget.customer.revision,
 										...payload,
 									});
 									return;

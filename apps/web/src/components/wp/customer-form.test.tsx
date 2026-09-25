@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { CUSTOMER_STALE_MESSAGE } from "@bfa-platform/api/lib/customer-revision";
 import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { DATE_MESSAGE, EMAIL_MESSAGE } from "@bfa-platform/ui/lib/validation";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -197,6 +198,18 @@ describe("customerFormErrors", () => {
 				data: { code: "CONFLICT" },
 			}),
 		).toEqual({ emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE });
+	});
+
+	it("routes a stale record to the form-wide message, not to Email", () => {
+		// Same `CONFLICT` code, a different failure: the whole record moved on
+		// under the open form — most often the AG renewal notice's annual
+		// transition — so there is no field to correct.
+		expect(
+			customerFormErrors({
+				message: CUSTOMER_STALE_MESSAGE,
+				data: { code: "CONFLICT" },
+			}),
+		).toEqual({ errorMessage: CUSTOMER_STALE_MESSAGE });
 	});
 
 	it("routes everything else to the form-wide message", () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { CUSTOMER_FIELD_LIMITS } from "@bfa-platform/api/lib/customer-field-limits";
+import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { Button } from "@bfa-platform/ui/components/button";
 import { DateInput } from "@bfa-platform/ui/components/date-input";
 import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
@@ -145,17 +146,22 @@ export function buildCustomerPayload(
 /**
  * Where a failed customer mutation's message belongs on the form.
  *
- * `createCustomer` and `updateCustomer` raise `CONFLICT` for exactly one reason
- * — the email address is already used by another customer in this purveyor —
- * so the code is a real signal about which field is at fault, and the message
- * goes under the Email input rather than into the form-wide banner.
+ * `CONFLICT` covers two different failures now, and only one of them is about
+ * a field: a duplicate address is the Email input's problem and its message
+ * goes under that input, while a stale record (somebody else — or the AG
+ * renewal notice's annual transition — changed the customer after this form
+ * was opened) is about the whole record and goes in the form-wide banner.
+ * They are told apart by the message rather than by the code, so a third
+ * conflict added later lands in the banner instead of being mislabelled as an
+ * email problem.
  */
 export function customerFormErrors(
 	error: { message: string; data?: { code?: string | null } | null } | null,
 ) {
 	if (!error) return {};
 
-	return error.data?.code === "CONFLICT"
+	return error.data?.code === "CONFLICT" &&
+		error.message === CUSTOMER_EMAIL_TAKEN_MESSAGE
 		? { emailErrorMessage: error.message }
 		: { errorMessage: error.message };
 }

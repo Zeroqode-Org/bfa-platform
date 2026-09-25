@@ -85,13 +85,28 @@ export const createCustomerInput = z.discriminatedUnion("rateCategory", [
 ]);
 
 /**
- * The update shape is the create shape plus the row's id — every field is sent,
- * so the form is the whole record and a field left out of a request is a field
- * genuinely being cleared, not one being kept.
+ * The update shape is the create shape plus the row's id and the revision the
+ * editor started from — every field is sent, so the form is the whole record
+ * and a field left out of a request is a field genuinely being cleared, not
+ * one being kept.
+ *
+ * `expectedRevision` is what makes "the whole record" safe to send. The AG
+ * renewal notice moves `ag_renewal_date` on a year by itself after a delivery,
+ * so a form opened before that and saved after it would otherwise put the old
+ * date back and queue a second email. Required rather than optional: a caller
+ * that does not know which version it is editing cannot be allowed to
+ * overwrite one.
  */
+const editedRecord = {
+	id: z.uuid(),
+	expectedRevision: z
+		.int()
+		.positive("The customer revision must be a positive whole number"),
+};
+
 export const updateCustomerInput = z.discriminatedUnion("rateCategory", [
-	standardCustomer.extend({ id: z.uuid() }),
-	agriculturalCustomer.extend({ id: z.uuid() }),
+	standardCustomer.extend(editedRecord),
+	agriculturalCustomer.extend(editedRecord),
 ]);
 
 export type CreateCustomerInput = z.infer<typeof createCustomerInput>;

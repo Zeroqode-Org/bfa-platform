@@ -1,13 +1,14 @@
 ---
 title: Notice Workflow & Scheduler
-description: "Workflows 1 and 3 — the reminder chain and the failure notice — and the Node-native scheduler that runs them: the four stage dates in Pacific/Honolulu, the feature-flag gate at execution, recipient resolution at send time, the hold-and-resume rule, idempotency, retries and the row policies on scheduled_jobs"
+description: "Workflows 1, 2 and 3 — the reminder chain, the AG rate renewal notice and the failure notice — and the Node-native scheduler that runs them: the four stage dates in Pacific/Honolulu, the feature-flag gate at execution, recipient resolution at send time, the hold-and-resume rule, idempotency, retries and the row policies on scheduled_jobs"
 ---
 
 This page describes the automated notice pipeline as built. It covers the
 [build plan](/docs/build-plan)'s *Node-native scheduler*, *Workflow — reminder
-and escalating late notices*, and the delivery half of *Workflow — failure
-notice and fail list* ([the fail list itself is on the dashboard
-page](/docs/wp-dashboard#the-fail-list)), and PRD § 6.7.
+and escalating late notices*, *Workflow — agricultural rate renewal*, and the
+delivery half of *Workflow — failure notice and fail list* ([the fail list
+itself is on the dashboard page](/docs/wp-dashboard#the-fail-list)), and PRD
+§ 6.7 and § 6.9.
 
 The pipeline replaces the water purveyor's paper-mail process with four emails
 derived from one field:
@@ -66,7 +67,7 @@ line between two kinds of value:
 
 - a **calendar day** is a `YYYY-MM-DD` string with no zone and no time — the
   spelling a Postgres `date` column compares against — and all arithmetic on it
-  (`addCalendarDays`, `addCalendarMonths`) is zone-free;
+  (`addCalendarDays`, `addCalendarMonths`, `addCalendarYears`) is zone-free;
 - an **instant** is a `Date`, and exactly two functions cross between the two:
   `honoluluCalendarDay` and `honoluluDayStart`.
 
@@ -185,7 +186,7 @@ twice.
 It is partial on two counts: on the non-terminal statuses, so a completed
 reminder and next cycle's pending one coexist; and on `bfa_asset_id is not null`,
 so the customer-scoped `ag_renewal` job of Workflow 2 is not squeezed into an
-asset-shaped rule.
+asset-shaped rule — it has its own customer-shaped one, [below](#one-live-renewal-job-per-customer).
 
 ### Delivery guarantee — provider idempotency keys
 
@@ -684,6 +685,163 @@ rather than rendered empty, and the notice still goes out.
 Everything renders through `renderTextEmail` — the one escaped path every
 automated message takes — so markup in a customer or company name is inert.
 
+## Workflow 2 — the AG rate renewal notice
+
+One email per agricultural customer per year, sent to **the customer's own
+`customers.email`**. Not an asset notice: it never reads
+`bfa_assets.current_customer_id` or `resolveRecipient`, and which assemblies the
+customer does or does not occupy is irrelevant to it. Not an escalation: the
+only successor is next year's renewal notice, queued when this year's delivery
+is confirmed ([the annual cycle](#the-annual-cycle)). Code:
+`packages/api/src/scheduler/ag-renewal.ts`.
+
+**Gated** on `wp_feature_flags.ag_renewal_notice`, checked when the job *runs*
+— the same rule as `automated_notices`, and independent of it. A missing row is
+off. Off cancels the job (`cancelled`, reason in `last_error`) without sending,
+without spending an attempt, and without moving the date or queueing next
+year's, so switching the add-on on later needs no backfill for dates still
+ahead, and switching it off stops notices already queued.
+
+### When it is due
+
+The WP sets `ag_renewal_date` (a `YYYY-MM-DD` Hawaii calendar day) when it
+creates the customer. The job's `run_at` is `honoluluDayStart(ag_renewal_date)`
+— midnight in Pacific/Honolulu, which is 10:00 UTC on that date — and the job
+records the date it is for in `scheduled_jobs.ag_renewal_date` (`0019`),
+because `run_at` moves with holds and retries and the frozen payload is
+cleared once delivery is recorded. A date already in the past is scheduled
+anyway and goes out on the next tick, the same choice the reminder chain makes
+for an overdue assembly.
+
+### Scheduling is reconciliation
+
+`reconcileAgRenewalNotice` brings the customer's one live job into line with
+the customer's current rate and date. It runs inside the customer mutation's
+own transaction, under the customer's row lock, so a customer that fails to
+save leaves no job behind and two clerks saving at once serialise:
+
+| Customer save | Effect on the renewal job |
+|---|---|
+| created on the agricultural rate | one `ag_renewal` job queued, `customer_id` set, no asset |
+| created on the standard rate | nothing |
+| `ag_renewal_date` changed | every live job — `pending` *or* `running` — cancelled (`last_error`: the date changed), and one fresh job inserted for the new date. A fresh row is a fresh idempotency key, and a running send cancelled here is refused completion |
+| moved off the agricultural rate | every live job cancelled with a human-readable reason; nothing queued |
+| moved onto the agricultural rate | one job queued for the new date |
+| anything else changed, or nothing | the job is not touched — and a save that changed nothing writes nothing at all |
+
+`updateCustomer` now reads the row `FOR UPDATE` inside the same transaction as
+its write, so the "did the rate or date change?" comparison is against the row
+as committed — not a read taken before a concurrent save landed.
+
+### One live renewal job per customer
+
+`0018` adds `scheduled_jobs_live_customer_job_type_key`: a partial unique index
+on (`customer_id`, `job_type`) where the status is `pending` or `running` and
+`customer_id` is not null — the customer-shaped counterpart of the live-asset
+rule. Two live renewal jobs for one customer are two copies of one email; the
+index makes that unrepresentable and is the `ON CONFLICT DO NOTHING` target of
+`scheduleAgRenewalJob`, so concurrent writers produce one row. Partial on the
+live statuses so this year's completed notice and a later cycle's pending one
+coexist. No policy or grant changes: `0014`'s WP-scoped SELECT keys on
+`water_purveyor_id`, which every renewal job carries.
+
+### What the renewal handler checks, in order
+
+1. **The job's cycle date** (`ag_renewal_date`). A job without one is
+   cancelled rather than guessed at.
+2. **The customer**, by the job's `customer_id` *and* its purveyor. Gone or
+   moved tenant — cancelled.
+3. **Still agricultural, still dated, still this date** — otherwise cancelled
+   (a backstop for a row changed outside the procedures; the procedures
+   already withdrew it).
+4. **The flag**, `ag_renewal_notice`, read now. Missing or off — cancelled.
+5. **The delivery**, through the shared settlement: the payload frozen before
+   the first provider call, replayed under the job's own idempotency key on
+   every retry, the outcome recorded only from the provider's answer. A
+   suspended customer holds the job (pending again, no attempt consumed, date
+   unchanged), as every other notice does.
+6. **The annual transition**, only after the provider confirmed — below.
+
+Steps 1–4 run on every pass, including a retry that replays a frozen payload
+or finds the delivery already recorded.
+
+### The annual cycle
+
+Team-lead decision (it supersedes the earlier PRD line that the date does not
+auto-advance): **after a provider-confirmed delivery to an `active`
+agricultural customer, `customers.ag_renewal_date` becomes one calendar year
+after the Hawaii day that delivery was confirmed on, and exactly one pending
+`ag_renewal` job is queued for it.** 29 February becomes 28 February in a
+non-leap year (`addCalendarYears`, the same end-of-month clamp as the
+reminder's month arithmetic); a customer who is not active is not mailed and
+their date does not move.
+
+**The year runs from the delivery, not from the notice's own renewal date.**
+Those two differ whenever a notice goes out late — held while the customer was
+suspended, retried through a provider outage, or queued from a date the WP
+entered long in the past — and counting from the delivery is what gives every
+customer a full year's notice, and what keeps a long-overdue date from queueing
+a successor that is itself already past.
+
+**Which delivery day** is read from `scheduled_jobs.delivered_at` — the moment
+`recordDelivery` wrote when the provider answered — and from nothing else. The
+transition never dates the next notice from its own clock: a pass that picks
+the job up later (a retry, or a process recovering a job whose delivery was
+recorded just before it died) can easily run on the *next* Hawaii day, and
+counting from that would put the whole next cycle a day out. `delivered_at` is
+written once with the provider's confirmation and never rewritten, so every
+pass computes the same successor. A confirmed delivery with no `delivered_at`
+— which `recordDelivery` cannot produce, since it writes both columns in one
+statement — is not guessed at either: the job completes with no successor and
+`no_successor_reason: "delivery_time_unknown"` on its line, and the cycle waits
+for the WP to set a date.
+
+The job's own `ag_renewal_date` (`0019`) is the immutable date of *this* cycle
+and is used for one thing only: checking the WP did not change the date while
+the notice was in flight.
+
+`completeAgRenewalCycle` does it in one transaction, locking the customer row
+first and the job row second — the same order the customer procedures take, so
+a concurrent WP save serialises with it instead of deadlocking:
+
+| State found under the lock | Result |
+|---|---|
+| job no longer `running` (a date or rate change cancelled it mid-send, or another pass already finished it) | nothing written; logged as superseded |
+| customer gone or moved tenant, off the agricultural rate, date cleared, date no longer the job's `ag_renewal_date`, or not `active` | job completed (the email did go out); **no date change, no successor**; the reason is on the completion line |
+| a confirmed delivery with no `delivered_at` | the same: job completed, **no date change, no successor**, reason `delivery_time_unknown` — the date is never dated from a clock |
+| otherwise | date set to one year after the recorded delivery day and `revision` bumped (the update is also conditional on the old date), job completed, one pending job inserted for `honoluluDayStart(next date)` |
+
+Nothing happens before the provider confirms: a lost response, a refusal, or
+*delivery outcome unknown* moves no date. One job at a time — the successor is
+created by the delivery it follows, never pre-created.
+
+The same statement bumps `customers.revision`, which is what stops a WP form
+opened before the transition from putting the old date back — see
+[the revision check](/docs/wp-customers#the-revision-check).
+
+**A retry cannot add a second year.** The transition requires, under the
+customer's row lock and in the same transaction that completes the job, both
+that the job is still `running` and that the customer's date still equals the
+job's recorded `ag_renewal_date`. The first pass to commit changes both — the
+job becomes `completed` and the date moves — so any later pass over the same
+job (a retry, a recovered crash, a concurrent duplicate) fails both checks and
+writes nothing. A pass that died after the provider's answer was recorded but
+before the transition committed left neither changed, so the next pass
+settles as `already_recorded` (no second email) and finishes the transition
+exactly once.
+
+### What the renewal email contains
+
+Fixed copy in `lib/ag-renewal-copy.ts` — the customer's name, the WP's name
+and the renewal date, rendered through `renderTextEmail`. The message states
+the renewal date on record for the customer's agricultural water rate and asks
+them to contact the WP about renewing to keep that rate; it quotes no rate
+amount. **Provisional wording, not client-approved policy** — like the notice
+defaults and the failure notice, the client supplies or approves the final text
+before a production tenant sends it. No `notice_templates` row and no editor —
+a configurable renewal template is not a specified feature. Provider tags:
+`type=ag_renewal`, `wp_id`, `customer_id`.
+
 ## `asset_status` is scheduler-owned
 
 `bfa_assets.asset_status` is recomputed from `annual_test_date` on every tick and
@@ -723,13 +881,13 @@ The event names are a closed list in `scheduler/logging.ts`:
 
 | Event | Meaning |
 |---|---|
-| `scheduler_job_scheduled` | a new asset's reminder, or a date change's replacement reminder |
+| `scheduler_job_scheduled` | a new asset's reminder or a date change's replacement; a failure notice queued; an agricultural customer's renewal notice queued, re-queued for a new date, or queued for next year by the annual cycle (`trigger: "ag_renewal_annual_cycle"`) |
 | `scheduler_delivery_recorded` | the provider confirmed the email — job id, idempotency key, provider message id, `delivery_pass`; no address or body |
 | `scheduler_delivery_unconfirmed` | the first attempt cannot be safely replayed — past the provider's idempotency window (`cause: "idempotency_window_expired"`), or a legacy payload with no frozen sender (`cause: "legacy_sender_not_frozen"`); failed for a person to check. Terminal |
-| `scheduler_job_cancelled` | withdrawn: passing test, changed date, flag off, gone asset |
+| `scheduler_job_cancelled` | withdrawn: passing test, changed date, flag off, gone asset, customer left the agricultural rate |
 | `scheduler_job_resumed` | a held, already-due stage pulled forward |
 | `scheduler_job_claimed` | the loop took ownership |
-| `scheduler_job_completed` | the stage did what it exists to do |
+| `scheduler_job_completed` | the stage did what it exists to do. For an AG renewal it carries `previous_ag_renewal_date`, and either `next_ag_renewal_date` / `next_job_id` / `next_run_at` or a `no_successor_reason` |
 | `scheduler_job_held` | nothing sent, chain not advanced |
 | `scheduler_job_retrying` | a delivery failed; it will be tried again |
 | `scheduler_job_failed` | the attempt ceiling was reached. Terminal |
@@ -782,7 +940,10 @@ for the other. `packages/db/src/scheduled-jobs-rls.test.ts` covers the second.
 | `packages/api/src/lib/failure-notice-copy.test.ts` | the failure copy: the repair-company lines and heading, the empty case omitting the block, the no-email-field rule, escaping through the shared rendering path |
 | `packages/api/src/scheduler/failure-workflow.db.test.ts` | Workflow 3 against real Postgres, with every re-test modelled as a **new submitted record** through `applySubmittedTestResult` — a submitted fail and a late link each queuing one immediate job, drafts queuing nothing, two fails being two notices, active-companies-only content with no repair email, send-time recipient resolution, the three holds, a later passing re-test cancelling the unsent notice (including one racing the handler), cross-tenant refusal, refused-send retry and lost-response replay each delivering exactly one email under one key; the fail list's 30-day rule at an explicit clock — absent at 29 days and 1 ms short of 30, present at exactly 30, never listed after an earlier pass, cleared by a pass after entry, not reset by a second fail, restarted by fail→pass→fail — plus drafts, unlinked submissions, event-order-not-test-date, tenant isolation, default sort, and the procedure applying the rule to the real clock; the WP correction path in its own section; and a regression pass over the chain's cancellation rules |
 | `packages/api/src/lib/fail-list-rule.test.ts` | the 30-day cutoff arithmetic offline: exactly 30 × 24 h, the 29-day and 1 ms-short cases, and a daylight-saving change inside the window |
-| `packages/db/src/scheduled-jobs-rls.test.ts` | the row policies: cross-tenant reads (failure-notice rows and their `test_submission_id` included), a certifier, a blocked admin, and every write path refused for want of the privilege |
+| `packages/api/src/lib/ag-renewal-copy.test.ts` | the renewal copy names the customer, purveyor and date, and is inert once rendered |
+| `packages/api/src/scheduler/ag-renewal-workflow.db.test.ts` | Workflow 2 against real Postgres — a job queued on agricultural creation at midnight Honolulu (10:00 UTC) carrying its cycle date, none on the standard rate, none left behind by a failed insert; cross-tenant edits refused and a mis-tenanted job cancelled unsent; concurrent scheduling and concurrent date edits (one winner, one stale-record conflict); the live-customer index; date-change reconciliation, a rename or no-op save leaving the job alone, cancellation on leaving the rate, a running job withdrawn by a date change, an out-of-band date change cancelling unsent; flag off and flag missing cancelling without a send, an attempt or a date change; delivery to the customer's own address regardless of asset occupancy; the annual cycle — one completion, the date one year after the *delivery* day (not after the notice's own), one `revision` bump, exactly one pending successor at midnight Honolulu, nothing more on a second tick; a delivery confirmed on `2028-02-29` (an explicit instant) moving to `2029-02-28`; a renewal date two years overdue still landing a year after today with no second email; a lost response moving nothing and its replay moving the date once; a recorded delivery whose pass died finishing the transition exactly once, and one recovered a Hawaii day later still dating the successor from the stored `delivered_at`; a confirmed delivery with no `delivered_at` completing with no successor rather than guessing; two handlers on one job adding one year and one revision; the suspended hold; a WP save racing the send — a new date, leaving the rate, or suspension — never overwritten; and a form opened before the transition refused as stale without rolling the new date back or cancelling its successor |
+| `packages/api/src/lib/honolulu-dates.test.ts` (year arithmetic) | `addCalendarYears`, including the 29 February clamp |
+| `packages/db/src/scheduled-jobs-rls.test.ts` | the row policies: cross-tenant reads (failure-notice rows and their `test_submission_id`, and AG renewal rows and their `customer_id`, included), a certifier, a blocked admin, and every write path refused for want of the privilege |
 
 The unit suites run under `npm test`. The database-backed ones write real rows
 and run under `npm run test:db` — which requires a dedicated
@@ -818,6 +979,8 @@ recomputes `asset_status` table-wide while suites run. See
 - **The failure notice's customer-facing copy.** Provisional in
   `lib/failure-notice-copy.ts`, same register and same caveat as the notice
   defaults: plain statements, no compliance claim, awaiting client wording.
+- **The AG renewal notice's customer-facing copy.** Provisional in
+  `lib/ag-renewal-copy.ts`, same caveat as the failure notice.
 - **The failure-episode rule.** An episode starts at the first submitted fail
   after the last submitted pass, and later fails inside it do not reset the
   fail list's 30-day clock or its age — a stated project default
@@ -827,6 +990,7 @@ recomputes `asset_status` table-wide while suites run. See
 
 ## Related pages
 
+- [WP Customers](/docs/wp-customers) — where the rate and AG renewal date are set.
 - [WP BFA Assets](/docs/wp-bfa-assets) — where the annual test date is set, and the customer-assignment transaction that resumes a hold.
 - [WP Notices & Email](/docs/wp-notices) — the four templates, the fallback rule, and the variable registry.
 - [WP Certifiers](/docs/wp-certifiers) — the two status columns the reminder's list reads.

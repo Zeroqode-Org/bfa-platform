@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
+	check,
+	date,
 	index,
 	integer,
 	jsonb,
@@ -71,6 +73,12 @@ export const scheduledJobs = pgTable(
 		waterPurveyorId: uuid("water_purveyor_id")
 			.notNull()
 			.references(() => waterPurveyors.id),
+		// The `customers.ag_renewal_date` an `ag_renewal` job was queued for
+		// (0019). Written once at insert, never rewritten: a changed date cancels
+		// the job and inserts a fresh one. The annual transition advances the
+		// customer's date only while it still equals this value, which is what
+		// stops a retry from adding a second year. NULL on every other job type.
+		agRenewalDate: date("ag_renewal_date"),
 		runAt: timestamp("run_at", { withTimezone: true }).notNull(),
 		status: jobStatus("status").notNull().default("pending"),
 		attempts: integer("attempts").notNull().default(0),
@@ -128,5 +136,20 @@ export const scheduledJobs = pgTable(
 			.where(
 				sql`${table.testSubmissionId} is not null and ${table.status} <> 'cancelled'`,
 			),
+		// One live job per type per customer — the customer-scoped counterpart of
+		// the live-asset rule (0018). The AG renewal notice is derived entirely
+		// from `customers.ag_renewal_date`, so two live rows for one customer are
+		// two copies of one email. Partial on the live statuses so a completed
+		// notice and a later cycle's pending one coexist. Doubles as the lookup
+		// index for a customer's live jobs.
+		uniqueIndex("scheduled_jobs_live_customer_job_type_key")
+			.on(table.customerId, table.jobType)
+			.where(
+				sql`${table.status} in ('pending', 'running') and ${table.customerId} is not null`,
+			),
+		check(
+			"scheduled_jobs_ag_renewal_date_only_on_ag_jobs",
+			sql`${table.agRenewalDate} is null or ${table.jobType} = 'ag_renewal'`,
+		),
 	],
 ).enableRLS();
