@@ -35,6 +35,7 @@
 
 import type { EmailDriver } from "../lib/email";
 import type { NoticeType } from "../lib/notice-defaults";
+import { type AgRenewalOutcome, runAgRenewalJob } from "./ag-renewal";
 import { recomputeAssetStatuses } from "./asset-status";
 import {
 	CLAIM_BATCH_SIZE,
@@ -59,6 +60,15 @@ import {
 import { logSchedulerEvent } from "./logging";
 import { type NoticeJobOutcome, runNoticeJob } from "./notice-handler";
 
+export {
+	AG_RENEWAL_CANCEL_REASONS,
+	AG_RENEWAL_HOLD_REASONS,
+	AG_RENEWAL_NO_SUCCESSOR_REASONS,
+	agRenewalRunAt,
+	nextAgRenewalDate,
+	reconcileAgRenewalNotice,
+	runAgRenewalJob,
+} from "./ag-renewal";
 export { recomputeAssetStatuses } from "./asset-status";
 export {
 	FAILURE_CANCEL_REASONS,
@@ -89,19 +99,18 @@ export {
  */
 type JobHandler = (
 	job: ScheduledJob,
-) => Promise<NoticeJobOutcome | FailureNoticeOutcome>;
+) => Promise<NoticeJobOutcome | FailureNoticeOutcome | AgRenewalOutcome>;
 
 /**
  * Handlers by `job_type`.
  *
- * Partial on purpose. `ag_renewal` (Workflow 2) is declared in the `job_type`
- * enum and not implemented here, and `fail_list_check` is declared and
+ * Partial on purpose. `fail_list_check` is declared in the `job_type` enum and
  * *deliberately never implemented*: fail-list membership — including its
  * 30-day entry rule — is computed from test history at read time, so there is
- * nothing for a scheduled recheck to do. A
- * job of an unhandled type is left alone and logged rather than being claimed
- * and failed, so shipping this workflow cannot consume the retry budget of a
- * row a later workflow will want.
+ * nothing for a scheduled recheck to do. A job of an unhandled type is left
+ * alone and logged rather than being claimed and failed, so a build that does
+ * not know a type cannot consume the retry budget of a row a newer build
+ * will want.
  */
 function handlerFor(
 	job: ScheduledJob,
@@ -117,6 +126,10 @@ function handlerFor(
 		return (claimed) => runFailureNoticeJob(claimed, { driver });
 	}
 
+	if (job.jobType === "ag_renewal") {
+		return (claimed) => runAgRenewalJob(claimed, { driver });
+	}
+
 	return null;
 }
 
@@ -128,7 +141,9 @@ function handlerFor(
 function deliveryState(job: ScheduledJob) {
 	return {
 		idempotency_key:
-			isNoticeJobType(job.jobType) || job.jobType === "failure_notice"
+			isNoticeJobType(job.jobType) ||
+			job.jobType === "failure_notice" ||
+			job.jobType === "ag_renewal"
 				? noticeIdempotencyKey(job.id)
 				: null,
 		delivery_recorded: job.providerMessageId !== null,
@@ -197,6 +212,7 @@ export async function runSchedulerTick({
 			jobType: job.jobType,
 			assetId: job.bfaAssetId,
 			waterPurveyorId: job.waterPurveyorId,
+			customerId: job.customerId,
 			extra: {
 				run_at: job.runAt.toISOString(),
 				attempts: job.attempts,

@@ -15,14 +15,13 @@ import { useCallback, useRef } from "react";
 import type { NoticeSampleValues } from "./notice-types";
 
 /**
- * The pieces the notice editor and the broadcast composer both need: the
- * variable reference panel, the preview, and the caret handling that puts a
- * placeholder where somebody was typing.
+ * The notice-template editor's variable reference panel, its preview, and the
+ * caret handling that puts a placeholder where somebody was typing — plus the
+ * error strip and read-only sentence the general-info broadcast shares with it.
+ * The broadcast uses none of the variable pieces: it is sent as literal text.
  *
- * Neither piece names a variable. Both take the list they are given, so the two
- * composers offering different sets — all six for a notice, the two
- * recipient-scoped ones for a broadcast — is a prop rather than a second
- * implementation, and a seventh variable is an entry in `NOTICE_VARIABLES`.
+ * Neither variable piece names a variable. Both take the list they are given,
+ * so a seventh variable is an entry in `NOTICE_VARIABLES`.
  */
 
 /**

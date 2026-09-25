@@ -149,20 +149,44 @@ describe("createCustomerInput", () => {
 });
 
 describe("updateCustomerInput", () => {
+	const id = "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607";
+	const edited = { id, expectedRevision: 1 };
+
 	it("requires the row id", () => {
 		expect(updateCustomerInput.safeParse(standard).success).toBe(false);
 		expect(
-			updateCustomerInput.safeParse({ ...standard, id: "not-a-uuid" }).success,
+			updateCustomerInput.safeParse({
+				...standard,
+				...edited,
+				id: "not-a-uuid",
+			}).success,
 		).toBe(false);
 	});
 
-	it("carries the same rate-category rules as create", () => {
-		const id = "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607";
+	it("requires the revision the edit started from", () => {
+		// Not optional: a caller that does not say which version it is editing
+		// cannot be allowed to overwrite one — that is the whole guard.
+		expect(updateCustomerInput.safeParse({ ...standard, id }).success).toBe(
+			false,
+		);
 
+		for (const expectedRevision of [0, -1, 1.5, "1", null]) {
+			expect(
+				updateCustomerInput.safeParse({ ...standard, id, expectedRevision })
+					.success,
+			).toBe(false);
+		}
+
+		expect(
+			updateCustomerInput.safeParse({ ...standard, ...edited }).success,
+		).toBe(true);
+	});
+
+	it("carries the same rate-category rules as create", () => {
 		expect(
 			updateCustomerInput.safeParse({
 				...standard,
-				id,
+				...edited,
 				agRenewalDate: "2027-03-01",
 			}).success,
 		).toBe(false);
@@ -170,7 +194,7 @@ describe("updateCustomerInput", () => {
 		expect(
 			updateCustomerInput.safeParse({
 				...agricultural,
-				id,
+				...edited,
 				agRenewalDate: undefined,
 			}).success,
 		).toBe(false);

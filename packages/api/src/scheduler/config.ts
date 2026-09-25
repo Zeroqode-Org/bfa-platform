@@ -99,9 +99,10 @@ export const PROVIDER_IDEMPOTENCY_WINDOW_MS = 23 * 3_600_000;
  * How long a job of a type this build cannot handle waits before being looked
  * at again.
  *
- * An hour rather than a tick, so an `ag_renewal` row queued by a later workflow
- * against an older deployment is not re-read sixty times an hour while it
- * waits for the build that knows what to do with it.
+ * An hour rather than a tick, so a row of a type queued by a newer build —
+ * seen by an older deployment still running alongside it — is not re-read
+ * sixty times an hour while it waits for the build that knows what to do
+ * with it.
  */
 export const UNHANDLED_JOB_DEFER_MS = 3_600_000;
 

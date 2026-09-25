@@ -52,6 +52,10 @@ const submissionA = randomUUID();
 const submissionB = randomUUID();
 const failureJobA = randomUUID();
 const failureJobB = randomUUID();
+const agCustomerA = randomUUID();
+const agCustomerB = randomUUID();
+const agJobA = randomUUID();
+const agJobB = randomUUID();
 
 let pool: pg.Pool;
 
@@ -162,6 +166,21 @@ describeDb("RLS — scheduled_jobs", () => {
 				[failureJobA, submissionA, wpA, failureJobB, submissionB, wpB],
 			);
 
+			// An agricultural customer per tenant, and the customer-scoped AG
+			// renewal job for each (0018): no asset, no submission.
+			await client.query(
+				`insert into customers (id, water_purveyor_id, name, email, rate_category, ag_renewal_date, status)
+				 values ($1, $2, 'Job RLS Farms', 'farms@example.com', 'agricultural', '2027-03-01', 'active'),
+				        ($3, $4, 'Job RLS Farms', 'farms@example.com', 'agricultural', '2027-03-01', 'active')`,
+				[agCustomerA, wpA, agCustomerB, wpB],
+			);
+			await client.query(
+				`insert into scheduled_jobs (id, job_type, customer_id, water_purveyor_id, run_at, status)
+				 values ($1, 'ag_renewal', $2, $3, '2027-03-01T10:00:00Z', 'pending'),
+				        ($4, 'ag_renewal', $5, $6, '2027-03-01T10:00:00Z', 'pending')`,
+				[agJobA, agCustomerA, wpA, agJobB, agCustomerB, wpB],
+			);
+
 			await client.query("commit");
 		} catch (error) {
 			await client.query("rollback").catch(() => undefined);
@@ -175,7 +194,10 @@ describeDb("RLS — scheduled_jobs", () => {
 		if (!pool) return;
 
 		await pool.query("delete from scheduled_jobs where id = any($1::uuid[])", [
-			[jobA, jobB, failureJobA, failureJobB],
+			[jobA, jobB, failureJobA, failureJobB, agJobA, agJobB],
+		]);
+		await pool.query("delete from customers where id = any($1::uuid[])", [
+			[agCustomerA, agCustomerB],
 		]);
 		await pool.query(
 			"delete from test_submissions where id = any($1::uuid[])",
@@ -228,6 +250,15 @@ describeDb("RLS — scheduled_jobs", () => {
 			]);
 		});
 
+		it("shows a WP its own customer's AG renewal job and not the neighbour's", async () => {
+			const rows = await rowsFor(
+				ids.adminA,
+				"select id, customer_id from scheduled_jobs where job_type = 'ag_renewal'",
+			);
+
+			expect(rows).toEqual([{ id: agJobA, customer_id: agCustomerA }]);
+		});
+
 		it("does not let a WP read another purveyor's job by naming its id", async () => {
 			const rows = await rowsFor(ids.adminA, `${selectJobs} where id = $1`, [
 				jobB,
@@ -271,6 +302,24 @@ describeDb("RLS — scheduled_jobs", () => {
 					`insert into scheduled_jobs (job_type, bfa_asset_id, water_purveyor_id, run_at, status)
 					 values ('reminder', $1, $2, now(), 'pending') returning id`,
 					[assetA, wpA],
+				),
+			).rejects.toThrow(/permission denied/i);
+		});
+
+		it("refuses a WP inserting or cancelling an AG renewal job itself", async () => {
+			await expect(
+				rowsFor(
+					ids.adminA,
+					`insert into scheduled_jobs (job_type, customer_id, water_purveyor_id, run_at, status)
+					 values ('ag_renewal', $1, $2, now(), 'pending') returning id`,
+					[agCustomerA, wpA],
+				),
+			).rejects.toThrow(/permission denied/i);
+			await expect(
+				rowsFor(
+					ids.adminA,
+					"update scheduled_jobs set status = 'cancelled' where id = $1 returning id",
+					[agJobA],
 				),
 			).rejects.toThrow(/permission denied/i);
 		});

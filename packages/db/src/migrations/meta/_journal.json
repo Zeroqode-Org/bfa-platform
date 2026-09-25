@@ -127,6 +127,27 @@
 			"when": 1792400000000,
 			"tag": "0017_explicit_privilege_baseline",
 			"breakpoints": true
+		},
+		{
+			"idx": 18,
+			"version": "7",
+			"when": 1792500000000,
+			"tag": "0018_ag_renewal_customer_job",
+			"breakpoints": true
+		},
+		{
+			"idx": 19,
+			"version": "7",
+			"when": 1792600000000,
+			"tag": "0019_ag_renewal_job_cycle_date",
+			"breakpoints": true
+		},
+		{
+			"idx": 20,
+			"version": "7",
+			"when": 1792700000000,
+			"tag": "0020_customer_revision",
+			"breakpoints": true
 		}
 	]
 }

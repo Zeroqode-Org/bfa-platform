@@ -1,0 +1,37 @@
+-- ---------------------------------------------------------------------------
+-- Workflow 2 — the AG rate renewal notice's one-live-job-per-customer rule
+--
+-- The AG renewal notice is customer-scoped: one `ag_renewal` job per
+-- agricultural customer, carrying `customer_id` and no asset. `job_type`
+-- already has `ag_renewal` and `feature_flag` already has `ag_renewal_notice`
+-- (both since 0000), and `scheduled_jobs.customer_id` has existed since 0000
+-- too, so the only thing this workflow needs from the database is the
+-- constraint that makes "one live renewal notice per customer" a fact rather
+-- than a read the caller made a moment earlier.
+--
+-- `scheduled_jobs_live_customer_job_type_key`
+--
+-- At most one `pending`/`running` job per (customer, type). The same shape as
+-- 0014's live-asset rule and for the same reason: a renewal notice is derived
+-- entirely from `customers.ag_renewal_date`, so two live rows for one customer
+-- are two copies of one email and would both fire. The reconciler withdraws
+-- the old row and inserts the new one under the customer's row lock; this
+-- index is the backstop that makes a second live row unrepresentable if two
+-- writers ever get past that, and the `ON CONFLICT` target that lets the
+-- insert be idempotent.
+--
+-- Partial on the live statuses so a completed notice (this year's) and a later
+-- pending one (a date the WP sets manually for the next cycle — the date does
+-- not auto-advance) coexist, and on `customer_id IS NOT NULL` so the asset and
+-- submission jobs, which leave the column null, are not touched by it. Its
+-- leading column doubles as the lookup index for a customer's live jobs.
+--
+-- Access is unchanged. `scheduled_jobs` writes still come only from the
+-- service-role scheduler connection — no INSERT/UPDATE/DELETE grant exists to
+-- extend — and 0014's WP-scoped SELECT policies key on `water_purveyor_id`,
+-- which every customer-scoped row carries, so a purveyor reads its own
+-- customers' renewal jobs and nobody else's with no policy change.
+-- ---------------------------------------------------------------------------
+CREATE UNIQUE INDEX "scheduled_jobs_live_customer_job_type_key"
+  ON public.scheduled_jobs USING btree ("customer_id", "job_type")
+  WHERE "status" IN ('pending', 'running') AND "customer_id" IS NOT NULL;

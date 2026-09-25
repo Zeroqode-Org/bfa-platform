@@ -22,6 +22,7 @@ the [build plan](/docs/build-plan) and PRD § 6.6.4.
 | `rate_category` | yes | `standard` or `agricultural`; agricultural gets the purple badge |
 | `ag_renewal_date` | agricultural only | Required on the agricultural rate, refused on the standard one |
 | `status` | yes | `active` or `suspended` — see below |
+| `revision` | — | Server-owned version of the row. Returned with every customer and sent back as `expectedRevision` on save — see below |
 | `water_purveyor_id` | — | Never sent by the client; derived from the caller |
 
 The record attaches to the *customer*, not to an asset. Which assets a customer
@@ -34,9 +35,48 @@ screen's to rewrite. Nothing here creates, closes or moves an assignment.
 The AG renewal notice ([PRD § 6.9](/docs/prd)) fires against `ag_renewal_date`.
 An agricultural customer without one is a notice that can never be scheduled, so
 the date is required at the point the rate is chosen rather than left for the
-workflow to discover. The form only shows the field on the agricultural rate,
+workflow to discover.
+
+Saving the customer is what schedules it. Creating an agricultural customer
+queues one renewal email to the customer's own address for midnight Hawaii time
+on that date; changing the date moves it; moving the customer to the standard
+rate cancels it. Once the email is delivered to an active customer, the date
+moves on its own to one calendar year after the Hawaii day of that delivery
+(29 February → 28 February in a non-leap year) and next year's email is queued;
+a suspended customer is not mailed and keeps their date. See
+[Workflow 2](/docs/notice-workflow#workflow-2--the-ag-rate-renewal-notice). The form only shows the field on the agricultural rate,
 and only that rate asks for it: the date is typed as `MM/DD/YYYY` or chosen from the calendar picker, must be a real
 calendar day, and is sent as the API's `YYYY-MM-DD`.
+
+### The revision check
+
+The edit dialog submits the **whole record**, which used to mean the record as
+it looked when the form was opened. That became a problem once the AG renewal
+notice started moving `ag_renewal_date` forward by itself: a clerk who opened
+the form before the nightly transition and saved it afterwards sent the old
+date back, which read as a deliberate date change — the fresh successor was
+cancelled and a job was queued for a day that had already passed, mailing the
+customer a second time.
+
+So `customers.revision` (`0020`) is an optimistic lock:
+
+- every customer the API returns carries its `revision`;
+- `updateCustomer` requires `expectedRevision` — the version the form (or the
+  row's Suspend / Reactivate button) was rendered from;
+- a real change is written only while that version still matches, and the same
+  statement bumps it. The scheduler's annual transition bumps it too, in its own
+  transaction, so the case above is exactly the case this refuses;
+- a save that changes **nothing** stays a true no-op even from an out-of-date
+  form: there is no edit to lose, so it writes nothing, logs nothing, and comes
+  back without a conflict.
+
+A stale save is refused with `CONFLICT` and its own sentence — *This customer
+was changed after you opened this form…* — which the dialog shows as a
+**form-wide** message, not under Email. Duplicate-address conflicts still go to
+the Email field; the two are told apart by the message rather than by the code.
+Nothing is resent automatically, the dialog stays open with what was typed, and
+the list behind it is refetched so reopening the customer starts from what is
+actually stored.
 
 Name and email are required inline, the email must look like an address
 (*Please enter a valid email address.*), and every text field reports the
