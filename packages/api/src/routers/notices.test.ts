@@ -97,7 +97,6 @@ type NoticesCaller = {
 		}) => Promise<{
 			recipientFilter: RecipientFilter;
 			recipientCount: number;
-			sampleValues: Record<string, string>;
 		}>;
 		sendGeneralInfoBroadcast: (input: {
 			subject: string;
@@ -721,16 +720,17 @@ describeDb("notices procedures", () => {
 			expect(audience.recipientCount).toBe(1);
 		});
 
-		it("offers only the two recipient-scoped variables as sample values", async () => {
+		it("returns a count and nothing about any customer", async () => {
 			const audience = await callerFor(ids.adminA).notices.getBroadcastAudience(
 				{ recipientFilter: "all_customers" },
 			);
 
-			expect(Object.keys(audience.sampleValues).sort()).toEqual([
-				"customer_name",
-				"wp_name",
-			]);
-			expect(audience.sampleValues.wp_name).toBe("Notices Fixture Water Works");
+			// No sample recipient, no preview values: the broadcast has nothing to
+			// substitute, and the composer only needs to say how many.
+			expect(audience).toEqual({
+				recipientFilter: "all_customers",
+				recipientCount: 3,
+			});
 		});
 
 		it("rejects a recipient filter that is not one of the three", async () => {
@@ -769,32 +769,53 @@ describeDb("notices procedures", () => {
 			expect(recipients).not.toContain("suspended.a@example.com");
 		});
 
-		it("renders the message separately for each recipient", async () => {
+		it("sends the literal subject and body, identical for every recipient", async () => {
 			const lines = captureLogs();
 
-			await callerFor(ids.adminA).notices.sendGeneralInfoBroadcast({
-				subject: "Hello {{customer_name}}",
-				body: "Dear {{customer_name}}, a note from {{wp_name}}.",
+			const result = await callerFor(
+				ids.adminA,
+			).notices.sendGeneralInfoBroadcast({
+				subject: "Hello {{customer_name}} from {{wp_name}}",
+				body: "Dear {{customer_name}}, about {{bin}} and {{nope}}.",
 				recipientFilter: "all_customers",
 			});
 
 			const deliveries = lines.filter(
 				(line) => line.event === "email_console_delivery",
 			);
-			const byAddress = new Map(
-				deliveries.map((line) => [line.to as string, line]),
-			);
 
-			expect(byAddress.get("ag.a@example.com")?.subject).toBe(
-				"Hello Shared Ag Farms",
-			);
-			expect(byAddress.get("standard.a@example.com")?.subject).toBe(
-				"Hello Shared Name Farms",
-			);
-			// Nobody receives somebody else's name, and no placeholder survives.
+			// Braces are text on this path — known, asset-scoped or made up, none
+			// is refused and none is substituted.
+			expect(result.sentCount).toBe(3);
+			expect(deliveries).toHaveLength(3);
 			for (const delivery of deliveries) {
-				expect(String(delivery.html)).not.toContain("{{");
+				expect(delivery.subject).toBe(
+					"Hello {{customer_name}} from {{wp_name}}",
+				);
+				expect(String(delivery.html)).toContain(
+					"<p>Dear {{customer_name}}, about {{bin}} and {{nope}}.</p>",
+				);
+				// No customer's or purveyor's name was written into anybody's copy.
+				expect(String(delivery.html)).not.toContain("Shared");
+				expect(String(delivery.html)).not.toContain(
+					"Notices Fixture Water Works",
+				);
 			}
+			expect(new Set(deliveries.map((line) => line.html)).size).toBe(1);
+		});
+
+		it("ignores a tenant sent in the payload", async () => {
+			const lines = captureLogs();
+
+			await callerFor(ids.adminA).notices.sendGeneralInfoBroadcast({
+				subject: "Tenant from the caller",
+				body: "Hello.",
+				recipientFilter: "all_customers",
+				waterPurveyorId: wpB,
+			} as Parameters<NoticesCaller["notices"]["sendGeneralInfoBroadcast"]>[0]);
+
+			expect(deliveredTo(lines)).not.toContain("standard.b@example.com");
+			expect(deliveredTo(lines)).toHaveLength(3);
 		});
 
 		it("escapes rather than renders markup in the body", async () => {
@@ -833,7 +854,7 @@ describeDb("notices procedures", () => {
 			expect(html).toContain(`>${EMAIL_BRAND_NAME}</td>`);
 			expect(html).toContain(`Sent through ${EMAIL_BRAND_NAME}.`);
 			expect(html).toContain(
-				"<p>Hello Shared Ag Farms.</p>\n<p>Second line.</p>",
+				"<p>Hello {{customer_name}}.</p>\n<p>Second line.</p>",
 			);
 		});
 
@@ -881,16 +902,6 @@ describeDb("notices procedures", () => {
 					{ name: "recipient_filter", value: "agricultural_only" },
 				]),
 			);
-		});
-
-		it("refuses an asset variable, which has no single value for a customer", async () => {
-			await expect(
-				callerFor(ids.adminA).notices.sendGeneralInfoBroadcast({
-					subject: "About your assembly",
-					body: "Your {{bfa_type}} at {{service_address}} is due {{due_date}}.",
-					recipientFilter: "all_customers",
-				}),
-			).rejects.toThrow();
 		});
 
 		it("refuses a blank subject or body", async () => {
@@ -957,7 +968,11 @@ describeDb("notices procedures", () => {
 					body: "Hello {{customer_name}}.",
 					recipientFilter: "all_customers",
 				}),
-			).rejects.toThrow(/incomplete/i);
+			).rejects.toThrow(
+				/2 of 3 messages were sent and 1 failed.*would get it twice/i,
+			);
+			// No automatic retry: three recipients, three attempts, no fourth.
+			expect(attempt).toBe(3);
 
 			// Both outcomes are on the record, through the one email helper.
 			const attempts = lines.filter(
@@ -969,10 +984,17 @@ describeDb("notices procedures", () => {
 			);
 			expect(
 				lines.find((line) => line.event === "general_info_broadcast_finished"),
-			).toMatchObject({ status: "partial_failure", failed_count: 1 });
+			).toMatchObject({
+				status: "partial_failure",
+				recipient_count: 3,
+				sent_count: 2,
+				failed_count: 1,
+			});
 		});
 
 		it("refuses an audience with nobody in it rather than reporting a send", async () => {
+			const lines = captureLogs();
+
 			// Tenant B has one active customer and no agricultural one.
 			await expect(
 				callerFor(ids.adminB).notices.sendGeneralInfoBroadcast({
@@ -981,6 +1003,13 @@ describeDb("notices procedures", () => {
 					recipientFilter: "agricultural_only",
 				}),
 			).rejects.toThrow(/no customers/i);
+
+			expect(
+				lines.filter((line) => line.event === "email_send_attempted"),
+			).toEqual([]);
+			expect(
+				lines.find((line) => line.event === "general_info_broadcast_finished"),
+			).toBeUndefined();
 		});
 	});
 });

@@ -5,7 +5,6 @@ import { NOTICE_FIELD_LIMITS } from "./notice-field-limits";
 import { BROADCAST_RECIPIENT_FILTERS } from "./notice-recipients";
 import {
 	AUTOMATED_NOTICE_VARIABLES,
-	BROADCAST_VARIABLES,
 	type NoticeVariableKey,
 	templateTextError,
 	variableKeys,
@@ -16,8 +15,8 @@ import {
  *
  * They live here rather than inline in the router so the validation rules can
  * be exercised without a database connection — `routers/notices.ts` imports
- * `@bfa-platform/db`, and importing that to assert that a broadcast may not use
- * `{{bin}}` would make a pure rule need a Postgres.
+ * `@bfa-platform/db`, and importing that to assert that a template may not use
+ * `{{custmer_name}}` would make a pure rule need a Postgres.
  *
  * `water_purveyor_id` is deliberately absent from every shape below. The
  * caller's tenant comes from their own profile in `wpProcedure`; a client that
@@ -27,15 +26,13 @@ import {
 export { NOTICE_FIELD_LIMITS };
 
 /**
- * Subject or body, trimmed, non-empty, and using only the placeholders this
- * composer can actually resolve.
+ * Notice-template subject or body, trimmed, non-empty, and using only the
+ * placeholders the automated notices can actually resolve.
  *
  * The placeholder check is validation rather than something the renderer papers
  * over. `renderTemplate` leaves anything it cannot resolve visible on purpose,
  * so without this a typo would be saved and later mailed to a customer as
- * `{{custmer_name}}` — and an asset variable in a broadcast would be mailed to
- * somebody with three assemblies as `{{bin}}`, because there is no single BIN
- * to put there. Both are refused at the point they are written instead.
+ * `{{custmer_name}}`. It is refused at the point it is written instead.
  */
 function templateText(
 	field: "subject" | "body",
@@ -55,7 +52,23 @@ function templateText(
 }
 
 const automatedKeys = variableKeys(AUTOMATED_NOTICE_VARIABLES);
-const broadcastKeys = variableKeys(BROADCAST_VARIABLES);
+
+/**
+ * Broadcast subject or body: trimmed, non-empty, within the shared limit — and
+ * nothing else.
+ *
+ * A broadcast is literal text. There is no substitution on this path, so there
+ * is no placeholder syntax to check either: `{{customer_name}}` typed into a
+ * broadcast is sent as those seventeen characters, exactly like any other
+ * braces somebody writes.
+ */
+function literalText(field: "subject" | "body", label: string) {
+	return z
+		.string()
+		.trim()
+		.min(1, `${label} is required`)
+		.max(NOTICE_FIELD_LIMITS[field]);
+}
 
 /**
  * One notice template being saved.
@@ -81,16 +94,12 @@ export const broadcastRecipientFilterInput = z.object({
 });
 
 /**
- * A general-info broadcast being sent.
- *
- * Only the two recipient-scoped variables are accepted. A customer may own
- * several assemblies, so `{{bin}}`, `{{bfa_type}}`, `{{service_address}}` and
- * `{{due_date}}` have no single value for a recipient — using one here is a
- * validation error with its own sentence rather than a silent blank.
+ * A general-info broadcast being sent: one literal subject and body, the same
+ * for every recipient (PRD § 6.10 — no personalisation), and a named audience.
  */
 export const sendGeneralInfoBroadcastInput = z.object({
-	subject: templateText("subject", "Subject", broadcastKeys),
-	body: templateText("body", "Message", broadcastKeys),
+	subject: literalText("subject", "Subject"),
+	body: literalText("body", "Message"),
 	recipientFilter: z.enum(BROADCAST_RECIPIENT_FILTERS),
 });
 

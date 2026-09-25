@@ -674,7 +674,7 @@ Blocking prevents login for real, not just in the table: `certifiers.status` is 
 4. Template editor — one editable block per notice type, rendered by looping over the returned list rather than four hardcoded field groups. Subject and body per type.
 5. Variable reference panel listing supported placeholders. Implement customer name, BFA type, BIN, service address, and due date now; keep the substitution layer open so adding variables later is a list edit, not a rewrite.
 6. Preview control rendering subject and body against a sample record with variables substituted.
-7. General info composer: subject, body, recipient selection (all customers, agricultural only, or past-due only), send action. This is the entire general-info broadcast feature — no scheduler involvement, and it does not use `notice_templates`.
+7. General info composer: subject, body, recipient selection (all customers, agricultural only, or past-due only), send action. This is the entire general-info broadcast feature (PRD § 6.10, Workflow 4) — literal text with no personalisation, no scheduler involvement, and it does not use `notice_templates`.
 8. Read-only repair-company list on the same page.
 
 Do not build the `is_enabled` toggle yet — the column exists, but what disabling a middle step means for the escalation chain is unanswered. Shipping the toggle before that answer gives WPs a control with undefined behavior.
@@ -683,7 +683,7 @@ Do not build the `is_enabled` toggle yet — the column exists, but what disabli
 
 **Status: done.** All eight steps shipped. `0010_notice_template_policies` gives `notice_templates` its first row policies — all three WP roles read their own purveyor's rows, only `wp_admin` inserts or updates, Super-Admin across tenants, nothing for a certifier, and no DELETE grant for anybody. `listNoticeTemplates` always returns four entries and fills a missing row with the platform default, so the screen has no "not set" branch. The substitution layer is one registry in `packages/api/src/lib/notice-variables.ts` that the editor, the panel, the preview and the send path all read, so a seventh variable is a list edit.
 
-**Two things the section did not settle, decided here.** `{{wp_name}}` joins the variable list — the five in step 5 leave a purveyor unable to sign its own notices. And the general-info broadcast ships *with* personalisation, limited to `{{customer_name}}` and `{{wp_name}}`: a customer may own several assemblies, so the four asset-scoped variables have no single value for a recipient and are refused server-side rather than mailed as a blank.
+**One thing the section did not settle, decided here.** `{{wp_name}}` joins the variable list — the five in step 5 leave a purveyor unable to sign its own notices. Dynamic values apply to the four notice templates only. The general-info broadcast briefly shipped with `{{customer_name}}` and `{{wp_name}}`; Workflow 4 removed that to match PRD § 6.10 ("no personalization needed") — the broadcast now sends its subject and body literally, braces included, with no variable panel or preview.
 
 **Shipped with a decided answer to the SubAdmin/Employee split, scoped to this screen.** All three WP roles read the templates, the audience counts and the repair-company list; only the Admin rewrites a template or sends a broadcast, because both put words in the purveyor's name in front of every customer they have. As with 6.6.3 and 6.6.6, the check is local to this router rather than a shared `wpAdminProcedure`, so nothing else inherits it. PRD § 10 stays open.
 

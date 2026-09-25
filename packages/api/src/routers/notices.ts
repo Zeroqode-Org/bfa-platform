@@ -27,13 +27,7 @@ import {
 	upsertNoticeTemplateInput,
 } from "../lib/notice-input";
 import type { BroadcastRecipientFilter } from "../lib/notice-recipients";
-import {
-	BROADCAST_VARIABLES,
-	type NoticeVariableValues,
-	renderTemplate,
-	sampleVariableValues,
-	variableKeys,
-} from "../lib/notice-variables";
+import { sampleVariableValues } from "../lib/notice-variables";
 
 /**
  * Only a WP Admin may change what this purveyor's customers are sent.
@@ -69,8 +63,9 @@ const wpNoticeAuthorProcedure = wpProcedure.use(({ ctx, next }) => {
  * notice templates are stored text that a future scheduler will send about one
  * assembly; the general-info broadcast is a one-off message composed and sent
  * now, to a filtered set of customers, and it deliberately does not touch
- * `notice_templates` — it is not a template, there is no history and there is
- * no scheduler involved.
+ * `notice_templates` — it is not a template, there is no history, there is no
+ * scheduler involved and there is no substitution: what the Admin types is
+ * what every recipient reads.
  *
  * `is_enabled` is read by nothing here and written by nothing here. Automated
  * notices are switched on per purveyor by the Super-Admin through
@@ -243,8 +238,7 @@ export const noticesRouter = router({
 		}),
 
 	/**
-	 * How many customers a recipient filter selects, and one of them as a sample
-	 * for the preview.
+	 * How many customers a recipient filter selects.
 	 *
 	 * The count is what the composer shows before anything is sent, so the
 	 * person pressing Send knows how many people are about to read this. Same
@@ -259,26 +253,22 @@ export const noticesRouter = router({
 				ctx.caller.waterPurveyorId,
 				input.recipientFilter,
 			);
-			const [first] = recipients;
 
+			// A count, not a list: the composer needs to say how many people this
+			// reaches, not show anybody's address on screen.
 			return {
 				recipientFilter: input.recipientFilter,
 				recipientCount: recipients.length,
-				// Values, not a customer record: the preview needs a name to
-				// substitute, not somebody's address on screen.
-				sampleValues: sampleVariableValues(BROADCAST_VARIABLES, {
-					customer_name: first?.name,
-					wp_name: await purveyorName(ctx.caller.waterPurveyorId),
-				}),
 			};
 		}),
 
 	/**
 	 * Sends one general-info broadcast. WP Admin only.
 	 *
-	 * Rendered per recipient, not once: `{{customer_name}}` is the whole reason
-	 * personalisation is allowed here, so each message is substituted against
-	 * the customer it is addressed to and nobody receives somebody else's name.
+	 * Literal text, rendered once. PRD § 6.10 asks for no personalisation, so
+	 * nothing here substitutes: `{{…}}` typed by hand is sent as written, and
+	 * every recipient receives the identical subject and body. The body is still
+	 * escaped by `renderTextEmail`, so markup typed into it arrives as text.
 	 *
 	 * Every send goes through `sendEmail`, which emits one structured line per
 	 * attempt whether it succeeded or threw. Nothing here talks to a provider —
@@ -294,7 +284,6 @@ export const noticesRouter = router({
 	sendGeneralInfoBroadcast: wpNoticeAuthorProcedure
 		.input(sendGeneralInfoBroadcastInput)
 		.mutation(async ({ ctx, input }) => {
-			const wpName = await purveyorName(ctx.caller.waterPurveyorId);
 			const recipients = await recipientsFor(
 				ctx.caller.waterPurveyorId,
 				input.recipientFilter,
@@ -317,25 +306,22 @@ export const noticesRouter = router({
 				});
 			}
 
-			const allowed = variableKeys(BROADCAST_VARIABLES);
+			// Escaped by `templateToHtml`, then wrapped in the shared shell. The same
+			// for everyone, so it is built once rather than per recipient.
+			const html = renderTextEmail({
+				subject: input.subject,
+				text: input.body,
+			});
 			const failures: string[] = [];
 			let sent = 0;
 
 			for (const recipient of recipients) {
-				const values: NoticeVariableValues = {
-					customer_name: recipient.name,
-					wp_name: wpName,
-				};
-				const subject = renderTemplate(input.subject, values, allowed);
-				const body = renderTemplate(input.body, values, allowed);
-
 				try {
 					await sendEmail(
 						{
 							to: recipient.email,
-							subject,
-							// Escaped by `templateToHtml`, then wrapped in the shared shell.
-							html: renderTextEmail({ subject, text: body }),
+							subject: input.subject,
+							html,
 							tags: [
 								{ name: "type", value: "general_info_broadcast" },
 								{ name: "recipient_filter", value: input.recipientFilter },
@@ -435,7 +421,7 @@ async function unchangedTemplate(
 }
 
 /**
- * The purveyor's own name, for `{{wp_name}}`.
+ * The purveyor's own name, for `{{wp_name}}` in the notice-template preview.
  *
  * Scoped by id to the caller's tenant, like everything else that reads through
  * the privileged connection. A purveyor with no row is not a case that should
@@ -455,7 +441,6 @@ async function purveyorName(waterPurveyorId: string): Promise<string> {
 
 type BroadcastRecipient = {
 	id: string;
-	name: string;
 	email: string;
 };
 
@@ -520,7 +505,6 @@ async function recipientsFor(
 		db
 			.select({
 				id: customers.id,
-				name: customers.name,
 				email: customers.email,
 			})
 			.from(customers)
