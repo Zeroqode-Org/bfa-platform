@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { CUSTOMER_STALE_MESSAGE } from "@bfa-platform/api/lib/customer-revision";
 import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -71,6 +72,7 @@ const active: Customer = {
 	rateCategory: "standard",
 	agRenewalDate: null,
 	status: "active",
+	revision: 4,
 	createdAt: "2026-09-01T00:00:00.000Z",
 	updatedAt: "2026-09-01T00:00:00.000Z",
 };
@@ -85,6 +87,7 @@ const suspendedAgricultural: Customer = {
 	rateCategory: "agricultural",
 	agRenewalDate: "2027-03-01",
 	status: "suspended",
+	revision: 7,
 };
 
 function renderTable() {
@@ -147,6 +150,9 @@ describe("CustomersTable", () => {
 		await waitFor(() => expect(updateFn).toHaveBeenCalledTimes(1));
 		expect(updateFn).toHaveBeenCalledWith({
 			id: active.id,
+			// The version of the row this button was rendered from: a status flip
+			// sends the whole record too, so it must not overwrite a newer one.
+			expectedRevision: active.revision,
 			name: active.name,
 			email: active.email,
 			accountNumber: active.accountNumber,
@@ -170,8 +176,71 @@ describe("CustomersTable", () => {
 				// The agricultural rate keeps its renewal date through a status flip.
 				rateCategory: "agricultural",
 				agRenewalDate: "2027-03-01",
+				// The version of the row this button was rendered from: a status flip
+				// sends the whole record too, so it must not overwrite a newer one.
+				expectedRevision: suspendedAgricultural.revision,
 			}),
 		);
+	});
+
+	it("sends the revision the edit form was opened with", async () => {
+		renderTable();
+
+		fireEvent.click(
+			(await screen.findAllByRole("button", { name: "Edit" }))[0],
+		);
+		fireEvent.change(await screen.findByLabelText("Name"), {
+			target: { value: "Marta Ellison Renamed" },
+		});
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Save changes" }),
+		);
+
+		await waitFor(() => expect(updateFn).toHaveBeenCalledTimes(1));
+		expect(updateFn).toHaveBeenCalledWith(
+			expect.objectContaining({
+				id: active.id,
+				name: "Marta Ellison Renamed",
+				expectedRevision: active.revision,
+			}),
+		);
+	});
+
+	it("shows a stale-record refusal form-wide, not under Email, and keeps the form open", async () => {
+		const { toast } = await import("sonner");
+		vi.mocked(toast.error).mockClear();
+		updateFn.mockRejectedValue(
+			Object.assign(new Error(CUSTOMER_STALE_MESSAGE), {
+				data: { code: "CONFLICT" },
+			}),
+		);
+		renderTable();
+
+		fireEvent.click(
+			(await screen.findAllByRole("button", { name: "Edit" }))[0],
+		);
+		fireEvent.change(await screen.findByLabelText("Name"), {
+			target: { value: "Renamed From A Stale Form" },
+		});
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Save changes" }),
+		);
+
+		const message = await screen.findByText(CUSTOMER_STALE_MESSAGE);
+
+		// The record moved on, not one field: the message belongs to the form,
+		// and Email is not flagged as the thing to correct.
+		expect(message.getAttribute("data-slot")).toBe("form-error");
+		expect(
+			screen.getByLabelText("Email").getAttribute("aria-invalid"),
+		).not.toBe("true");
+		// Still open, and nothing was resent on its own — the payload that failed
+		// is the out-of-date one.
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		expect(updateFn).toHaveBeenCalledTimes(1);
+		expect(toast.error).not.toHaveBeenCalled();
+		// The list is refetched, so the table shows what is actually stored.
+		await waitFor(() => expect(listFn).toHaveBeenCalledTimes(2));
 	});
 
 	it("does not report a form save as a suspension in progress", async () => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	addCalendarDays,
 	addCalendarMonths,
+	addCalendarYears,
 	compareCalendarDays,
 	honoluluCalendarDay,
 	honoluluDayStart,
@@ -142,5 +143,26 @@ describe("validation and comparison", () => {
 		expect(compareCalendarDays("2026-06-14", "2026-06-15")).toBeLessThan(0);
 		expect(compareCalendarDays("2026-06-15", "2026-06-15")).toBe(0);
 		expect(compareCalendarDays("2027-01-01", "2026-12-31")).toBeGreaterThan(0);
+	});
+});
+
+describe("year arithmetic", () => {
+	it("moves a date by whole calendar years", () => {
+		expect(addCalendarYears("2026-03-15", 1)).toBe("2027-03-15");
+		expect(addCalendarYears("2026-12-31", 1)).toBe("2027-12-31");
+		expect(addCalendarYears("2026-03-15", -2)).toBe("2024-03-15");
+	});
+
+	it("clamps 29 February to 28 February in a non-leap year", () => {
+		expect(addCalendarYears("2028-02-29", 1)).toBe("2029-02-28");
+		expect(addCalendarYears("2028-02-29", -1)).toBe("2027-02-28");
+	});
+
+	it("keeps 29 February when the target year is also a leap year", () => {
+		expect(addCalendarYears("2028-02-29", 4)).toBe("2032-02-29");
+	});
+
+	it("rejects a malformed day rather than returning a NaN date", () => {
+		expect(() => addCalendarYears("2027-02-29", 1)).toThrow();
 	});
 });

@@ -32,6 +32,7 @@ import {
 } from "@bfa-platform/db/schema";
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
+import { type CalendarDay, honoluluDayStart } from "../lib/honolulu-dates";
 import type { NoticeType } from "../lib/notice-defaults";
 import { NOTICE_STAGES } from "../lib/notice-schedule";
 import { CLAIM_BATCH_SIZE, MAX_JOB_ATTEMPTS, retryDelayMs } from "./config";
@@ -232,6 +233,135 @@ export async function cancelFailureNoticeJobs({
 			),
 		)
 		.returning();
+}
+
+/**
+ * The live-customer index from `0018`, as an `ON CONFLICT` target predicate.
+ * The same third-statement cost as {@link LIVE_ASSET_JOB_CONFLICT}.
+ */
+const LIVE_CUSTOMER_JOB_CONFLICT = sql`${scheduledJobs.status} in ('pending', 'running') and ${scheduledJobs.customerId} is not null`;
+
+/**
+ * Creates the one live `ag_renewal` job for a customer's renewal date — or,
+ * when one is already live, writes nothing.
+ *
+ * `ON CONFLICT DO NOTHING` on the live-customer index, so two writers that
+ * both decided "this customer needs a renewal notice" produce one row, not
+ * two: the database decides, not a read either of them made first. Both
+ * callers — `reconcileAgRenewalNotice` and the handler's annual transition —
+ * hold the customer's row lock and have already withdrawn or completed any
+ * other live job, so a conflict here means a concurrent writer inserted the
+ * same notice a moment earlier, and leaving that row alone is idempotent.
+ *
+ * The job records the date it is for (`ag_renewal_date`, 0019) and is due at
+ * the instant that Hawaii day begins. The date is what the annual transition
+ * later compares against the customer's; `run_at` alone cannot say, because
+ * holds and retries move it.
+ *
+ * `bfa_asset_id` stays null: the renewal notice is about the customer's
+ * billing category, not about an assembly, and goes to the customer's own
+ * address.
+ *
+ * Returns the new row, or `null` when a live one already existed.
+ */
+export async function scheduleAgRenewalJob({
+	executor = db,
+	customerId,
+	waterPurveyorId,
+	agRenewalDate,
+}: {
+	executor?: JobExecutor;
+	customerId: string;
+	waterPurveyorId: string;
+	agRenewalDate: CalendarDay;
+}): Promise<ScheduledJob | null> {
+	const [row] = await executor
+		.insert(scheduledJobs)
+		.values({
+			jobType: "ag_renewal",
+			customerId,
+			waterPurveyorId,
+			agRenewalDate,
+			runAt: honoluluDayStart(agRenewalDate),
+			status: "pending",
+		})
+		.onConflictDoNothing({
+			target: [scheduledJobs.customerId, scheduledJobs.jobType],
+			where: LIVE_CUSTOMER_JOB_CONFLICT,
+		})
+		.returning();
+
+	return row ?? null;
+}
+
+/** The live `ag_renewal` jobs for one customer. At most one, by `0018`. */
+export async function liveAgRenewalJobsForCustomer({
+	executor = db,
+	customerId,
+}: {
+	executor?: JobExecutor;
+	customerId: string;
+}): Promise<ScheduledJob[]> {
+	return executor
+		.select()
+		.from(scheduledJobs)
+		.where(
+			and(
+				eq(scheduledJobs.customerId, customerId),
+				eq(scheduledJobs.jobType, "ag_renewal"),
+				isLive(),
+			),
+		)
+		.orderBy(asc(scheduledJobs.runAt), asc(scheduledJobs.createdAt));
+}
+
+/**
+ * Withdraws every live `ag_renewal` job for one customer, and says which.
+ *
+ * `cancelled`, never `failed`, for the reason {@link cancelAssetNoticeJobs}
+ * gives: the customer left the agricultural rate or their renewal date moved,
+ * which is the system being told something. A `running` row is cancelled too,
+ * and {@link completeRunningJob} then refuses to complete it. A completed row
+ * is untouched — a renewal notice that went out is a fact.
+ */
+export async function cancelAgRenewalJobs({
+	executor = db,
+	customerId,
+	reason,
+}: {
+	executor?: JobExecutor;
+	customerId: string;
+	reason: string;
+}): Promise<ScheduledJob[]> {
+	return executor
+		.update(scheduledJobs)
+		.set({
+			status: "cancelled",
+			lastError: reason,
+			completedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(scheduledJobs.customerId, customerId),
+				eq(scheduledJobs.jobType, "ag_renewal"),
+				isLive(),
+			),
+		)
+		.returning();
+}
+
+/**
+ * Takes the row lock on one customer for the rest of the caller's
+ * transaction — the customer-scoped counterpart of {@link lockAssetForChain}.
+ * Everything that changes a customer's renewal notice serialises on it.
+ */
+export async function lockCustomerForAgRenewal(
+	executor: Pick<typeof db, "execute">,
+	customerId: string,
+): Promise<void> {
+	await executor.execute(
+		sql`select 1 from customers where id = ${customerId} for update`,
+	);
 }
 
 /**
@@ -648,10 +778,10 @@ export async function holdRunningJob({
  * Puts a job the current build has no handler for back where it was.
  *
  * Not a failure, so no attempt is consumed and the row keeps its retry budget:
- * `ag_renewal` and `fail_list_check` are declared in the `job_type` enum for
- * workflows 2 and 3, and a row of either type must survive being looked at by
- * a build that only knows how to send notices. The reason is recorded so the
- * row does not look like it is quietly stuck.
+ * `fail_list_check` is declared in the `job_type` enum and deliberately never
+ * handled, and a row of a type this build does not know must survive being
+ * looked at by it. The reason is recorded so the row does not look like it is
+ * quietly stuck.
  */
 export async function deferUnhandledJob({
 	executor = db,

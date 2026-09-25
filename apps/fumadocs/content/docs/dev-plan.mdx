@@ -44,7 +44,7 @@ Status as of **2026-09-18**. Update this table as work progresses — this is th
 | WP Dashboard — Notices & Email Settings | 6.6.7 | Daniil | 09/14 | 09/18 | planned |
 | Node-native scheduler | — | Daniil | 09/14 | 09/18 | done |
 | Workflow 1: Reminder + Late Notices | 6.7 | Daniil | 09/14 | 09/18 | done |
-| Workflow 2: AG Rate Renewal Notice | 6.9 | Daniil | 09/14 | 09/18 | planned |
+| Workflow 2: AG Rate Renewal Notice | 6.9 | Daniil | 09/14 | 09/18 | done |
 | Workflow 3: Failure Notice + 30-Day Fail List | 6.8 | Daniil | 09/14 | 09/18 | done |
 | Certifier Test Wizard (all 8 BFA types) | 6.5 | Lina | 09/21 | 09/25 | planned |
 | Workflow 4: General Info Email | 6.10 | Daniil | 09/21 | 09/25 | planned |
@@ -261,6 +261,27 @@ the failure was submitted; that contradicted the PRD and was corrected. Copy is 
 defaults. Full writeups:
 [Notice Workflow & Scheduler](/docs/notice-workflow#workflow-3--the-failure-notice)
 and [WP Dashboard](/docs/wp-dashboard#the-fail-list).
+
+**Workflow 2: AG Rate Renewal Notice (6.9)**: shipped. Creating an
+agricultural customer queues one customer-scoped `ag_renewal` job (no asset)
+for midnight Pacific/Honolulu on `ag_renewal_date`, in the same transaction as
+the insert; a changed date reschedules it, leaving the agricultural rate
+cancels it, and any other save leaves it alone. `0018` adds a partial unique
+index allowing one live renewal job per customer. The handler is gated on
+`ag_renewal_notice` at run time (missing or off cancels, unsent), sends to the
+customer's **own** email through the shared frozen-payload delivery, and runs
+as an **annual cycle** (team-lead decision, superseding the earlier "does not
+auto-advance" answer): after a provider-confirmed delivery to an active
+agricultural customer, the date becomes one calendar year after the Hawaii day
+of that confirmation (29 February → 28 February in a non-leap year) and exactly
+one next job is queued, atomically with completing this one. Counting from the
+delivery, not from the notice's own date, is what gives a late notice a full
+year to the next one. `0019` adds `scheduled_jobs.ag_renewal_date` — the date
+each job is for — which is what stops a retry from adding a second year, and
+`0020` adds `customers.revision`, the optimistic lock that stops a WP form
+opened before the transition from putting the old date back. Copy in
+`lib/ag-renewal-copy.ts` is provisional. Full writeup:
+[Notice Workflow & Scheduler](/docs/notice-workflow#workflow-2--the-ag-rate-renewal-notice).
 
 **Super-Admin (6.11)**: stays *in-progress*. The invite-new-WP action is wired and `/admin` is gated to `super_admin`. **WP impersonation has shipped.** `superAdmin.startImpersonation` and `endImpersonation` set and clear a separate `bfa_impersonation` cookie: `httpOnly`, HMAC-SHA-256-signed, one-hour lifetime. Its key is the new optional server variable `IMPERSONATION_COOKIE_SECRET`.
 

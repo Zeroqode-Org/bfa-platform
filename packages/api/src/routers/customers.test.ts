@@ -14,6 +14,7 @@ import {
 	vi,
 } from "vitest";
 
+import { CUSTOMER_STALE_MESSAGE } from "../lib/customer-revision";
 import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "../lib/email-uniqueness";
 
 /**
@@ -57,6 +58,7 @@ type CustomerRow = {
 	rateCategory: "standard" | "agricultural";
 	agRenewalDate: string | null;
 	status: "active" | "suspended";
+	revision: number;
 	createdAt: Date;
 	updatedAt: Date;
 };
@@ -76,7 +78,7 @@ let callerFor: (profileId: string) => {
 		listCustomers: () => Promise<CustomerRow[]>;
 		createCustomer: (input: CustomerInput) => Promise<CustomerRow>;
 		updateCustomer: (
-			input: CustomerInput & { id: string },
+			input: CustomerInput & { id: string; expectedRevision: number },
 		) => Promise<CustomerRow>;
 	};
 };
@@ -159,6 +161,12 @@ describeDb("customers procedures", () => {
 	afterAll(async () => {
 		if (!pool) return;
 
+		// Agricultural customers created here queue an AG renewal job, which
+		// references the customer row.
+		await pool.query(
+			"delete from scheduled_jobs where water_purveyor_id = any($1::uuid[])",
+			[[wpA, wpB]],
+		);
 		await pool.query(
 			"delete from customers where water_purveyor_id = any($1::uuid[])",
 			[[wpA, wpB]],
@@ -327,6 +335,7 @@ describeDb("customers procedures", () => {
 			await expect(
 				callerFor(ids.adminA).customers.updateCustomer({
 					id: mover.id,
+					expectedRevision: mover.revision,
 					name: mover.name,
 					email: "HELD.customer@example.com",
 					accountNumber: mover.accountNumber,
@@ -359,6 +368,7 @@ describeDb("customers procedures", () => {
 
 			const renamed = await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
+				expectedRevision: created.revision,
 				name: "Keeps Its Address, Renamed",
 				// Its own address in another spelling is still its own address.
 				email: " Keeps.Customer@Example.com ",
@@ -422,6 +432,7 @@ describeDb("customers procedures", () => {
 
 			const updated = await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
+				expectedRevision: created.revision,
 				name: "After Rename",
 				email: created.email,
 				rateCategory: "standard",
@@ -435,6 +446,9 @@ describeDb("customers procedures", () => {
 			await expect(
 				callerFor(ids.adminA).customers.updateCustomer({
 					id: customerB,
+					// Any revision: the tenant predicate refuses the row before the
+					// version is ever looked at.
+					expectedRevision: 1,
 					name: "Taken Over",
 					email: "taken.over@example.com",
 					rateCategory: "standard",
@@ -464,6 +478,7 @@ describeDb("customers procedures", () => {
 
 			const updated = await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
+				expectedRevision: created.revision,
 				name: created.name,
 				email: created.email,
 				rateCategory: "standard",
@@ -486,6 +501,7 @@ describeDb("customers procedures", () => {
 			// every save, so the request looks exactly like a real edit.
 			const returned = await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
+				expectedRevision: created.revision,
 				name: created.name,
 				email: created.email,
 				accountNumber: created.accountNumber,
@@ -527,6 +543,7 @@ describeDb("customers procedures", () => {
 
 			const updated = await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
+				expectedRevision: created.revision,
 				name: created.name,
 				email: created.email,
 				accountNumber: "AC-9003",
@@ -549,6 +566,7 @@ describeDb("customers procedures", () => {
 
 			const updated = await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
+				expectedRevision: created.revision,
 				name: created.name,
 				email: created.email,
 				accountNumber: created.accountNumber,
@@ -569,6 +587,7 @@ describeDb("customers procedures", () => {
 
 			await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
+				expectedRevision: created.revision,
 				name: created.name,
 				email: created.email,
 				rateCategory: "standard",
@@ -598,6 +617,7 @@ describeDb("customers procedures", () => {
 
 			await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
+				expectedRevision: created.revision,
 				name: "Renamed Only",
 				email: created.email,
 				rateCategory: "standard",
@@ -607,6 +627,196 @@ describeDb("customers procedures", () => {
 			expect(
 				lines.some((line) => line.event === "customer_status_changed"),
 			).toBe(false);
+		});
+	});
+
+	describe("the revision check", () => {
+		/** A standard customer with a unique address, at revision 1. */
+		async function newCustomer(name: string) {
+			const created = await callerFor(ids.adminA).customers.createCustomer(
+				standardCustomer(`${name} ${randomUUID().slice(0, 6)}`),
+			);
+
+			expect(created.revision).toBe(1);
+
+			return created;
+		}
+
+		it("bumps the revision on a real change and returns it", async () => {
+			const created = await newCustomer("Revision Bumped");
+
+			const updated = await callerFor(ids.adminA).customers.updateCustomer({
+				id: created.id,
+				expectedRevision: created.revision,
+				name: "Revision Bumped, Renamed",
+				email: created.email,
+				rateCategory: "standard",
+				status: "active",
+			});
+
+			expect(updated.revision).toBe(created.revision + 1);
+			expect(
+				(
+					await pool.query<{ revision: number }>(
+						"select revision from customers where id = $1",
+						[created.id],
+					)
+				).rows[0]?.revision,
+			).toBe(2);
+		});
+
+		it("lets the first of two edits from one revision win and refuses the second", async () => {
+			const created = await newCustomer("Two Editors");
+
+			const first = await callerFor(ids.adminA).customers.updateCustomer({
+				id: created.id,
+				expectedRevision: created.revision,
+				name: "Saved By The First Clerk",
+				email: created.email,
+				rateCategory: "standard",
+				status: "active",
+			});
+
+			// The second clerk's form was opened at the same time, so it still
+			// carries revision 1 — and a different real change.
+			await expect(
+				callerFor(ids.adminA).customers.updateCustomer({
+					id: created.id,
+					expectedRevision: created.revision,
+					name: "Saved By The Second Clerk",
+					email: created.email,
+					rateCategory: "standard",
+					status: "active",
+				}),
+			).rejects.toMatchObject({
+				code: "CONFLICT",
+				message: CUSTOMER_STALE_MESSAGE,
+			});
+
+			// Refused, not merged: the first save stands untouched.
+			const { rows } = await pool.query<{ name: string; revision: number }>(
+				"select name, revision from customers where id = $1",
+				[created.id],
+			);
+			expect(rows[0]).toMatchObject({
+				name: "Saved By The First Clerk",
+				revision: first.revision,
+			});
+		});
+
+		it("does not let a stale form put an old AG renewal date back", async () => {
+			const created = await callerFor(ids.adminA).customers.createCustomer({
+				name: `Stale Ag Form ${randomUUID().slice(0, 6)}`,
+				email: `stale.ag.${randomUUID().slice(0, 6)}@example.com`,
+				rateCategory: "agricultural",
+				agRenewalDate: "2027-03-01",
+			});
+
+			// The date moves on — here by a second clerk, in the scheduler's case
+			// by the annual transition. Either way the form still on screen holds
+			// revision 1 and the old date.
+			const moved = await callerFor(ids.adminA).customers.updateCustomer({
+				id: created.id,
+				expectedRevision: created.revision,
+				name: created.name,
+				email: created.email,
+				rateCategory: "agricultural",
+				agRenewalDate: "2028-03-01",
+			});
+
+			await expect(
+				callerFor(ids.adminA).customers.updateCustomer({
+					id: created.id,
+					expectedRevision: created.revision,
+					name: created.name,
+					email: created.email,
+					rateCategory: "agricultural",
+					agRenewalDate: "2027-03-01",
+				}),
+			).rejects.toMatchObject({
+				code: "CONFLICT",
+				message: CUSTOMER_STALE_MESSAGE,
+			});
+
+			const { rows } = await pool.query<{
+				ag_renewal_date: string;
+				revision: number;
+			}>(
+				"select ag_renewal_date::text, revision from customers where id = $1",
+				[created.id],
+			);
+			expect(rows[0]).toMatchObject({
+				ag_renewal_date: "2028-03-01",
+				revision: moved.revision,
+			});
+		});
+
+		it("treats a save that changes nothing as a no-op, stale revision and all", async () => {
+			const created = await newCustomer("Unchanged Despite Stale");
+
+			const renamed = await callerFor(ids.adminA).customers.updateCustomer({
+				id: created.id,
+				expectedRevision: created.revision,
+				name: "Unchanged Despite Stale, Renamed",
+				email: created.email,
+				rateCategory: "standard",
+				status: "active",
+			});
+
+			const lines = captureLogs();
+
+			// Re-saving the row exactly as it now stands, from a form that still
+			// carries the old revision: there is no edit to lose, so it is the same
+			// no-op any unchanged save is — no conflict, no write, no audit line.
+			const returned = await callerFor(ids.adminA).customers.updateCustomer({
+				id: created.id,
+				expectedRevision: created.revision,
+				name: renamed.name,
+				email: renamed.email,
+				accountNumber: renamed.accountNumber,
+				address: renamed.address,
+				rateCategory: "standard",
+				status: "active",
+			});
+
+			expect(returned).toMatchObject({
+				revision: renamed.revision,
+				updatedAt: renamed.updatedAt,
+			});
+			// `caller_resolved` is the auth middleware's own line; nothing about
+			// the customer may be logged for a save that changed nothing.
+			expect(
+				lines.filter((line) => String(line.event).startsWith("customer_")),
+			).toEqual([]);
+
+			const { rows } = await pool.query<{ revision: number; updated_at: Date }>(
+				"select revision, updated_at from customers where id = $1",
+				[created.id],
+			);
+			expect(rows[0]?.revision).toBe(renamed.revision);
+			expect(rows[0]?.updated_at).toEqual(renamed.updatedAt);
+		});
+
+		it("refuses a foreign customer without telling a stale form apart from a missing row", async () => {
+			await expect(
+				callerFor(ids.adminA).customers.updateCustomer({
+					id: customerB,
+					expectedRevision: 99,
+					name: "Taken Over By Revision",
+					email: `taken.over.${randomUUID().slice(0, 6)}@example.com`,
+					rateCategory: "standard",
+					status: "suspended",
+				}),
+			).rejects.toThrow(/not found/i);
+
+			const { rows } = await pool.query<{ name: string; revision: number }>(
+				"select name, revision from customers where id = $1",
+				[customerB],
+			);
+			expect(rows[0]).toMatchObject({
+				name: "Shared Name Holdings",
+				revision: 1,
+			});
 		});
 	});
 });

@@ -239,6 +239,18 @@ export function addCalendarMonths(
 	});
 }
 
+/**
+ * `day` moved by whole calendar years, which may be negative — twelve calendar
+ * months, with the same end-of-month clamp as {@link addCalendarMonths}.
+ *
+ * The clamp only ever bites on 29 February: one year after `2028-02-29` is
+ * `2029-02-28`, because 29 February 2029 does not exist. Rolling into
+ * 1 March instead would move an annual date into the wrong month. Zone-free.
+ */
+export function addCalendarYears(day: CalendarDay, years: number): CalendarDay {
+	return addCalendarMonths(day, years * 12);
+}
+
 /** Negative when `a` is earlier, zero when equal, positive when later. */
 export function compareCalendarDays(a: CalendarDay, b: CalendarDay): number {
 	// Zero-padded ISO days compare correctly as strings; both are parsed first so

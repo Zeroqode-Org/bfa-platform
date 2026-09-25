@@ -1,0 +1,32 @@
+-- ---------------------------------------------------------------------------
+-- `customers.revision` — the optimistic lock behind the customer edit form
+--
+-- The WP edit form submits the whole record, and the AG renewal notice now
+-- moves `ag_renewal_date` forward a year by itself (0019, Workflow 2). Those
+-- two together had a hole in them: a clerk who opened the form before the
+-- nightly annual transition and saved it afterwards sent the *old* renewal
+-- date back. The save looked like a deliberate date change, so the scheduler
+-- withdrew the fresh successor and queued a job for a day that had already
+-- passed — a second email to the same customer.
+--
+-- A `updated_at` comparison would not do: it is a timestamp the form would
+-- have to round-trip exactly, and two writes inside one clock tick are
+-- indistinguishable. A counter is exact. Every save carries the revision the
+-- form was opened with; the write is conditional on it and bumps it, so the
+-- first save wins and the second is told its copy is stale instead of
+-- silently overwriting the newer row.
+--
+-- `NOT NULL DEFAULT 1`, so every existing row starts at 1 and no backfill is
+-- needed. Integer rather than bigint: a customer record edited once a second
+-- for sixty years stays inside `int4`.
+--
+-- Access is deliberately unchanged. `customers` has carried a table-level
+-- `GRANT SELECT, INSERT, UPDATE ... TO authenticated` since 0003 (restated in
+-- 0017), which covers every column, so this one adds no privilege that was
+-- not already there and no policy references column names. The revision is an
+-- application-level concurrency guard for the tRPC procedures — the tenant
+-- boundary is still `wpProcedure` plus the row policies, and nothing here
+-- relies on the counter for isolation.
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.customers
+  ADD COLUMN "revision" integer NOT NULL DEFAULT 1;
