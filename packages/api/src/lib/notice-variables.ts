@@ -93,18 +93,13 @@ export const NOTICE_VARIABLES: readonly NoticeVariable[] = [
 ];
 
 /**
- * The variable set each composer offers.
+ * The variable set the automated-notice editor offers.
  *
  * Automated notices are written about one assembly, so every variable is
- * available. A general-info broadcast is addressed to a customer, who may own
- * several assemblies — `{{bin}}` there has no single answer, so the asset
- * variables are not offered and, in {@link validateTemplateText}, not accepted.
+ * available. The general-info broadcast offers none: it is sent as literal
+ * text (PRD § 6.10), and nothing on that path substitutes.
  */
 export const AUTOMATED_NOTICE_VARIABLES = NOTICE_VARIABLES;
-
-export const BROADCAST_VARIABLES = NOTICE_VARIABLES.filter(
-	(variable) => variable.scope === "recipient",
-);
 
 /** The placeholder as it is typed: `{{customer_name}}`. */
 export function placeholderFor(key: NoticeVariableKey | string): string {

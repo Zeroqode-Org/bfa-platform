@@ -9,8 +9,8 @@ import {
 } from "./notice-input";
 import {
 	AUTOMATED_NOTICE_VARIABLES,
-	BROADCAST_VARIABLES,
 	NOTICE_VARIABLE_KEYS,
+	type NoticeVariableKey,
 	placeholdersIn,
 	renderTemplate,
 	sampleVariableValues,
@@ -29,7 +29,8 @@ import {
  */
 
 const allKeys = variableKeys(AUTOMATED_NOTICE_VARIABLES);
-const broadcastKeys = variableKeys(BROADCAST_VARIABLES);
+/** A narrower allow-list, to exercise the "not allowed here" path. */
+const recipientKeys: NoticeVariableKey[] = ["customer_name", "wp_name"];
 
 const sample = sampleVariableValues();
 
@@ -71,7 +72,7 @@ describe("renderTemplate", () => {
 	});
 
 	it("leaves a placeholder the caller did not allow here", () => {
-		expect(renderTemplate("{{bin}}", sample, broadcastKeys)).toBe("{{bin}}");
+		expect(renderTemplate("{{bin}}", sample, recipientKeys)).toBe("{{bin}}");
 	});
 
 	it("does not rescan a substituted value", () => {
@@ -112,13 +113,13 @@ describe("placeholdersIn", () => {
 
 describe("templateTextProblems", () => {
 	it("finds nothing in text using only the allowed variables", () => {
-		expect(templateTextProblems("Hi {{customer_name}}", broadcastKeys)).toEqual(
+		expect(templateTextProblems("Hi {{customer_name}}", recipientKeys)).toEqual(
 			[],
 		);
 	});
 
 	it("separates an unknown name from a real variable used in the wrong place", () => {
-		expect(templateTextProblems("{{nope}} {{bin}}", broadcastKeys)).toEqual([
+		expect(templateTextProblems("{{nope}} {{bin}}", recipientKeys)).toEqual([
 			{ kind: "unknown", placeholder: "nope" },
 			{ kind: "not_allowed_here", placeholder: "bin" },
 		]);
@@ -214,8 +215,7 @@ describe("sampleVariableValues", () => {
 
 	it("lets a real value be written over a stand-in", () => {
 		expect(
-			sampleVariableValues(BROADCAST_VARIABLES, { wp_name: "Harbor Water" })
-				.wp_name,
+			sampleVariableValues(undefined, { wp_name: "Harbor Water" }).wp_name,
 		).toBe("Harbor Water");
 	});
 });
@@ -316,35 +316,39 @@ describe("upsertNoticeTemplateInput", () => {
 
 describe("sendGeneralInfoBroadcastInput", () => {
 	const valid = {
-		subject: "News from {{wp_name}}",
-		body: "Hello {{customer_name}}, here is our update.",
+		subject: "Water main flushing",
+		body: "Hello, the mains in your area are being flushed next week.",
 		recipientFilter: "all_customers" as const,
 	};
 
-	it("accepts the two recipient-scoped variables", () => {
+	it("accepts a plain subject, body and one of the three audiences", () => {
 		expect(sendGeneralInfoBroadcastInput.safeParse(valid).success).toBe(true);
 	});
 
-	it.each(["bfa_type", "bin", "service_address", "due_date"])(
-		"refuses {{%s}}, which has no single value for a customer",
-		(key) => {
-			const result = sendGeneralInfoBroadcastInput.safeParse({
-				...valid,
-				body: `Your assembly {{${key}}} is due.`,
-			});
+	it("keeps braces as literal text — no placeholder is validated or refused", () => {
+		// Known, asset-scoped and made-up names alike: none of them mean anything
+		// on this path, so none of them is a reason to refuse the message.
+		const parsed = sendGeneralInfoBroadcastInput.parse({
+			...valid,
+			subject: "About {{bin}} and {{wp_name}}",
+			body: "Hello {{customer_name}}, {{custmer_name}} {{ nope }} {{",
+		});
 
-			expect(result.success).toBe(false);
-			expect(result.error?.issues[0]?.message).toContain("several");
-		},
-	);
+		expect(parsed.subject).toBe("About {{bin}} and {{wp_name}}");
+		expect(parsed.body).toBe(
+			"Hello {{customer_name}}, {{custmer_name}} {{ nope }} {{",
+		);
+	});
 
-	it("refuses an asset variable in the subject as well as the body", () => {
-		expect(
-			sendGeneralInfoBroadcastInput.safeParse({
-				...valid,
-				subject: "About {{bin}}",
-			}).success,
-		).toBe(false);
+	it("trims the subject and body", () => {
+		const parsed = sendGeneralInfoBroadcastInput.parse({
+			...valid,
+			subject: "  Water main flushing \n",
+			body: "\n Hello. \t",
+		});
+
+		expect(parsed.subject).toBe("Water main flushing");
+		expect(parsed.body).toBe("Hello.");
 	});
 
 	it("rejects a recipient filter that is not one of the three", () => {
@@ -357,12 +361,63 @@ describe("sendGeneralInfoBroadcastInput", () => {
 	});
 
 	it("rejects an empty subject or body", () => {
+		const subject = sendGeneralInfoBroadcastInput.safeParse({
+			...valid,
+			subject: " ",
+		});
+		const body = sendGeneralInfoBroadcastInput.safeParse({
+			...valid,
+			body: "\n",
+		});
+
+		expect(subject.error?.issues[0]?.message).toBe("Subject is required");
+		expect(body.error?.issues[0]?.message).toBe("Message is required");
+	});
+
+	it("rejects a subject or body past the shared notice limits", () => {
 		expect(
-			sendGeneralInfoBroadcastInput.safeParse({ ...valid, subject: " " })
-				.success,
+			sendGeneralInfoBroadcastInput.safeParse({
+				...valid,
+				subject: "x".repeat(NOTICE_FIELD_LIMITS.subject + 1),
+			}).success,
 		).toBe(false);
 		expect(
-			sendGeneralInfoBroadcastInput.safeParse({ ...valid, body: "\n" }).success,
+			sendGeneralInfoBroadcastInput.safeParse({
+				...valid,
+				body: "x".repeat(NOTICE_FIELD_LIMITS.body + 1),
+			}).success,
 		).toBe(false);
+		expect(
+			sendGeneralInfoBroadcastInput.safeParse({
+				...valid,
+				subject: "x".repeat(NOTICE_FIELD_LIMITS.subject),
+				body: "x".repeat(NOTICE_FIELD_LIMITS.body),
+			}).success,
+		).toBe(true);
+	});
+
+	it("has no way to send a tenant", () => {
+		const parsed = sendGeneralInfoBroadcastInput.parse({
+			...valid,
+			waterPurveyorId: "11111111-1111-4111-8111-111111111111",
+		});
+
+		expect(parsed).toEqual(valid);
+	});
+
+	it("is escaped, not rendered, once wrapped in the email shell", () => {
+		const parsed = sendGeneralInfoBroadcastInput.parse({
+			...valid,
+			body: 'Hi {{customer_name}} <script>alert(1)</script> <a href="https://evil.example">x</a>',
+		});
+		const html = renderTextEmail({
+			subject: parsed.subject,
+			text: parsed.body,
+		});
+
+		expect(html).not.toMatch(/<script\b/i);
+		expect(html).not.toContain('href="https://evil.example"');
+		expect(html).toContain("&lt;script&gt;");
+		expect(html).toContain("Hi {{customer_name}}");
 	});
 });

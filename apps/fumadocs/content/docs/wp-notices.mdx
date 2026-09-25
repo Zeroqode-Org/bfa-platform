@@ -1,6 +1,6 @@
 ---
 title: WP Notices & Email
-description: The notices screen — four notice templates with platform-default fallback, the dynamic-value substitution layer, the general-info broadcast and its recipient filters, and the row policies behind them
+description: The notices screen — four notice templates with platform-default fallback, the dynamic-value substitution layer, the literal-text general-info broadcast and its recipient filters, and the row policies behind them
 ---
 
 `/wp/notices` is where a water purveyor decides what its customers read. Three
@@ -10,7 +10,8 @@ things share the screen and share almost nothing else:
   automated notices. The scheduler sends them, about one assembly — see
   [Notice Workflow & Scheduler](/docs/notice-workflow).
 - **General info broadcast** — a one-off message composed and sent now, to a
-  filtered set of customers. It does not touch `notice_templates`.
+  filtered set of customers, as literal text: no dynamic values, no preview.
+  It does not touch `notice_templates`. PRD § 6.10 (Workflow 4).
 - **Repair companies** — read-only, because a failure notice names them.
 
 This page describes the screen as built. It covers *WP dashboard — notices and
@@ -81,17 +82,20 @@ notices on or off is the feature flag and nothing else.
 
 ## Dynamic values
 
+Dynamic values belong to the **four notice templates** only. The general-info
+broadcast has none — see [Why the broadcast has no dynamic values](#why-the-broadcast-has-no-dynamic-values).
+
 Placeholders are double braces, matching the syntax already in `seed.ts`.
 Surrounding whitespace is tolerated, so `{{ customer_name }}` resolves too.
 
-| Value | Placeholder | Scope | Notice templates | General info |
-|---|---|---|---|---|
-| Customer name | `{{customer_name}}` | recipient | yes | yes |
-| Water purveyor name | `{{wp_name}}` | recipient | yes | yes |
-| BFA type | `{{bfa_type}}` | asset | yes | **no** |
-| BIN | `{{bin}}` | asset | yes | **no** |
-| Service address | `{{service_address}}` | asset | yes | **no** |
-| Due date | `{{due_date}}` | asset | yes | **no** |
+| Value | Placeholder | Scope |
+|---|---|---|
+| Customer name | `{{customer_name}}` | recipient |
+| Water purveyor name | `{{wp_name}}` | recipient |
+| BFA type | `{{bfa_type}}` | asset |
+| BIN | `{{bin}}` | asset |
+| Service address | `{{service_address}}` | asset |
+| Due date | `{{due_date}}` | asset |
 
 ### One list defines all of it
 
@@ -121,26 +125,30 @@ placeholder means.
   allowed with no value for this record — all three come back written exactly as
   they were. Blanking would let a typo vanish into a sentence that still reads.
   Nothing ever falls back to another variable's value.
-- **…and is refused before it can be saved or sent.** The renderer leaves it
+- **…and is refused before it can be saved.** The renderer leaves it
   visible; `templateTextError` is what stops `{{custmer_name}}` reaching a
-  customer, in both Zod schemas, server-side.
+  customer, in `upsertNoticeTemplateInput`, server-side.
 
-### Why the general-info broadcast gets only two
+### Why the broadcast has no dynamic values
 
-A broadcast is addressed to a **customer**, and a customer may own several
-assemblies. `{{bin}}` therefore has no single value for a recipient — nor does
-`{{bfa_type}}`, `{{service_address}}` or `{{due_date}}`. An automated notice is
-about **one assembly**, so all six resolve there.
+PRD § 6.10 defines Workflow 4 as a flexible broadcast — subject, body, recipient
+selection — with **no personalisation**. So the broadcast path never calls
+`renderTemplate` and never runs `templateTextError`: `sendGeneralInfoBroadcastInput`
+only trims the two fields, requires them and applies `NOTICE_FIELD_LIMITS`.
+Braces typed into a broadcast — `{{customer_name}}`, `{{bin}}`, `{{anything}}` —
+are ordinary text, sent exactly as written to every recipient. The composer has
+no variable panel and no preview; the fields already are the message.
 
-Using one in a broadcast is a validation error with its own sentence, not a
-silent blank. The reference panel does not offer the four, and the preview warns
-about one typed by hand.
+An earlier iteration of this screen offered `{{customer_name}}` and `{{wp_name}}`
+in the broadcast. That extension was removed to match the PRD; the registry and
+the notice-template editor were not changed by it.
 
 ## The general info broadcast
 
 Subject, message, a recipient filter, and a send. Not a template: nothing is
-stored in `notice_templates`, there is no scheduler, no history of what was sent
-and no scheduled delivery — all deliberately out of scope.
+stored in `notice_templates`, there is no scheduler, no draft, no history of
+what was sent, no scheduled delivery and no personalisation — all deliberately
+out of scope. There is no table or migration behind it.
 
 ### Recipient filters
 
@@ -174,8 +182,9 @@ for exactly that lookup.
 
 ### A partial failure is a failure
 
-Each message is rendered separately for its recipient and sent through
-`sendEmail` — the one mail path in the app, which emits a structured line per
+The subject and body are wrapped in the email shell once — every recipient
+gets identical text — and sent to each recipient separately through
+`sendEmail`, the one mail path in the app, which emits a structured line per
 attempt whether it succeeded or threw. Nothing here touches a provider SDK, so
 the console driver works with no keys configured.
 
@@ -220,8 +229,8 @@ Cross-tenant access would be a separate, deliberately designed endpoint.
 | `listNoticeTemplates` | `wpProcedure` | All four types, saved text or platform default, with `isCustomized` |
 | `getNoticePreviewSample` | `wpProcedure` | Sample values for the preview, with the purveyor's real name on `{{wp_name}}` |
 | `upsertNoticeTemplate` | `wpNoticeAuthorProcedure` | Writes one template — creates on the first save, rewrites after |
-| `getBroadcastAudience` | `wpProcedure` | How many customers a filter selects, and a sample recipient |
-| `sendGeneralInfoBroadcast` | `wpNoticeAuthorProcedure` | Renders and sends one message per recipient |
+| `getBroadcastAudience` | `wpProcedure` | How many customers a filter selects — a count only |
+| `sendGeneralInfoBroadcast` | `wpNoticeAuthorProcedure` | Sends the literal subject and body to each recipient |
 
 ### Tenant scoping
 
@@ -299,8 +308,7 @@ One path, and the feature has no second one:
 
 ```
 sendGeneralInfoBroadcast
-  → renderTemplate (per recipient; plain text)
-  → renderTextEmail (packages/api/src/lib/email-layout.ts)
+  → renderTextEmail (once; literal text, no substitution — packages/api/src/lib/email-layout.ts)
       → templateToHtml (escapes, line breaks → paragraphs)
       → renderEmailLayout (wraps the fragment in the shared shell)
   → sendEmail (packages/api/src/lib/email.ts)
@@ -313,8 +321,7 @@ Every attempt emits `email_send_attempted` carrying the event, status, recipient
 Switching `EMAIL_DRIVER` changes nothing in this feature.
 
 The four notice templates are **stored** here and **sent** by the scheduler,
-through the same three calls with one substitution each rather than one per
-recipient:
+through the same calls plus a substitution step the broadcast does not have:
 
 ```
 scheduler notice handler
@@ -340,7 +347,7 @@ carries no tracking.
 What the shell does **not** do matters as much:
 
 - **The body stays plain text.** The composer is a textarea, and what a WP Admin
-  types is substituted, escaped by `templateToHtml` and only then wrapped. The
+  types is escaped by `templateToHtml` and only then wrapped. The
   layout inserts that fragment as-is and adds nothing inside it, so `<script>`,
   `<img>`, a link or any other tag typed into a message arrives as visible text,
   never as markup. There is no rich-text editor and no way to supply HTML.
@@ -356,7 +363,8 @@ the same call, so a notice and a broadcast share one shell and one escaping rule
 That makes the templates *compatible* with the layout — it does not approve their
 words. The platform-default copy is still provisional, as the warning above says.
 
-The on-screen preview shows the substituted text, not the email shell.
+The notice-template preview shows the substituted text, not the email shell.
+The broadcast has no preview.
 
 ## Audit logging
 
@@ -384,15 +392,17 @@ loads the platform's text back into the editor without writing anything, since
 saving is still what writes.
 
 Both composers check the text inline before it is sent, using the server's own
-rules: subject and message are required, within `NOTICE_FIELD_LIMITS` (200 and
-5,000 characters, from `packages/api/src/lib/notice-field-limits.ts`), and use
-only the placeholders that composer supports. A problem is shown under its field
+rules: subject and message are required and within `NOTICE_FIELD_LIMITS` (200 and
+5,000 characters, from `packages/api/src/lib/notice-field-limits.ts`). The
+template editor also checks that only supported placeholders are used; the
+broadcast does not, because braces are plain text there. A problem is shown under its field
 and focus moves to it; the message field also shows a character counter. The
 send button is not disabled for missing text — pressing it says what is missing.
 A refusal from the server is an inline strip, never a toast.
 
-**General info broadcast.** Recipient select, subject, message, the two-variable
-panel and a preview. The recipient select opens unanswered (*Select…*): nothing
+**General info broadcast.** A plain form: recipient select, subject, message,
+the audience status line, errors and the send button — no variable panel and no
+preview. The recipient select opens unanswered (*Select…*): nothing
 is counted and the button reads *Send broadcast* until an audience is chosen,
 and pressing it without one puts *Select the recipients.* under the select — so
 "every customer" is never an audience nobody chose. Once chosen, the audience
@@ -424,12 +434,12 @@ editor on narrow widths. Colours come from the tokens in
 
 | Suite | Runs | Covers |
 |---|---|---|
-| `packages/api/src/lib/notice-variables.test.ts` | `npm test` | Substitution, escaping, the placeholder rules and both Zod schemas; typed and substituted `<script>`, `<img>`, `<iframe>` and links staying escaped once wrapped in the email shell — no database |
+| `packages/api/src/lib/notice-variables.test.ts` | `npm test` | Substitution, escaping, the placeholder rules and both Zod schemas — including the broadcast's literal braces, trimming and limits; typed and substituted `<script>`, `<img>`, `<iframe>` and links staying escaped once wrapped in the email shell — no database |
 | `packages/api/src/lib/email-layout.test.ts` | `npm test` | The shared email shell — header, body, footer, no remote resources, escaped title, and `templateToHtml` output carried through unchanged |
 | `apps/web/src/components/wp/notice-templates-editor.test.tsx` | `npm test` | Four types from server data, edit and save, preview substitution, read-only role, absence of any toggle |
-| `apps/web/src/components/wp/general-info-broadcast.test.tsx` | `npm test` | Variable set, audience count, send payload, delivery failure, read-only role |
+| `apps/web/src/components/wp/general-info-broadcast.test.tsx` | `npm test` | Plain form with no variable controls or preview, audience choice and count, required fields, literal braces in the payload, success, delivery failure, read-only role |
 | `apps/web/src/components/wp/notice-repair-companies.test.tsx` | `npm test` | The read-only list and the absence of management controls |
-| `packages/api/src/routers/notices.test.ts` | `npm run test:db` | Who may call what, the fallback, upsert create-then-update, the no-op save, tenant isolation, recipient filters, per-recipient rendering inside the email shell, partial failure, audit lines |
+| `packages/api/src/routers/notices.test.ts` | `npm run test:db` | Who may call what, the fallback, upsert create-then-update, the no-op save, tenant isolation (including a tenant smuggled into the payload), recipient filters and past-due de-duplication, literal identical text inside the email shell, empty audience, partial failure without retry, audit lines |
 | `packages/db/src/notice-templates-rls.test.ts` | `npm run test:db` | The row policies, as the `authenticated` role |
 
 ```bash

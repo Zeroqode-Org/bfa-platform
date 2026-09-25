@@ -11,10 +11,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * The general-info broadcast composer: who it is sent to (never pre-chosen),
- * which variables it offers, what it says about the audience before anything
- * is sent, what the send carries, and what a read-only role is shown instead of
- * the send button.
+ * The general-info broadcast composer: a plain form — who it is sent to (never
+ * pre-chosen), what it says about the audience before anything is sent, what
+ * the send carries (literal text, no variables), and what a read-only role is
+ * shown instead of the send button.
  *
  * The tRPC module is mocked because importing it for real would give the
  * queries a live HTTP link. `queryOptions`/`mutationOptions` are thin
@@ -85,8 +85,8 @@ function chooseRecipients(name: RegExp = /^All customers$/) {
 
 /** Types a subject and body. */
 function compose({
-	subject = "News from {{wp_name}}",
-	body = "Hello {{customer_name}}, the mains are being flushed.",
+	subject = "Water main flushing",
+	body = "Hello, the mains are being flushed next week.",
 } = {}) {
 	fireEvent.change(screen.getByLabelText("Subject"), {
 		target: { value: subject },
@@ -104,10 +104,6 @@ beforeEach(() => {
 			Promise.resolve({
 				recipientFilter,
 				recipientCount: COUNTS[recipientFilter] ?? 0,
-				sampleValues: {
-					customer_name: "Sample Customer",
-					wp_name: "Harbor Water Works",
-				},
 			}),
 	);
 	sendFn.mockImplementation((input: { recipientFilter: string }) =>
@@ -203,57 +199,49 @@ describe("GeneralInfoBroadcast — choosing the recipients", () => {
 });
 
 describe("GeneralInfoBroadcast", () => {
-	it("offers only the two variables a customer has one of", async () => {
+	it("is a plain form: recipients, subject, message and send — no variables or preview", async () => {
 		renderComposer();
 
 		await screen.findByLabelText("Subject");
 
+		expect(screen.getByLabelText("Recipients")).toBeTruthy();
+		expect(screen.getByLabelText("Message")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Send broadcast" })).toBeTruthy();
+		// Nothing offers a placeholder, and nothing previews a substitution.
+		expect(screen.queryByRole("button", { name: /insert/i })).toBeNull();
+		expect(screen.queryByText("Dynamic values")).toBeNull();
+		expect(screen.queryByText("Preview")).toBeNull();
+		expect(screen.queryByText(/sample values/i)).toBeNull();
+		// Send is the only button on the card.
 		expect(
-			screen.getByRole("button", { name: /Insert \{\{customer_name\}\}/ }),
-		).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: /Insert \{\{wp_name\}\}/ }),
-		).toBeTruthy();
-		// An asset may be one of several a customer owns, so there is no single
-		// value to substitute — and no button offering one.
-		for (const placeholder of [
-			"bin",
-			"bfa_type",
-			"service_address",
-			"due_date",
-		]) {
-			expect(
-				screen.queryByRole("button", {
-					name: new RegExp(`Insert \\{\\{${placeholder}\\}\\}`),
-				}),
-			).toBeNull();
-		}
+			screen.getAllByRole("button").map((button) => button.textContent),
+		).toEqual(["Send broadcast"]);
 	});
 
-	it("substitutes the sample recipient in the preview", async () => {
+	it("treats braces typed by hand as plain text", async () => {
 		renderComposer();
 
 		chooseRecipients();
 		await screen.findByText(/All customers — 12 recipients/);
-		compose();
+		compose({
+			subject: "About {{bin}}",
+			body: "Hello {{customer_name}} — {{nope}} stays as typed.",
+		});
 
-		expect(
-			await screen.findByText("News from Harbor Water Works"),
-		).toBeTruthy();
-		expect(
-			screen.getByText("Hello Sample Customer, the mains are being flushed."),
-		).toBeTruthy();
-	});
+		// No warning, no refusal: it is not placeholder syntax on this form.
+		expect(screen.queryByRole("alert")).toBeNull();
 
-	it("warns in the preview when an asset variable is used", async () => {
-		renderComposer();
-
-		await screen.findByLabelText("Subject");
-		compose({ body: "Your {{bin}} is due." });
-
-		expect(screen.getByRole("alert").textContent).toContain(
-			"cannot be used here",
+		fireEvent.click(
+			screen.getByRole("button", { name: /send to 12 recipients/i }),
 		);
+
+		await waitFor(() => {
+			expect(sendFn).toHaveBeenCalledWith({
+				subject: "About {{bin}}",
+				body: "Hello {{customer_name}} — {{nope}} stays as typed.",
+				recipientFilter: "all_customers",
+			});
+		});
 	});
 
 	it("sends the composed message with the selected audience", async () => {
@@ -269,8 +257,8 @@ describe("GeneralInfoBroadcast", () => {
 
 		await waitFor(() => {
 			expect(sendFn).toHaveBeenCalledWith({
-				subject: "News from {{wp_name}}",
-				body: "Hello {{customer_name}}, the mains are being flushed.",
+				subject: "Water main flushing",
+				body: "Hello, the mains are being flushed next week.",
 				recipientFilter: "all_customers",
 			});
 		});

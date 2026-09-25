@@ -7,11 +7,6 @@ import {
 	BROADCAST_RECIPIENT_FILTERS,
 	type BroadcastRecipientFilter,
 } from "@bfa-platform/api/lib/notice-recipients";
-import {
-	BROADCAST_VARIABLES,
-	templateTextError,
-	variableKeys,
-} from "@bfa-platform/api/lib/notice-variables";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
 	Card,
@@ -48,31 +43,14 @@ import { useState } from "react";
 
 import { trpc } from "@/utils/trpc";
 
-import {
-	ComposerError,
-	READ_ONLY_NOTICE,
-	TemplatePreview,
-	useVariableInsertion,
-	VariableReferencePanel,
-} from "./notice-composer";
-import type { NoticeSampleValues } from "./notice-types";
-
-const PENDING_SAMPLE: NoticeSampleValues = Object.fromEntries(
-	BROADCAST_VARIABLES.map((variable) => [variable.key, variable.sample]),
-) as NoticeSampleValues;
-
-const BROADCAST_KEYS = variableKeys(BROADCAST_VARIABLES);
+import { ComposerError, READ_ONLY_NOTICE } from "./notice-composer";
 
 /**
- * The server's broadcast `templateText` rule, checked at the field: present,
- * within the limit, and using only the two recipient-scoped placeholders.
+ * The server's broadcast text rule, checked at the field: present and within
+ * the limit. Nothing about braces — the text is sent literally.
  */
 function broadcastRule(label: string, max: number) {
-	return composeRules(
-		required(`${label} is required.`),
-		maxLength(max),
-		(value) => templateTextError(value, BROADCAST_KEYS) ?? undefined,
-	);
+	return composeRules(required(`${label} is required.`), maxLength(max));
 }
 
 const BROADCAST_RULES = {
@@ -92,9 +70,9 @@ const BROADCAST_RULES = {
  * is no scheduler behind it and nothing here keeps a history of what was sent —
  * all three are deliberately out of scope.
  *
- * Two variables, not six. A customer may own several assemblies, so `{{bin}}`
- * and the rest have no single value for a recipient; the panel offers the two
- * that do, and the server refuses the others rather than mailing a placeholder.
+ * No personalisation (PRD § 6.10). Every recipient reads exactly the subject
+ * and message typed here, so there is no variable panel and no preview — the
+ * fields already are what will be sent. `{{…}}` typed by hand is plain text.
  *
  * The audience opens unchosen. Once one is chosen its count is shown before
  * anything is sent, from the same server predicate the send uses, so the number
@@ -139,15 +117,8 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 		}),
 	);
 
-	const insertion = useVariableInsertion({
-		onInsertSubject: (subject) =>
-			setDraft((current) => ({ ...current, subject })),
-		onInsertBody: (body) => setDraft((current) => ({ ...current, body })),
-	});
-
 	const sending = sendBroadcast.isPending;
 	const chosen = recipientFilter !== "";
-	const values = audience.data?.sampleValues ?? PENDING_SAMPLE;
 	const recipientCount = audience.data?.recipientCount ?? 0;
 	// Missing or invalid answers do not disable the button: pressing it says what
 	// is wrong at the field. Only a chosen audience that cannot receive anything
@@ -162,13 +133,14 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 			<CardHeader>
 				<CardTitle>General info broadcast</CardTitle>
 				<CardDescription>
-					A one-off message to a group of your customers. It is sent when you
+					A one-off message to a group of your customers. Everyone receives the
+					same subject and message, exactly as written. It is sent when you
 					press send — there is no schedule and no draft kept.
 				</CardDescription>
 			</CardHeader>
 
-			<CardContent className="flex flex-col gap-4 lg:flex-row lg:items-start">
-				<div className="flex min-w-0 flex-1 flex-col gap-3">
+			<CardContent>
+				<div className="flex max-w-[720px] flex-col gap-3">
 					<div className="flex flex-col gap-1.5">
 						<Label htmlFor={validation.fieldId("recipientFilter")}>
 							Recipients
@@ -228,12 +200,10 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 						<Label htmlFor={validation.fieldId("subject")}>Subject</Label>
 						<Input
 							{...validation.controlProps("subject")}
-							ref={insertion.subjectRef}
 							name="subject"
 							value={draft.subject}
 							disabled={!canSend || sending}
 							placeholder="Water main work next week"
-							onFocus={insertion.onSubjectFocus}
 							onChange={(event) =>
 								setDraft({ ...draft, subject: event.target.value })
 							}
@@ -247,14 +217,12 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 							{...validation.controlProps("body", {
 								describedBy: bodyCounterId,
 							})}
-							ref={insertion.bodyRef}
 							name="body"
 							rows={10}
 							className="min-h-44 text-[13px]"
 							value={draft.body}
 							disabled={!canSend || sending}
-							placeholder="Hello {{customer_name}},"
-							onFocus={insertion.onBodyFocus}
+							placeholder="The water mains in your area will be flushed next Tuesday."
 							onChange={(event) =>
 								setDraft({ ...draft, body: event.target.value })
 							}
@@ -266,13 +234,6 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 							max={NOTICE_FIELD_LIMITS.body}
 						/>
 					</div>
-
-					<VariableReferencePanel
-						variables={BROADCAST_VARIABLES}
-						disabled={!canSend || sending}
-						onInsert={insertion.insert}
-						description="Only values that are the same for every one of a customer's assemblies can be used here — a customer may own several."
-					/>
 
 					{sendBroadcast.isError ? (
 						<ComposerError message={sendBroadcast.error.message} />
@@ -318,16 +279,6 @@ export function GeneralInfoBroadcast({ canSend }: { canSend: boolean }) {
 							{READ_ONLY_NOTICE}
 						</p>
 					)}
-				</div>
-
-				<div className="flex w-full min-w-0 flex-col gap-2 lg:max-w-[380px]">
-					<h3 className="font-bold text-[13px] text-foreground">Preview</h3>
-					<TemplatePreview
-						subject={draft.subject}
-						body={draft.body}
-						values={values}
-						variables={BROADCAST_VARIABLES}
-					/>
 				</div>
 			</CardContent>
 		</Card>
