@@ -47,6 +47,7 @@ import { Link2, PenLine, Search, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 
+import { ResultDocumentButton } from "@/components/result-document-button";
 import { trpc } from "@/utils/trpc";
 
 import type {
@@ -537,6 +538,9 @@ export function SubmissionDocument({
 /** The record's identity: who filed it, against what, and how it came out. */
 function DocumentHeader({ submission }: { submission: SubmissionDetail }) {
 	const bin = binLabel(submission);
+	const getDocumentUrl = useMutation(
+		trpc.submittedTests.getResultDocumentUrl.mutationOptions(),
+	);
 
 	return (
 		<div className="flex flex-wrap items-start justify-between gap-3 border-border border-b pb-4">
@@ -563,9 +567,16 @@ function DocumentHeader({ submission }: { submission: SubmissionDetail }) {
 				</p>
 			</div>
 
-			{submission.editedByWpProfileId ? (
-				<Badge variant="neutral">Corrected by this purveyor</Badge>
-			) : null}
+			<div className="flex flex-col items-end gap-2">
+				{submission.editedByWpProfileId ? (
+					<Badge variant="neutral">Corrected by this purveyor</Badge>
+				) : null}
+				<ResultDocumentButton
+					fetchUrl={async () =>
+						(await getDocumentUrl.mutateAsync({ id: submission.id })).url
+					}
+				/>
+			</div>
 		</div>
 	);
 }

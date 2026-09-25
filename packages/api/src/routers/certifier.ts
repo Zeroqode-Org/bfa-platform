@@ -255,7 +255,7 @@ export const certifierRouter = router({
  * this is what makes switching the active WP re-filter the dashboard instead
  * of merging two purveyors' rows together (§ 6.4).
  */
-function ownRowsOf(
+export function ownRowsOf(
 	certifierId: string,
 	waterPurveyorId: string,
 	status: "draft" | "submitted",
@@ -277,7 +277,7 @@ function ownRowsOf(
  * rejected server-side" (§ 6.4's own "done when") true, and the one 6.5's
  * draft-creation procedure will reuse rather than re-derive.
  */
-async function assertAuthorizedWp(
+export async function assertAuthorizedWp(
 	certifierId: string,
 	waterPurveyorId: string,
 ) {
@@ -381,7 +381,7 @@ async function listOwnRows(
  * `submitted-tests.ts`'s `notFound()` gives: a message that distinguished
  * them would confirm the row exists, which is what a guessed uuid is after.
  */
-function notFound() {
+export function notFound() {
 	return new TRPCError({ code: "NOT_FOUND", message: "Draft not found" });
 }
 
@@ -413,7 +413,7 @@ async function readOwnProfile(profileId: string) {
  * `logSubmissionEvent` uses on the WP side — greppable by certifier rather
  * than by tenant.
  */
-function logCertifierEvent(
+export function logCertifierEvent(
 	event: string,
 	{
 		actor,
