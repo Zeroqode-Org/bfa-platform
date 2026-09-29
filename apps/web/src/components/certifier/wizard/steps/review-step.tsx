@@ -11,23 +11,15 @@ import {
 	WIZARD_TEST_SPEC,
 	type WizardQuestion,
 } from "@bfa-platform/api/lib/wizard-input";
-import { Button } from "@bfa-platform/ui/components/button";
 import { cn } from "@bfa-platform/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import {
-	CircleCheck,
-	CircleX,
-	PenLine,
-	Square,
-	SquareCheck,
-} from "lucide-react";
+import { CircleCheck, CircleX, Square, SquareCheck } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { trpc } from "@/utils/trpc";
 
 import { usePhotoUrls } from "../use-photo-urls";
 import type { WizardFormState } from "../wizard-shell";
-import { stepCount, stepNumberOf } from "../wizard-steps";
 import { BFA_TYPE_OPTIONS } from "../wizard-types";
 
 function show(value: unknown): string {
@@ -54,33 +46,27 @@ function dateLabel(iso: string): string {
 /**
  * The last screen before Submit, laid out as the test form itself — the
  * document the purveyor and the customer will receive — so a certifier reads
- * exactly what is about to be filed. Nothing here can be changed in place: a
- * submitted test is locked, so each block links back to the screen that owns
- * it instead.
+ * exactly what is about to be filed. It is a preview, not a step: the
+ * wizard is finished by the time it shows, so nothing on it links back to an
+ * earlier screen — the certifier submits it or saves it to Drafts.
  */
 export function ReviewStep({
 	form,
 	wpName,
 	waterPurveyorId,
-	onEdit,
 }: {
 	form: WizardFormState;
 	wpName: string;
 	waterPurveyorId: string;
-	onEdit: (step: number) => void;
 }) {
 	const profile = useQuery(trpc.certifier.getProfile.queryOptions());
 	const photoUrls = usePhotoUrls(form.id, waterPurveyorId, form.photoPaths);
 	const data = form.wizardData;
 	const spec = WIZARD_TEST_SPEC[form.bfaType];
-	const total = stepCount(form.bfaType);
 	const typeCode = form.bfaType;
 	const typeName = BFA_TYPE_OPTIONS[typeCode];
 	// "PVB — Pressure Vacuum Breaker" → "Pressure Vacuum Breaker", for headings that already show the code.
 	const typeWords = typeName?.split(" — ")[1] ?? typeCode;
-	const editAssembly = () => onEdit(stepNumberOf("assembly", form.bfaType));
-	const editTest = () => onEdit(stepNumberOf("test", form.bfaType));
-	const editClosing = () => onEdit(total - 1);
 	const signed = form.signatureMethod === "signed";
 
 	return (
@@ -101,7 +87,7 @@ export function ReviewStep({
 			</header>
 
 			<div className="flex flex-col gap-3">
-				<Section title="Assembly information" onEdit={editAssembly}>
+				<Section title="Assembly information">
 					<Cells cols={2}>
 						<Cell
 							label="BIN"
@@ -132,14 +118,14 @@ export function ReviewStep({
 					</Cells>
 				</Section>
 
-				<Section title="Customer information" onEdit={editClosing}>
+				<Section title="Customer information">
 					<Cells cols={2}>
 						<Cell label="Customer name" value={show(form.customerName)} />
 						<Cell label="Customer email" value={show(form.customerEmail)} />
 					</Cells>
 				</Section>
 
-				<Section title={`Initial test — ${typeWords}`} onEdit={editTest}>
+				<Section title={`Initial test — ${typeWords}`}>
 					<Cells cols={spec.hasAdp ? 2 : 1}>
 						<Cell
 							label="Line pressure"
@@ -182,7 +168,7 @@ export function ReviewStep({
 					))}
 				</Section>
 
-				<Section title="Property isolation" onEdit={editTest}>
+				<Section title="Property isolation">
 					<div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
 						<span>Does this assembly isolate the entire property?</span>
 						<span className="flex flex-wrap gap-4">
@@ -197,10 +183,7 @@ export function ReviewStep({
 					</div>
 				</Section>
 
-				<Section
-					title="Initial test result"
-					onEdit={() => onEdit(stepNumberOf("result", form.bfaType))}
-				>
+				<Section title="Initial test result">
 					<div className="grid grid-cols-2 gap-3">
 						<ResultTile
 							kind="pass"
@@ -213,13 +196,13 @@ export function ReviewStep({
 					</div>
 				</Section>
 
-				<Section title="Comment" onEdit={editClosing}>
+				<Section title="Comment">
 					<p className="min-h-10 rounded-md bg-muted px-3 py-2 text-[13px]">
 						{show(data.comments) === "—" ? "" : show(data.comments)}
 					</p>
 				</Section>
 
-				<Section title="Certification" onEdit={editClosing}>
+				<Section title="Certification">
 					<Cells cols={3}>
 						<Cell
 							label="Initial test by"
@@ -238,7 +221,7 @@ export function ReviewStep({
 					</Cells>
 				</Section>
 
-				<Section title="Assembly owner signature" onEdit={editClosing}>
+				<Section title="Assembly owner signature">
 					{signed && form.signatureData ? (
 						// biome-ignore lint/performance/noImgElement: a data: URI drawn on this device, not an asset Next can optimise
 						<img
@@ -293,33 +276,13 @@ export function ReviewStep({
 	);
 }
 
-/** A bordered block of the form with a heading and a way back to the screen behind it. */
-function Section({
-	title,
-	onEdit,
-	children,
-}: {
-	title: string;
-	onEdit: () => void;
-	children: ReactNode;
-}) {
+/** A bordered block of the form with its heading. */
+function Section({ title, children }: { title: string; children: ReactNode }) {
 	return (
 		<section className="flex flex-col gap-3 rounded-lg border border-border p-3">
-			<div className="flex items-center justify-between gap-2">
-				<h4 className="font-bold text-[13px] text-primary uppercase tracking-wide">
-					{title}
-				</h4>
-				<Button
-					type="button"
-					variant="ghost"
-					size="xs"
-					aria-label={`Edit ${title}`}
-					onClick={onEdit}
-				>
-					<PenLine aria-hidden="true" />
-					Edit
-				</Button>
-			</div>
+			<h4 className="font-bold text-[13px] text-primary uppercase tracking-wide">
+				{title}
+			</h4>
 			{children}
 		</section>
 	);

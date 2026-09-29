@@ -39,6 +39,14 @@ import { binLabel, formatSavedAt } from "./certifier-types";
 
 const COLUMN_COUNT = 5;
 const SKELETON_ROWS = 4;
+/**
+ * Type, Step and Last saved only get their own columns once the card is wide
+ * enough for all five (a container query, so a tablet with the sidebar open
+ * counts as narrow too). Below that they fold into a second line under the
+ * BIN — five nowrap columns plus two buttons are ~680px, and on a phone the
+ * table otherwise scrolls sideways.
+ */
+const WIDE_COLUMN = "hidden @2xl:table-cell";
 
 /**
  * The certifier's own drafts, most recently saved first.
@@ -101,7 +109,7 @@ export function DraftsTable() {
 
 	return (
 		<div className="flex flex-col gap-4">
-			<div className="overflow-hidden rounded-lg border border-border bg-card shadow-[var(--shadow-card)]">
+			<div className="@container overflow-hidden rounded-lg border border-border bg-card shadow-[var(--shadow-card)]">
 				<Table className="whitespace-nowrap">
 					<TableHeader>
 						<TableRow>
@@ -112,9 +120,9 @@ export function DraftsTable() {
 							    against its neighbor. A `w-*` on the header is a minimum
 							    the browser still honors under auto layout, giving each
 							    column room instead of collapsing to its content. */}
-							<TableHead className="w-36">Type</TableHead>
-							<TableHead className="w-24">Step</TableHead>
-							<TableHead>Last saved</TableHead>
+							<TableHead className={`${WIDE_COLUMN} w-36`}>Type</TableHead>
+							<TableHead className={`${WIDE_COLUMN} w-24`}>Step</TableHead>
+							<TableHead className={WIDE_COLUMN}>Last saved</TableHead>
 							<TableHead>
 								<span className="sr-only">Actions</span>
 							</TableHead>
@@ -202,15 +210,25 @@ export function DraftsTable() {
 														Not linked to an asset
 													</span>
 												)}
+												<span className="@2xl:hidden whitespace-normal font-normal text-[12px] text-muted-foreground tabular-nums">
+													{draft.bfaType} · Step {draft.currentStep ?? "—"} ·
+													Saved {formatSavedAt(draft.updatedAt)}
+												</span>
 											</div>
 										</TableCell>
-										<TableCell className="text-muted-foreground">
+										<TableCell
+											className={`${WIDE_COLUMN} text-muted-foreground`}
+										>
 											{draft.bfaType}
 										</TableCell>
-										<TableCell className="text-muted-foreground tabular-nums">
+										<TableCell
+											className={`${WIDE_COLUMN} text-muted-foreground tabular-nums`}
+										>
 											{draft.currentStep ?? "—"}
 										</TableCell>
-										<TableCell className="text-muted-foreground tabular-nums">
+										<TableCell
+											className={`${WIDE_COLUMN} text-muted-foreground tabular-nums`}
+										>
 											{formatSavedAt(draft.updatedAt)}
 										</TableCell>
 										<TableCell className="text-right">
@@ -322,8 +340,15 @@ function LoadingRows() {
 		// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder list, never reordered
 		<TableRow key={rowIndex}>
 			{Array.from({ length: COLUMN_COUNT }, (_, cellIndex) => (
-				// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder list, never reordered
-				<TableCell key={cellIndex}>
+				<TableCell
+					// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder list, never reordered
+					key={cellIndex}
+					className={
+						cellIndex > 0 && cellIndex < COLUMN_COUNT - 1
+							? WIDE_COLUMN
+							: undefined
+					}
+				>
 					<Skeleton className="h-4 w-full rounded-sm" />
 				</TableCell>
 			))}

@@ -430,7 +430,10 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 	}
 
 	function handleBack() {
-		setStep((current) => Math.max(1, current - 1));
+		// The review preview has no Back — the wizard is finished by then.
+		setStep((current) =>
+			current >= total ? current : Math.max(1, current - 1),
+		);
 	}
 
 	async function handleSubmit() {
@@ -507,6 +510,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 	const nav = {
 		isFirst: step === 1,
 		isLast: step >= total,
+		nextLabel: step === total - 1 ? "Preview" : "Next",
 		saving: saveDraft.isPending,
 		savingKind,
 		submitting: submitTest.isPending,
@@ -690,7 +694,6 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 								form={form}
 								wpName={active.name}
 								waterPurveyorId={active.id}
-								onEdit={setStep}
 							/>
 						) : null}
 					</WizardValidationProvider>

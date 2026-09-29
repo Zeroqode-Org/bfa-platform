@@ -20,11 +20,16 @@ export const COLORS = {
 	page: "#FFFFFF",
 } as const;
 
+/** The fixed footer strip, reserved out of every page's bottom margin. */
+const FOOTER_HEIGHT = 14;
+
 const BORDER = { borderColor: COLORS.border, borderWidth: 0.75 } as const;
 
 export const pdfStyles = StyleSheet.create({
 	page: {
-		padding: 22,
+		padding: 18,
+		// The bottom margin also holds the fixed footer.
+		paddingBottom: 18 + FOOTER_HEIGHT + 4,
 		fontSize: 8.5,
 		fontFamily: "Helvetica",
 		color: COLORS.text,
@@ -55,7 +60,7 @@ export const pdfStyles = StyleSheet.create({
 		fontSize: 7.5,
 		fontFamily: "Helvetica-Bold",
 	},
-	section: { ...BORDER, borderRadius: 4, padding: 6, marginBottom: 5 },
+	section: { ...BORDER, borderRadius: 4, padding: 6, marginBottom: 4 },
 	sectionTitle: {
 		fontSize: 8,
 		fontFamily: "Helvetica-Bold",
@@ -142,8 +147,12 @@ export const pdfStyles = StyleSheet.create({
 	},
 	disclaimer: { fontSize: 8, lineHeight: 1.3 },
 	footer: {
-		marginTop: 4,
-		paddingVertical: 4,
+		position: "absolute",
+		left: 18,
+		right: 18,
+		bottom: 18,
+		height: FOOTER_HEIGHT,
+		paddingTop: 3,
 		borderRadius: 3,
 		backgroundColor: COLORS.accent,
 		color: COLORS.accentText,
