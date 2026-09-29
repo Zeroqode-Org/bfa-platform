@@ -209,6 +209,11 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 	const [completion, setCompletion] = useState<"submitted" | "saved" | null>(
 		null,
 	);
+	// Set while navigating away from the completion pop-up. `router.push` only
+	// swaps the page once Drafts has loaded — seconds, the first time in dev —
+	// so the pop-up closes at once and a placeholder stands in until then,
+	// rather than the pop-up hanging open or the finished form reappearing.
+	const [leaving, setLeaving] = useState(false);
 	// What the last save (or the initial state) looked like, to tell whether
 	// leaving would throw anything away.
 	const [savedSnapshot, setSavedSnapshot] = useState(() =>
@@ -470,6 +475,12 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 		}
 	}
 
+	function leaveToDrafts() {
+		setCompletion(null);
+		setLeaving(true);
+		router.push("/certifier/drafts");
+	}
+
 	function handleDoAnother() {
 		const fresh = emptyForm();
 		setForm(fresh);
@@ -520,7 +531,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 		onSubmit: handleSubmit,
 	};
 
-	if (isWpLoading || (draftId && draftQuery.isPending)) {
+	if (leaving || isWpLoading || (draftId && draftQuery.isPending)) {
 		return (
 			<div className="flex flex-col gap-4" aria-busy="true">
 				<Skeleton className="h-9 w-64 rounded-md" />
@@ -572,7 +583,10 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 				    that back at rest, so nothing moves. From the desktop breakpoint it is
 				    an ordinary, unpinned progress bar and the buttons live in the footer. */}
 				<div className="sticky -top-4 z-20 -mx-4 -mt-4 flex flex-col gap-3 border-border border-b bg-background px-4 pt-5 pb-3 min-[780px]:static min-[780px]:m-0 min-[780px]:border-0 min-[780px]:bg-transparent min-[780px]:p-0">
-					<WizardProgress step={step} labels={stepLabels(form.bfaType)} />
+					{/* The review is a preview of the finished form, not a step — no progress bar. */}
+					{current.kind === "review" ? null : (
+						<WizardProgress step={step} labels={stepLabels(form.bfaType)} />
+					)}
 					<WizardNav {...nav} className="flex min-[780px]:hidden" />
 				</div>
 
@@ -720,13 +734,11 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 				open={completion !== null}
 				kind={completion}
 				onDoAnother={handleDoAnother}
-				onExit={() => router.push("/certifier/drafts")}
+				onExit={leaveToDrafts}
 				// A saved draft can be kept editing; a submitted test is done, so the
 				// X takes the certifier out of the finished wizard.
 				onDismiss={() =>
-					completion === "submitted"
-						? router.push("/certifier/drafts")
-						: setCompletion(null)
+					completion === "submitted" ? leaveToDrafts() : setCompletion(null)
 				}
 				fetchPdfUrl={async () =>
 					(

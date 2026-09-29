@@ -39,6 +39,7 @@ import {
 	humanizeFieldName,
 	TEST_RESULT_LABELS,
 	TEST_RESULT_VARIANTS,
+	WIDE_COLUMN,
 	wizardEntries,
 	wizardValueText,
 } from "./certifier-types";
@@ -81,17 +82,19 @@ export function SubmissionsTable({
 
 	return (
 		<div className="flex flex-col gap-4">
-			<div className="overflow-hidden rounded-lg border border-border bg-card shadow-[var(--shadow-card)]">
+			<div className="@container overflow-hidden rounded-lg border border-border bg-card shadow-[var(--shadow-card)]">
 				<Table className="whitespace-nowrap">
 					<TableHeader>
 						<TableRow>
 							<TableHead>BIN</TableHead>
 							{/* `w-*` on a short-content column: under the default
 							    `table-layout: auto`, a one-word column otherwise hugs its
-							    header text and sits flush against its neighbor. */}
-							<TableHead className="w-36">Type</TableHead>
-							<TableHead className="w-32">Test date</TableHead>
-							<TableHead className="w-28">Result</TableHead>
+							    header text and sits flush against its neighbor. On a narrow
+							    card Type and Test date fold under the BIN (`WIDE_COLUMN`);
+							    Result keeps its column, so a pass or fail reads at a glance. */}
+							<TableHead className={`${WIDE_COLUMN} w-36`}>Type</TableHead>
+							<TableHead className={`${WIDE_COLUMN} w-32`}>Test date</TableHead>
+							<TableHead className="@2xl:w-28">Result</TableHead>
 							<TableHead>
 								<span className="sr-only">Actions</span>
 							</TableHead>
@@ -173,18 +176,26 @@ export function SubmissionsTable({
 								return (
 									<TableRow key={submission.id}>
 										<TableCell className="font-semibold">
-											<button
-												type="button"
-												onClick={() => setOpenId(submission.id)}
-												className="text-primary hover:underline"
-											>
-												{bin.text}
-											</button>
+											<div className="flex flex-col items-start gap-1">
+												<button
+													type="button"
+													onClick={() => setOpenId(submission.id)}
+													className="text-primary hover:underline"
+												>
+													{bin.text}
+												</button>
+												<span className="@2xl:hidden whitespace-normal font-normal text-[12px] text-muted-foreground tabular-nums">
+													{submission.bfaType} ·{" "}
+													{formatTestDate(submission.testDate)}
+												</span>
+											</div>
 										</TableCell>
-										<TableCell className="text-muted-foreground">
+										<TableCell
+											className={`${WIDE_COLUMN} text-muted-foreground`}
+										>
 											{submission.bfaType}
 										</TableCell>
-										<TableCell className="tabular-nums">
+										<TableCell className={`${WIDE_COLUMN} tabular-nums`}>
 											{formatTestDate(submission.testDate)}
 										</TableCell>
 										<TableCell>
@@ -343,9 +354,13 @@ function SubmissionDetailDialog({
 
 function Field({ label, value }: { label: string; value: string }) {
 	return (
-		<div className="flex flex-col gap-0.5">
+		<div className="flex min-w-0 flex-col gap-0.5">
 			<dt className="text-[11px] text-muted-foreground">{label}</dt>
-			<dd className="font-medium text-foreground">{value}</dd>
+			{/* `overflow-wrap:anywhere`: an email or a BIN has no space to break at,
+			    and on a phone's two narrow columns it ran into the next one. */}
+			<dd className="font-medium text-foreground [overflow-wrap:anywhere]">
+				{value}
+			</dd>
 		</div>
 	);
 }
@@ -365,8 +380,13 @@ function LoadingRows() {
 		// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder list, never reordered
 		<TableRow key={rowIndex}>
 			{Array.from({ length: COLUMN_COUNT }, (_, cellIndex) => (
-				// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder list, never reordered
-				<TableCell key={cellIndex}>
+				<TableCell
+					// biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder list, never reordered
+					key={cellIndex}
+					className={
+						cellIndex === 1 || cellIndex === 2 ? WIDE_COLUMN : undefined
+					}
+				>
 					<Skeleton className="h-4 w-full rounded-sm" />
 				</TableCell>
 			))}

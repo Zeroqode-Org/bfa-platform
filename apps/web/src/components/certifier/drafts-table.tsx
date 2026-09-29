@@ -35,18 +35,10 @@ import { toast } from "sonner";
 import { useActiveWp } from "@/lib/use-active-wp";
 import { trpc } from "@/utils/trpc";
 import type { CertifierSubmissionRow } from "./certifier-types";
-import { binLabel, formatSavedAt } from "./certifier-types";
+import { binLabel, formatSavedAt, WIDE_COLUMN } from "./certifier-types";
 
 const COLUMN_COUNT = 5;
 const SKELETON_ROWS = 4;
-/**
- * Type, Step and Last saved only get their own columns once the card is wide
- * enough for all five (a container query, so a tablet with the sidebar open
- * counts as narrow too). Below that they fold into a second line under the
- * BIN — five nowrap columns plus two buttons are ~680px, and on a phone the
- * table otherwise scrolls sideways.
- */
-const WIDE_COLUMN = "hidden @2xl:table-cell";
 
 /**
  * The certifier's own drafts, most recently saved first.
