@@ -104,7 +104,7 @@ Estimates reflect the AI-assisted development model.
 | 6.9 | Workflow 2: Agricultural (AG) Rate Renewal Notice — one notice per year on the renewal date, no escalation. After a confirmed delivery to an active customer the renewal date becomes one calendar year after the delivery day (Hawaii) and next year's notice is scheduled. | 3 |
 | 6.10 | Workflow 4: General Info Email — flexible broadcast (subject, body, recipient selection), no personalization needed. | 3 |
 | 6.11 | Super-Admin — invite WPs, WP list table, Impersonate (view/act as WP or Certifier). No audit log required for impersonation in v1. | 10 |
-| 6.12 | Monthly Statements (Basic Export) — on-demand CSV over a chosen date range, not scheduled. Open: exact export fields. | 3 |
+| 6.12 | Monthly Statements (Basic Export) — on-demand CSV over a chosen date range, not scheduled. Export fields settled on the build plan's set: BIN, customer name (the occupant on the test date), service address, BFA type, test date, result, certifier. | 3 |
 | 6.13 | Landing Page — public marketing page, name+email capture only, not connected to the app. Content/positioning references: [Syncta](https://www.syncta.com/backflow-testers), [SwiftComply](https://www.swiftcomply.com/backflow-prevention-software/), [Mach Backflow](https://www.machbackflow.com/), [The Backflow Assistant (App Store)](https://apps.apple.com/us/app/the-backflow-assistant/id6746165015) — more may be added while content is being developed. | 5 |
 | 6.14 | Transactional Email Integration — provider account, sender domain/DKIM, template plumbing. | 2 |
 | 6.15 | App Shell, Navigation & Responsive Design System — one coherent shell per user type; phone-first for certifiers, desktop-optimized for WP/Super-Admin. | 8 |
@@ -164,7 +164,7 @@ Estimates reflect the AI-assisted development model.
 | Notice/renewal automation | Automated reminders/late notices and the AG renewal notice are **optional, paid add-ons** — off by default, switched on per WP by the Super-Admin via a feature flag, not something every WP gets automatically. |
 | AG Renewal Date auto-update | Advances automatically (team-lead decision, superseding the earlier "does not auto-advance" answer): after the notice is delivered to an **active** customer, the date becomes exactly one calendar year after the Hawaii day the delivery was confirmed on — not a year after the old scheduled date — and the next notice is scheduled for it; 29 February becomes 28 February in a non-leap year. A customer who is not active gets no email and keeps their date. |
 | Fail-list entry | After 30 days without a passing re-test — the failure email goes out the instant a failed test is *submitted* (not on a draft), but the asset joins the fail list only once 30 days pass with no passing test submitted, and leaves on the next passing test (§ 6.8, flow 5). Corrects an earlier answer here that said there was no waiting period. |
-| Monthly CSV export fields | Customer name, BIN, service address, BFA type, test date, result, certifier — submitted tests only (passes and failures), not a dump of every table. |
+| Monthly CSV export fields | BIN, customer name, service address, BFA type, test date, result, certifier — submitted tests only (passes and failures), not a dump of every table. |
 | Audit logging | No dedicated audit-log UI in v1 (as originally confirmed) — but every sensitive write still emits a structured JSON log line, so the data exists if a visible activity feed gets added later. |
 
 ## 10. Open Questions for the Client

@@ -172,27 +172,56 @@ export const updateSubmittedTestInput = z.object({
  * and a period would be answering a different one. Both dates are inclusive — a
  * WP asking for the 1st to the 31st means the 31st.
  */
+/**
+ * The filters the list and the CSV export share. One shape, so "what the table
+ * shows" and "what the download contains" cannot come to mean two different
+ * sets of rows.
+ */
+const submittedTestsFilterShape = {
+	result: z.enum(TEST_RESULTS).optional(),
+	/** Inclusive lower bound on `test_date`. */
+	from: z.iso.date().optional(),
+	/** Inclusive upper bound on `test_date`. */
+	to: z.iso.date().optional(),
+};
+
+/**
+ * A range that ends before it starts is a typo, not an empty result. Saying so
+ * beats returning nothing and letting the reader conclude there were no tests
+ * that month.
+ */
+function rangeRunsForwards(value: { from?: string; to?: string }) {
+	return !value.from || !value.to || value.from <= value.to;
+}
+
+const backwardsRange = {
+	message: "The end of the range comes before its start",
+	path: ["to"],
+};
+
 export const listSubmittedTestsInput = z
 	.object({
 		page: z.number().int().min(1).default(1),
 		pageSize: z.number().int().min(1).max(100).default(25),
-		result: z.enum(TEST_RESULTS).optional(),
-		/** Inclusive lower bound on `test_date`. */
-		from: z.iso.date().optional(),
-		/** Inclusive upper bound on `test_date`. */
-		to: z.iso.date().optional(),
+		...submittedTestsFilterShape,
 	})
 	// `prefault`, not `default`: an absent input parses as `{}` and picks up each
 	// field's own default, rather than needing the whole output object restated
 	// here where it could drift from the fields above.
 	.prefault({})
-	// A range that ends before it starts is a typo, not an empty result. Saying
-	// so beats returning nothing and letting the reader conclude there were no
-	// tests that month.
-	.refine((value) => !value.from || !value.to || value.from <= value.to, {
-		message: "The end of the range comes before its start",
-		path: ["to"],
-	});
+	.refine(rangeRunsForwards, backwardsRange);
+
+/**
+ * The CSV export: the list's filters, without the pager — a statement is every
+ * matching row, not page one of them.
+ *
+ * Strict, because it arrives from a query string. A parameter the export does
+ * not understand (a misspelt `form=`) is refused rather than dropped, since
+ * dropping a bound quietly widens the statement.
+ */
+export const exportSubmittedTestsInput = z
+	.strictObject(submittedTestsFilterShape)
+	.refine(rangeRunsForwards, backwardsRange);
 
 export const submissionIdInput = z.object({ id: z.uuid() });
 
@@ -216,6 +245,9 @@ export const linkSubmissionAssetInput = z.strictObject({
 
 export type UpdateSubmittedTestInput = z.infer<typeof updateSubmittedTestInput>;
 export type ListSubmittedTestsInput = z.infer<typeof listSubmittedTestsInput>;
+export type ExportSubmittedTestsInput = z.infer<
+	typeof exportSubmittedTestsInput
+>;
 export type WizardData = z.infer<typeof wizardDataInput>;
 
 /**

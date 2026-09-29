@@ -66,6 +66,7 @@ import {
 	TEST_RESULT_LABELS,
 	TEST_RESULT_VARIANTS,
 } from "./submission-types";
+import { SubmittedTestsExportButton } from "./submitted-tests-export";
 
 /** The result filter, with the unfiltered case as a value rather than absence. */
 const RESULT_FILTERS = {
@@ -277,6 +278,28 @@ export function SubmittedTestsTable({
 						Clear filters
 					</Button>
 				) : null}
+
+				{/* The monthly statement: this list, every page of it, as a file.
+				    Takes the same filters the query above does, so what downloads
+				    is what the table says it holds. */}
+				<div className="ml-auto">
+					<SubmittedTestsExportButton
+						filters={{
+							result:
+								result === "all" ? undefined : (result as SubmissionResult),
+							from: fromIso ?? undefined,
+							to: toIso ?? undefined,
+						}}
+						disabled={
+							rangeIsBackwards ||
+							rangeHasInvalidDate ||
+							isPending ||
+							isError ||
+							isPlaceholderData ||
+							total === 0
+						}
+					/>
+				</div>
 			</div>
 
 			{/* Both bounds are inclusive on the server, so this is worth saying:

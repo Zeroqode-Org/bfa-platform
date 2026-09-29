@@ -733,3 +733,121 @@ describe("SubmittedTestsTable — a WP Employee", () => {
 		).toBeNull();
 	});
 });
+
+describe("SubmittedTestsTable — the CSV statement", () => {
+	const fetchFn = vi.fn();
+	/** The file names the screen asked the browser to save, in order. */
+	let saved: string[] = [];
+
+	beforeEach(() => {
+		saved = [];
+		// jsdom cannot save a file; record what would have been saved instead.
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+			this: HTMLAnchorElement,
+		) {
+			saved.push(this.download);
+		});
+		fetchFn.mockReset();
+		fetchFn.mockResolvedValue(
+			new Response("csv", {
+				status: 200,
+				headers: {
+					"content-disposition":
+						'attachment; filename="submitted-tests_2027-03-01_2027-03-31.csv"',
+				},
+			}),
+		);
+		vi.stubGlobal("fetch", fetchFn);
+		URL.createObjectURL = vi.fn(() => "blob:statement");
+		URL.revokeObjectURL = vi.fn();
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
+	});
+
+	function downloadButton() {
+		return screen.getByRole("button", { name: "Download CSV" });
+	}
+
+	it("downloads what the filters select, not only this page", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		await choose("Filter by result", "Fail");
+		fireEvent.change(screen.getByLabelText("Tested from"), {
+			target: { value: "03/01/2027" },
+		});
+		fireEvent.change(screen.getByLabelText("Tested to"), {
+			target: { value: "03/31/2027" },
+		});
+		await waitFor(() =>
+			expect(listFn).toHaveBeenCalledWith(
+				expect.objectContaining({ from: "2027-03-01", to: "2027-03-31" }),
+			),
+		);
+		await waitFor(() =>
+			expect(downloadButton().hasAttribute("disabled")).toBe(false),
+		);
+
+		fireEvent.click(downloadButton());
+
+		await waitFor(() =>
+			expect(fetchFn).toHaveBeenCalledWith(
+				"/api/wp/submitted-tests/export?result=fail&from=2027-03-01&to=2027-03-31",
+			),
+		);
+		// Saved under the name the server gave it, which says the period.
+		await waitFor(() =>
+			expect(saved).toEqual(["submitted-tests_2027-03-01_2027-03-31.csv"]),
+		);
+	});
+
+	it("sends no filter at all when none is set", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(downloadButton());
+
+		await waitFor(() =>
+			expect(fetchFn).toHaveBeenCalledWith("/api/wp/submitted-tests/export"),
+		);
+	});
+
+	it("offers nothing to download while a box holds something that is not a date", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.change(screen.getByLabelText("Tested from"), {
+			target: { value: "02/30/2027" },
+		});
+
+		expect(downloadButton().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("offers nothing to download when no test matched", async () => {
+		listFn.mockResolvedValue(page([]));
+		renderTable();
+		await screen.findByText("No submitted tests yet");
+
+		expect(downloadButton().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("says why the server refused, under the button", async () => {
+		fetchFn.mockResolvedValue(
+			new Response("More than 5,000 tests match — narrow the date range", {
+				status: 413,
+			}),
+		);
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(downloadButton());
+
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"More than 5,000 tests match — narrow the date range",
+		);
+		expect(saved).toEqual([]);
+	});
+});
