@@ -5,7 +5,9 @@ import { cn } from "@bfa-platform/ui/lib/utils";
 import { ArrowLeft, ArrowRight, Check, LoaderCircle, Save } from "lucide-react";
 
 /**
- * Back / Save to Draft / Next (or Submit). Rendered twice by the shell: as a
+ * Back / Save to Draft / Next — or, on the review preview, just Save to
+ * Draft and Submit: the wizard is finished by then, so there is no Back.
+ * Rendered twice by the shell: as a
  * bar pinned to the top on phones, where the bottom of a long test screen is
  * a scroll away, and as the usual footer from the desktop breakpoint up —
  * each hides itself at the other's width, so exactly one shows.
@@ -14,6 +16,7 @@ export function WizardNav({
 	className,
 	isFirst,
 	isLast,
+	nextLabel,
 	saving,
 	savingKind,
 	submitting,
@@ -24,7 +27,10 @@ export function WizardNav({
 }: {
 	className?: string;
 	isFirst: boolean;
+	/** The review preview: Save draft and Submit only. */
 	isLast: boolean;
+	/** "Next", or "Preview" on the screen before the review. */
+	nextLabel: string;
 	saving: boolean;
 	savingKind: "save" | "next";
 	submitting: boolean;
@@ -40,17 +46,19 @@ export function WizardNav({
 				className,
 			)}
 		>
-			<Button
-				variant="secondary"
-				className="h-10 flex-1 min-[780px]:flex-none"
-				disabled={isFirst}
-				onClick={onBack}
-			>
-				<ArrowLeft aria-hidden="true" />
-				Back
-			</Button>
-			{/* Phone: three equal buttons in a row. Desktop: Back on the left, Save and Next together on the right. */}
-			<div className="contents min-[780px]:flex min-[780px]:gap-2">
+			{isLast ? null : (
+				<Button
+					variant="secondary"
+					className="h-10 flex-1 min-[780px]:flex-none"
+					disabled={isFirst}
+					onClick={onBack}
+				>
+					<ArrowLeft aria-hidden="true" />
+					Back
+				</Button>
+			)}
+			{/* Phone: the buttons share the row equally. Desktop: Back on the left, Save and Next together on the right. */}
+			<div className="contents min-[780px]:ml-auto min-[780px]:flex min-[780px]:gap-2">
 				<Button
 					variant="secondary"
 					className="h-10 flex-1 min-[780px]:flex-none"
@@ -83,7 +91,7 @@ export function WizardNav({
 						disabled={saving}
 						onClick={onNext}
 					>
-						Next
+						{nextLabel}
 						{saving && savingKind === "next" ? (
 							<LoaderCircle className="animate-spin" aria-hidden="true" />
 						) : (

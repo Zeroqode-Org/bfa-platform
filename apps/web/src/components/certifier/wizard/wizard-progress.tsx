@@ -4,7 +4,8 @@ import { cn } from "@bfa-platform/ui/lib/utils";
  * Thin rounded segments, one per step, filled `#1588C1` through the current
  * step and the same primary at half opacity beyond it — the design
  * system's own "Wizard progress" spec — with a 12px muted step label
- * underneath (build-plan § 6.5 step 4).
+ * underneath (build-plan § 6.5 step 4). The review preview is not a step
+ * and does not render this at all.
  */
 export function WizardProgress({
 	step,

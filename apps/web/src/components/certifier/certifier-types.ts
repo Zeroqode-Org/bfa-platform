@@ -114,3 +114,12 @@ export function wizardValueText(value: WizardValue): string {
 	if (typeof value === "boolean") return value ? "Yes" : "No";
 	return String(value);
 }
+
+/**
+ * A table column that only gets its own cell once the card is wide enough for
+ * every column — a container query, so a tablet with the sidebar open counts
+ * as narrow too. Below that the value folds into a second line under the BIN;
+ * the card needs `@container`. Without it the nowrap columns and buttons are
+ * wider than a phone and the table scrolls sideways.
+ */
+export const WIDE_COLUMN = "hidden @2xl:table-cell";
