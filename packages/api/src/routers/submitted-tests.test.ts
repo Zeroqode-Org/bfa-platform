@@ -1385,6 +1385,23 @@ describeDb("submitted-test procedures", () => {
 			});
 		});
 
+		it("puts the same customer on the list row as on the statement line", async () => {
+			const id = await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: historyAsset,
+				testDate: "2030-03-11",
+			});
+
+			const { rows } = await callerFor(
+				ids.adminA,
+			).submittedTests.listSubmittedTests({
+				from: "2030-03-11",
+				to: "2030-03-11",
+			});
+
+			expect(rows.find((row) => row.id === id)?.customerName).toBe("Old Owner");
+		});
+
 		it("refuses past the row limit rather than returning a partial statement", async () => {
 			const { rows } = await pool.query<{ id: string }>(
 				`insert into test_submissions

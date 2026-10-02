@@ -39,9 +39,16 @@ export function exportUrl(filters: ExportFilters) {
  */
 export function SubmittedTestsExportButton({
 	filters,
+	count,
 	disabled,
 }: {
 	filters: ExportFilters;
+	/**
+	 * How many tests the file will hold, shown on the button so it says the
+	 * download is the whole set and not the page on screen. Omitted while that
+	 * number is not known yet.
+	 */
+	count?: number;
 	/** The filters are not a question the server can answer, or nothing matched. */
 	disabled: boolean;
 }) {
@@ -84,14 +91,13 @@ export function SubmittedTestsExportButton({
 				size="sm"
 				disabled={disabled || pending}
 				onClick={download}
-				title="Downloads every test these filters match, not only this page"
 			>
 				{pending ? (
 					<LoaderCircle className="animate-spin" aria-hidden />
 				) : (
 					<Download aria-hidden />
 				)}
-				Download CSV
+				{count === undefined ? "Download CSV" : `Download CSV (${count})`}
 			</Button>
 			{error ? (
 				<p

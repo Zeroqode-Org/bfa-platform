@@ -128,6 +128,7 @@ function submission(overrides: Partial<Submission> = {}): Submission {
 		bin: "BIN-10041",
 		serviceAddress: "18 Canal Road",
 		certifierName: "Casey Certifier",
+		customerName: "Kalani Farms",
 		...overrides,
 	} as Submission;
 }
@@ -768,7 +769,7 @@ describe("SubmittedTestsTable — the CSV statement", () => {
 	});
 
 	function downloadButton() {
-		return screen.getByRole("button", { name: "Download CSV" });
+		return screen.getByRole("button", { name: /^Download CSV/ });
 	}
 
 	it("downloads what the filters select, not only this page", async () => {
@@ -849,5 +850,75 @@ describe("SubmittedTestsTable — the CSV statement", () => {
 			"More than 5,000 tests match — narrow the date range",
 		);
 		expect(saved).toEqual([]);
+	});
+});
+
+describe("SubmittedTestsTable — quick periods and the customer column", () => {
+	beforeEach(() => {
+		// 2026-10-02 in Honolulu.
+		vi.useFakeTimers({
+			toFake: ["Date"],
+			now: new Date("2026-10-02T20:00:00Z"),
+		});
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("fills the date boxes from a quick period and asks for that range", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(screen.getByRole("button", { name: "Last month" }));
+
+		expect(
+			(screen.getByLabelText("Tested from") as HTMLInputElement).value,
+		).toBe("09/01/2026");
+		expect((screen.getByLabelText("Tested to") as HTMLInputElement).value).toBe(
+			"09/30/2026",
+		);
+		await waitFor(() =>
+			expect(listFn).toHaveBeenCalledWith(
+				expect.objectContaining({ from: "2026-09-01", to: "2026-09-30" }),
+			),
+		);
+		expect(
+			screen
+				.getByRole("button", { name: "Last month" })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("stops marking a period once the dates are edited away from it", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(screen.getByRole("button", { name: "This month" }));
+		fireEvent.change(screen.getByLabelText("Tested to"), {
+			target: { value: "10/01/2026" },
+		});
+
+		expect(
+			screen
+				.getByRole("button", { name: "This month" })
+				.getAttribute("aria-pressed"),
+		).toBe("false");
+	});
+
+	it("counts the whole set on the download button, not the page on screen", async () => {
+		listFn.mockResolvedValue(page([submission()], { total: 30, pageCount: 2 }));
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		expect(
+			await screen.findByRole("button", { name: "Download CSV (30)" }),
+		).toBeTruthy();
+	});
+
+	it("names the customer on each row", async () => {
+		renderTable();
+
+		expect(await screen.findByText("Kalani Farms")).toBeTruthy();
 	});
 });

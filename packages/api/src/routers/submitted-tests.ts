@@ -159,7 +159,10 @@ export const submittedTestsRouter = router({
 			const total = totalRow?.value ?? 0;
 
 			const rows = await db
-				.select(submissionSelection)
+				// The customer column is the CSV statement's own rule — whoever
+				// occupied the asset on the test date — so the table a WP checks
+				// before downloading names the same person the file will.
+				.select({ ...submissionSelection, customerName: customers.name })
 				.from(testSubmissions)
 				// Left, not inner: an unresolved submission — no BIN typed, or one
 				// that matched no asset — is precisely the row this screen exists to
@@ -169,6 +172,7 @@ export const submittedTestsRouter = router({
 				// `tenantAsset` below for why the foreign key is not enough, and why
 				// this belongs here rather than in the `where`.
 				.leftJoin(bfaAssets, tenantAsset(ctx.caller.waterPurveyorId))
+				.leftJoin(customers, customerOnTestDate(ctx.caller.waterPurveyorId))
 				.innerJoin(certifiers, eq(certifiers.id, testSubmissions.certifierId))
 				.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
 				.where(where)
