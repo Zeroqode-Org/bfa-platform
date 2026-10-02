@@ -128,6 +128,7 @@ function submission(overrides: Partial<Submission> = {}): Submission {
 		bin: "BIN-10041",
 		serviceAddress: "18 Canal Road",
 		certifierName: "Casey Certifier",
+		customerName: "Kalani Farms",
 		...overrides,
 	} as Submission;
 }
@@ -731,5 +732,193 @@ describe("SubmittedTestsTable — a WP Employee", () => {
 		expect(
 			dialog.queryByLabelText("Search your assets by BIN or service address"),
 		).toBeNull();
+	});
+});
+
+describe("SubmittedTestsTable — the CSV statement", () => {
+	const fetchFn = vi.fn();
+	/** The file names the screen asked the browser to save, in order. */
+	let saved: string[] = [];
+
+	beforeEach(() => {
+		saved = [];
+		// jsdom cannot save a file; record what would have been saved instead.
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+			this: HTMLAnchorElement,
+		) {
+			saved.push(this.download);
+		});
+		fetchFn.mockReset();
+		fetchFn.mockResolvedValue(
+			new Response("csv", {
+				status: 200,
+				headers: {
+					"content-disposition":
+						'attachment; filename="submitted-tests_2027-03-01_2027-03-31.csv"',
+				},
+			}),
+		);
+		vi.stubGlobal("fetch", fetchFn);
+		URL.createObjectURL = vi.fn(() => "blob:statement");
+		URL.revokeObjectURL = vi.fn();
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
+	});
+
+	function downloadButton() {
+		return screen.getByRole("button", { name: /^Download CSV/ });
+	}
+
+	it("downloads what the filters select, not only this page", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		await choose("Filter by result", "Fail");
+		fireEvent.change(screen.getByLabelText("Tested from"), {
+			target: { value: "03/01/2027" },
+		});
+		fireEvent.change(screen.getByLabelText("Tested to"), {
+			target: { value: "03/31/2027" },
+		});
+		await waitFor(() =>
+			expect(listFn).toHaveBeenCalledWith(
+				expect.objectContaining({ from: "2027-03-01", to: "2027-03-31" }),
+			),
+		);
+		await waitFor(() =>
+			expect(downloadButton().hasAttribute("disabled")).toBe(false),
+		);
+
+		fireEvent.click(downloadButton());
+
+		await waitFor(() =>
+			expect(fetchFn).toHaveBeenCalledWith(
+				"/api/wp/submitted-tests/export?result=fail&from=2027-03-01&to=2027-03-31",
+			),
+		);
+		// Saved under the name the server gave it, which says the period.
+		await waitFor(() =>
+			expect(saved).toEqual(["submitted-tests_2027-03-01_2027-03-31.csv"]),
+		);
+	});
+
+	it("sends no filter at all when none is set", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(downloadButton());
+
+		await waitFor(() =>
+			expect(fetchFn).toHaveBeenCalledWith("/api/wp/submitted-tests/export"),
+		);
+	});
+
+	it("offers nothing to download while a box holds something that is not a date", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.change(screen.getByLabelText("Tested from"), {
+			target: { value: "02/30/2027" },
+		});
+
+		expect(downloadButton().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("offers nothing to download when no test matched", async () => {
+		listFn.mockResolvedValue(page([]));
+		renderTable();
+		await screen.findByText("No submitted tests yet");
+
+		expect(downloadButton().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("says why the server refused, under the button", async () => {
+		fetchFn.mockResolvedValue(
+			new Response("More than 5,000 tests match — narrow the date range", {
+				status: 413,
+			}),
+		);
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(downloadButton());
+
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"More than 5,000 tests match — narrow the date range",
+		);
+		expect(saved).toEqual([]);
+	});
+});
+
+describe("SubmittedTestsTable — quick periods and the customer column", () => {
+	beforeEach(() => {
+		// 2026-10-02 in Honolulu.
+		vi.useFakeTimers({
+			toFake: ["Date"],
+			now: new Date("2026-10-02T20:00:00Z"),
+		});
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("fills the date boxes from a quick period and asks for that range", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(screen.getByRole("button", { name: "Last month" }));
+
+		expect(
+			(screen.getByLabelText("Tested from") as HTMLInputElement).value,
+		).toBe("09/01/2026");
+		expect((screen.getByLabelText("Tested to") as HTMLInputElement).value).toBe(
+			"09/30/2026",
+		);
+		await waitFor(() =>
+			expect(listFn).toHaveBeenCalledWith(
+				expect.objectContaining({ from: "2026-09-01", to: "2026-09-30" }),
+			),
+		);
+		expect(
+			screen
+				.getByRole("button", { name: "Last month" })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("stops marking a period once the dates are edited away from it", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		fireEvent.click(screen.getByRole("button", { name: "This month" }));
+		fireEvent.change(screen.getByLabelText("Tested to"), {
+			target: { value: "10/01/2026" },
+		});
+
+		expect(
+			screen
+				.getByRole("button", { name: "This month" })
+				.getAttribute("aria-pressed"),
+		).toBe("false");
+	});
+
+	it("counts the whole set on the download button, not the page on screen", async () => {
+		listFn.mockResolvedValue(page([submission()], { total: 30, pageCount: 2 }));
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		expect(
+			await screen.findByRole("button", { name: "Download CSV (30)" }),
+		).toBeTruthy();
+	});
+
+	it("names the customer on each row", async () => {
+		renderTable();
+
+		expect(await screen.findByText("Kalani Farms")).toBeTruthy();
 	});
 });

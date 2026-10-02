@@ -84,6 +84,9 @@ let callerFor: (profileId: string) => {
 		listSubmittedTests: (
 			input?: Inputs["listSubmittedTests"],
 		) => Promise<Outputs["listSubmittedTests"]>;
+		exportSubmittedTests: (
+			input: Inputs["exportSubmittedTests"],
+		) => Promise<Outputs["exportSubmittedTests"]>;
 		getSubmittedTest: (
 			input: Inputs["getSubmittedTest"],
 		) => Promise<Outputs["getSubmittedTest"]>;
@@ -1081,6 +1084,339 @@ describeDb("submitted-test procedures", () => {
 				bin: "SHARED-SUB-BIN",
 				submitted_bin_text: "HRB-?? 0142",
 			});
+		});
+	});
+
+	describe("exportSubmittedTests", () => {
+		/**
+		 * One asset in each tenant with its own occupancy history, so "which
+		 * customer does a statement line name" has a real answer to get wrong.
+		 *
+		 * `historyAsset` changed hands on 2030-06-15: Old Owner through that day,
+		 * New Owner from it. It was unoccupied before 2030-01-01.
+		 * `noHistoryAsset` has a current customer and no history rows at all.
+		 */
+		const historyAsset = randomUUID();
+		const noHistoryAsset = randomUUID();
+		const foreignHistoryAsset = randomUUID();
+		const oldOwner = randomUUID();
+		const newOwner = randomUUID();
+		const pointerOnly = randomUUID();
+		const foreignCustomer = randomUUID();
+
+		beforeAll(async () => {
+			await pool.query(
+				`insert into customers (id, water_purveyor_id, name, email)
+				 values ($1, $5, 'Old Owner', 'old-owner@statement.test'),
+				        ($2, $5, 'New Owner', 'new-owner@statement.test'),
+				        ($3, $5, 'Pointer Only', 'pointer-only@statement.test'),
+				        ($4, $6, 'Foreign Customer', 'foreign@statement.test')`,
+				[oldOwner, newOwner, pointerOnly, foreignCustomer, wpA, wpB],
+			);
+			await pool.query(
+				`insert into bfa_assets (id, water_purveyor_id, bin, bfa_type, service_address, annual_test_date, current_customer_id)
+				 values ($1, $4, 'STMT-HISTORY', 'DC', '5 History Ln', '2030-01-15', $5),
+				        ($2, $4, 'STMT-POINTER', 'PVB', '6 Pointer Pl', '2030-01-15', $6),
+				        ($3, $7, 'STMT-FOREIGN', 'DC', '7 Foreign Ave', '2030-01-15', $8)`,
+				[
+					historyAsset,
+					noHistoryAsset,
+					foreignHistoryAsset,
+					wpA,
+					newOwner,
+					pointerOnly,
+					wpB,
+					foreignCustomer,
+				],
+			);
+			await pool.query(
+				`insert into customer_assignments (bfa_asset_id, customer_id, start_date, end_date)
+				 values ($1, $2, '2030-01-01', '2030-06-15'),
+				        ($1, $3, '2030-06-15', null),
+				        ($4, $5, '2030-01-01', null)`,
+				[
+					historyAsset,
+					oldOwner,
+					newOwner,
+					foreignHistoryAsset,
+					foreignCustomer,
+				],
+			);
+		});
+
+		afterAll(async () => {
+			const assets = [historyAsset, noHistoryAsset, foreignHistoryAsset];
+			await pool.query(
+				"delete from customer_assignments where bfa_asset_id = any($1::uuid[])",
+				[assets],
+			);
+			await pool.query(
+				"delete from test_submissions where bfa_asset_id = any($1::uuid[])",
+				[assets],
+			);
+			await pool.query("delete from bfa_assets where id = any($1::uuid[])", [
+				assets,
+			]);
+			await pool.query("delete from customers where id = any($1::uuid[])", [
+				[oldOwner, newOwner, pointerOnly, foreignCustomer],
+			]);
+		});
+
+		async function exportFor(
+			profileId: string,
+			input: Inputs["exportSubmittedTests"],
+		) {
+			return callerFor(profileId).submittedTests.exportSubmittedTests(input);
+		}
+
+		it("lets all three WP roles export", async () => {
+			for (const profileId of [ids.adminA, ids.subAdminA, ids.employeeA]) {
+				await expect(exportFor(profileId, {})).resolves.toBeInstanceOf(Array);
+			}
+		});
+
+		it("refuses a certifier and a Super-Admin", async () => {
+			await expect(exportFor(ids.certifierProfileA, {})).rejects.toThrow();
+			await expect(exportFor(ids.superAdmin, {})).rejects.toThrow();
+		});
+
+		it("carries only the caller's own submitted rows, never a draft", async () => {
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				testDate: "2030-02-01",
+				submittedBinText: "STMT-MINE",
+			});
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				status: "draft",
+				testDate: "2030-02-01",
+				submittedBinText: "STMT-DRAFT",
+			});
+			await seedSubmission({
+				waterPurveyorId: wpB,
+				testDate: "2030-02-01",
+				submittedBinText: "STMT-THEIRS",
+			});
+
+			const rows = await exportFor(ids.adminA, {
+				from: "2030-02-01",
+				to: "2030-02-01",
+			});
+
+			expect(rows.map((row) => row.submittedBinText)).toEqual(["STMT-MINE"]);
+		});
+
+		it("matches the list row for row under the same filters", async () => {
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				testDate: "2030-03-01",
+				testResult: "fail",
+			});
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				testDate: "2030-03-31",
+				testResult: "fail",
+			});
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				testDate: "2030-03-15",
+				testResult: "pass",
+			});
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				testDate: "2030-04-01",
+				testResult: "fail",
+			});
+			const filters = {
+				result: "fail",
+				from: "2030-03-01",
+				to: "2030-03-31",
+			} as const;
+
+			const exported = await exportFor(ids.adminA, filters);
+			const listed = await callerFor(
+				ids.adminA,
+			).submittedTests.listSubmittedTests({ ...filters, pageSize: 100 });
+
+			expect(exported).toHaveLength(2);
+			expect(exported.map((row) => row.testDate)).toEqual(
+				listed.rows.map((row) => row.testDate),
+			);
+		});
+
+		it("refuses a range that ends before it starts", async () => {
+			await expect(
+				exportFor(ids.adminA, { from: "2030-03-31", to: "2030-03-01" }),
+			).rejects.toThrow();
+		});
+
+		it("names the customer who occupied the asset on the test date", async () => {
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: historyAsset,
+				testDate: "2030-03-10",
+			});
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: historyAsset,
+				testDate: "2030-08-10",
+			});
+
+			const rows = await exportFor(ids.adminA, {
+				from: "2030-03-10",
+				to: "2030-08-10",
+			});
+			const onAsset = rows.filter((row) => row.bin === "STMT-HISTORY");
+
+			// Newest first: after the sale, then before it.
+			expect(onAsset.map((row) => row.customerName)).toEqual([
+				"New Owner",
+				"Old Owner",
+			]);
+		});
+
+		it("names the new occupant on the changeover day itself", async () => {
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: historyAsset,
+				testDate: "2030-06-15",
+			});
+
+			const [row] = await exportFor(ids.adminA, {
+				from: "2030-06-15",
+				to: "2030-06-15",
+			});
+
+			expect(row?.customerName).toBe("New Owner");
+		});
+
+		it("names nobody for a date the asset's history shows unoccupied", async () => {
+			// Today's occupant never had this test; borrowing their name would
+			// put it on a statement line they have nothing to do with.
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: historyAsset,
+				testDate: "2029-12-01",
+			});
+
+			const [row] = await exportFor(ids.adminA, {
+				from: "2029-12-01",
+				to: "2029-12-01",
+			});
+
+			expect(row).toMatchObject({ bin: "STMT-HISTORY", customerName: null });
+		});
+
+		it("falls back to the current customer for an asset with no history", async () => {
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: noHistoryAsset,
+				testDate: "2030-05-05",
+			});
+
+			const [row] = await exportFor(ids.adminA, {
+				from: "2030-05-05",
+				to: "2030-05-05",
+			});
+
+			expect(row).toMatchObject({
+				bin: "STMT-POINTER",
+				customerName: "Pointer Only",
+				serviceAddress: "6 Pointer Pl",
+			});
+		});
+
+		it("keeps an unresolved submission, with its customer and address blank", async () => {
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				testDate: "2030-05-06",
+				submittedBinText: "STMT-TYPED",
+			});
+
+			const [row] = await exportFor(ids.adminA, {
+				from: "2030-05-06",
+				to: "2030-05-06",
+			});
+
+			expect(row).toMatchObject({
+				bin: null,
+				submittedBinText: "STMT-TYPED",
+				customerName: null,
+				serviceAddress: null,
+			});
+		});
+
+		it("never carries another purveyor's asset or customer through a crossed link", async () => {
+			// Straight to SQL: no procedure will make this link.
+			await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: foreignHistoryAsset,
+				testDate: "2030-05-07",
+				submittedBinText: "STMT-CROSSED",
+			});
+
+			const [row] = await exportFor(ids.adminA, {
+				from: "2030-05-07",
+				to: "2030-05-07",
+			});
+
+			expect(row).toMatchObject({
+				bin: null,
+				serviceAddress: null,
+				customerName: null,
+			});
+		});
+
+		it("logs one structured line with the range and the row count", async () => {
+			await seedSubmission({ waterPurveyorId: wpA, testDate: "2030-05-08" });
+			const lines = captureLogs();
+
+			await exportFor(ids.employeeA, { from: "2030-05-08", to: "2030-05-08" });
+
+			expect(
+				lines.find((line) => line.event === "submitted_tests_exported"),
+			).toMatchObject({
+				actor_id: ids.employeeA,
+				wp_id: wpA,
+				from: "2030-05-08",
+				to: "2030-05-08",
+				result: null,
+				row_count: 1,
+			});
+		});
+
+		it("puts the same customer on the list row as on the statement line", async () => {
+			const id = await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: historyAsset,
+				testDate: "2030-03-11",
+			});
+
+			const { rows } = await callerFor(
+				ids.adminA,
+			).submittedTests.listSubmittedTests({
+				from: "2030-03-11",
+				to: "2030-03-11",
+			});
+
+			expect(rows.find((row) => row.id === id)?.customerName).toBe("Old Owner");
+		});
+
+		it("refuses past the row limit rather than returning a partial statement", async () => {
+			const { rows } = await pool.query<{ id: string }>(
+				`insert into test_submissions
+				   (bfa_asset_id, certifier_id, water_purveyor_id, status, bfa_type,
+				    wizard_data, test_date, test_result)
+				 select null, $1, $2, 'submitted', 'RP', '{}'::jsonb, '2031-01-01', 'pass'
+				 from generate_series(1, 5001)
+				 returning id`,
+				[certifierA, wpA],
+			);
+			created.push(...rows.map((row) => row.id));
+
+			await expect(
+				exportFor(ids.adminA, { from: "2031-01-01", to: "2031-01-01" }),
+			).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
 		});
 	});
 });

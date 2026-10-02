@@ -2,6 +2,8 @@ import { db } from "@bfa-platform/db";
 import {
 	bfaAssets,
 	certifiers,
+	customerAssignments,
+	customers,
 	profiles,
 	testSubmissions,
 } from "@bfa-platform/db/schema";
@@ -14,8 +16,11 @@ import {
 	auditActorFields,
 } from "../lib/audit-actor";
 import { publishResultPdf } from "../lib/result-pdf/document-url";
+import type { StatementRow } from "../lib/statement-columns";
 import {
 	changedSubmissionFields,
+	type ExportSubmittedTestsInput,
+	exportSubmittedTestsInput,
 	linkSubmissionAssetInput,
 	listSubmittedTestsInput,
 	submissionColumns,
@@ -141,15 +146,7 @@ export const submittedTestsRouter = router({
 	listSubmittedTests: wpProcedure
 		.input(listSubmittedTestsInput)
 		.query(async ({ ctx, input }) => {
-			const where = and(
-				submittedRowsOf(ctx.caller.waterPurveyorId),
-				input.result ? eq(testSubmissions.testResult, input.result) : undefined,
-				// Both bounds inclusive: a WP asking for the 1st to the 31st means
-				// the 31st. `test_date` is a Postgres `date`, so there is no time
-				// component for an inclusive upper bound to accidentally exclude.
-				input.from ? gte(testSubmissions.testDate, input.from) : undefined,
-				input.to ? lte(testSubmissions.testDate, input.to) : undefined,
-			);
+			const where = submittedTestsMatching(ctx.caller.waterPurveyorId, input);
 
 			// Counted separately rather than with a window function: the count is
 			// over the whole filtered set, the rows are one page of it, and a pager
@@ -162,7 +159,10 @@ export const submittedTestsRouter = router({
 			const total = totalRow?.value ?? 0;
 
 			const rows = await db
-				.select(submissionSelection)
+				// The customer column is the CSV statement's own rule — whoever
+				// occupied the asset on the test date — so the table a WP checks
+				// before downloading names the same person the file will.
+				.select({ ...submissionSelection, customerName: customers.name })
 				.from(testSubmissions)
 				// Left, not inner: an unresolved submission — no BIN typed, or one
 				// that matched no asset — is precisely the row this screen exists to
@@ -172,6 +172,7 @@ export const submittedTestsRouter = router({
 				// `tenantAsset` below for why the foreign key is not enough, and why
 				// this belongs here rather than in the `where`.
 				.leftJoin(bfaAssets, tenantAsset(ctx.caller.waterPurveyorId))
+				.leftJoin(customers, customerOnTestDate(ctx.caller.waterPurveyorId))
 				.innerJoin(certifiers, eq(certifiers.id, testSubmissions.certifierId))
 				.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
 				.where(where)
@@ -186,6 +187,72 @@ export const submittedTestsRouter = router({
 				pageSize: input.pageSize,
 				pageCount: Math.max(1, Math.ceil(total / input.pageSize)),
 			};
+		}),
+
+	/**
+	 * Every submitted test the list's filters match, for the CSV statement
+	 * (PRD § 6.12). Served as a file by `/api/wp/submitted-tests/export`, which
+	 * calls this through `createCaller` so the tenancy and role checks are this
+	 * procedure's and nobody else's.
+	 *
+	 * The same `where` as `listSubmittedTests`, built by the same function, so
+	 * "what the table shows" and "what the download contains" are one set of
+	 * rows. All three WP roles may run it: it is a read, and an Employee can
+	 * already page through every one of these rows on screen.
+	 *
+	 * Bounded, and loudly so. Past `STATEMENT_ROW_LIMIT` it refuses rather than
+	 * handing back the first N rows, because a statement missing its tail looks
+	 * exactly like a complete one.
+	 */
+	exportSubmittedTests: wpProcedure
+		.input(exportSubmittedTestsInput)
+		.query(async ({ ctx, input }): Promise<StatementRow[]> => {
+			const waterPurveyorId = ctx.caller.waterPurveyorId;
+
+			const rows = await db
+				.select({
+					customerName: customers.name,
+					bin: bfaAssets.bin,
+					submittedBinText: testSubmissions.submittedBinText,
+					serviceAddress: bfaAssets.serviceAddress,
+					bfaType: testSubmissions.bfaType,
+					testDate: testSubmissions.testDate,
+					testResult: testSubmissions.testResult,
+					certifierName: profiles.fullName,
+				})
+				.from(testSubmissions)
+				// Left, as on the list: an unresolved submission belongs in the
+				// statement, with its customer and address blank.
+				.leftJoin(bfaAssets, tenantAsset(waterPurveyorId))
+				.leftJoin(customers, customerOnTestDate(waterPurveyorId))
+				.innerJoin(certifiers, eq(certifiers.id, testSubmissions.certifierId))
+				.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
+				.where(submittedTestsMatching(waterPurveyorId, input))
+				.orderBy(...newestSubmittedTestFirst)
+				// One past the limit, so "exactly at it" and "over it" differ.
+				.limit(STATEMENT_ROW_LIMIT + 1);
+
+			if (rows.length > STATEMENT_ROW_LIMIT) {
+				throw new TRPCError({
+					code: "PAYLOAD_TOO_LARGE",
+					message: `More than ${STATEMENT_ROW_LIMIT.toLocaleString("en-US")} tests match — narrow the date range and export it in parts`,
+				});
+			}
+
+			console.log(
+				JSON.stringify({
+					event: "submitted_tests_exported",
+					...auditActorFields(auditActor(ctx)),
+					wp_id: waterPurveyorId,
+					from: input.from ?? null,
+					to: input.to ?? null,
+					result: input.result ?? null,
+					row_count: rows.length,
+					timestamp: new Date().toISOString(),
+				}),
+			);
+
+			return rows;
 		}),
 
 	/**
@@ -470,6 +537,79 @@ function submittedRowsOf(waterPurveyorId: string) {
 	return and(
 		eq(testSubmissions.waterPurveyorId, waterPurveyorId),
 		eq(testSubmissions.status, "submitted"),
+	);
+}
+
+/**
+ * The list's filters on top of `submittedRowsOf`. Shared by the list and the
+ * CSV export, so the two cannot drift into different answers to the same
+ * question.
+ *
+ * The result filter and the two date bounds are independent and narrow
+ * together. Both bounds are inclusive: a WP asking for the 1st to the 31st
+ * means the 31st, and `test_date` is a Postgres `date`, so there is no time
+ * component for an inclusive upper bound to accidentally exclude.
+ */
+function submittedTestsMatching(
+	waterPurveyorId: string,
+	filters: ExportSubmittedTestsInput,
+) {
+	return and(
+		submittedRowsOf(waterPurveyorId),
+		filters.result ? eq(testSubmissions.testResult, filters.result) : undefined,
+		filters.from ? gte(testSubmissions.testDate, filters.from) : undefined,
+		filters.to ? lte(testSubmissions.testDate, filters.to) : undefined,
+	);
+}
+
+/**
+ * The most rows one CSV statement carries. A purveyor's month is hundreds of
+ * tests; a request for thousands more than that is usually an open range, and
+ * the answer is a narrower one rather than an unbounded read.
+ */
+const STATEMENT_ROW_LIMIT = 5000;
+
+/**
+ * The customer a statement line names: whoever occupied the asset on the day
+ * it was tested, not whoever occupies it now. A statement for last spring has
+ * to say who was billed last spring, even if the property has changed hands.
+ *
+ * Read from `customer_assignments`. Reassigning closes the old row and opens
+ * the new one on the same day, so a test on a changeover day matches both;
+ * the later `start_date` wins, which is the occupant the WP had moved it to.
+ *
+ * Falls back to `bfa_assets.current_customer_id` only for an asset with *no*
+ * occupancy history at all. An asset that has history but none covering the
+ * test date had no customer on that day, and borrowing today's would put a
+ * name on a test that person never had.
+ *
+ * Scoped to the caller's purveyor in the `ON`, for the same reason
+ * `tenantAsset` is: a pointer that crossed tenants comes back as a blank name
+ * rather than another purveyor's customer.
+ */
+function customerOnTestDate(waterPurveyorId: string) {
+	const occupant = sql`(
+		select ${customerAssignments.customerId}
+		from ${customerAssignments}
+		where ${customerAssignments.bfaAssetId} = ${bfaAssets.id}
+			and ${customerAssignments.startDate} <= ${testSubmissions.testDate}
+			and (${customerAssignments.endDate} is null
+				or ${customerAssignments.endDate} >= ${testSubmissions.testDate})
+		order by ${customerAssignments.startDate} desc,
+			${customerAssignments.createdAt} desc
+		limit 1
+	)`;
+	const neverAssigned = sql`not exists (
+		select 1 from ${customerAssignments}
+		where ${customerAssignments.bfaAssetId} = ${bfaAssets.id}
+	)`;
+
+	return and(
+		eq(customers.waterPurveyorId, waterPurveyorId),
+		sql`${customers.id} = coalesce(
+			${occupant},
+			case when ${neverAssigned} then ${bfaAssets.currentCustomerId} end
+		)`,
 	);
 }
 

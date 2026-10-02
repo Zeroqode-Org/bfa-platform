@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SUBMISSION_FIELD_LIMITS } from "./submission-field-limits";
 import {
 	changedSubmissionFields,
+	exportSubmittedTestsInput,
 	linkSubmissionAssetInput,
 	listSubmittedTestsInput,
 	submissionColumns,
@@ -178,6 +179,36 @@ describe("listSubmittedTestsInput", () => {
 
 	it("caps the page size", () => {
 		expect(() => listSubmittedTestsInput.parse({ pageSize: 500 })).toThrow();
+	});
+});
+
+describe("exportSubmittedTestsInput", () => {
+	it("takes the list's filters, every one optional", () => {
+		expect(exportSubmittedTestsInput.parse({})).toEqual({});
+		expect(
+			exportSubmittedTestsInput.parse({
+				result: "pass",
+				from: "2027-03-01",
+				to: "2027-03-31",
+			}),
+		).toEqual({ result: "pass", from: "2027-03-01", to: "2027-03-31" });
+	});
+
+	it("refuses a range that ends before it starts", () => {
+		expect(() =>
+			exportSubmittedTestsInput.parse({ from: "2027-03-31", to: "2027-03-01" }),
+		).toThrow();
+	});
+
+	it("refuses a parameter it does not know rather than dropping it", () => {
+		// A misspelt bound dropped silently would widen the statement.
+		expect(() =>
+			exportSubmittedTestsInput.parse({ form: "2027-03-01" }),
+		).toThrow();
+	});
+
+	it("has no pager: a statement is every matching row", () => {
+		expect(() => exportSubmittedTestsInput.parse({ page: 2 })).toThrow();
 	});
 });
 

@@ -48,7 +48,7 @@ Status as of **2026-09-18**. Update this table as work progresses — this is th
 | Workflow 3: Failure Notice + 30-Day Fail List | 6.8 | Daniil | 09/14 | 09/18 | done |
 | Certifier Test Wizard (all 8 BFA types) | 6.5 | Lina | 09/21 | 09/25 | in-progress |
 | Workflow 4: General Info Email | 6.10 | Daniil | 09/21 | 09/25 | done |
-| Monthly Statements (Basic Export) | 6.12 | Lina | 09/28 | 10/02 | planned |
+| Monthly Statements (Basic Export) | 6.12 | Lina | 09/28 | 10/02 | done |
 | Landing Page | 6.13 | Lina | 09/28 | 10/02 | planned |
 | QA & Testing | 6.17 | — | 08/24 | 10/02 | in-progress |
 
@@ -87,6 +87,14 @@ in its own document dialog — so the document, the corrections form, the
 link-to-asset flow and the role check stay in one place. The two share the
 ordering constant as well, so the dashboard's rows really are the head of that
 list. Full writeup: [WP Dashboard — Core & Analytics](/docs/wp-dashboard).
+
+**Monthly Statements (6.12)**: shipped — as an export on `/wp/tests`, not a
+screen of its own. The Submitted Tests list already had the arbitrary date
+range, the on-screen rows and the drill-in to a test's document, so the
+statement is a **Download CSV** button in its toolbar that exports every row the
+current filters match. Columns are the build plan's set; the customer named on
+each line is whoever occupied the asset on the test date. No migration ships
+with it. Full writeup: [WP Submitted Tests — Exporting a statement](/docs/wp-submitted-tests#exporting-a-statement).
 
 **WP Dashboard — Customers (6.6.4)**: shipped. `/wp/customers` creates, edits
 and suspends customers through three WP-scoped procedures, `customers` has row

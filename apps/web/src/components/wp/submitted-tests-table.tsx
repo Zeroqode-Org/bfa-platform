@@ -39,6 +39,7 @@ import {
 } from "@bfa-platform/ui/components/table";
 import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
 import {
+	isoToUsDate,
 	usDate,
 	usDateNotBefore,
 	usDateToIso,
@@ -52,7 +53,11 @@ import { FileText, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { trpc } from "@/utils/trpc";
-
+import {
+	hawaiiToday,
+	type StatementPeriod,
+	statementPeriods,
+} from "./statement-periods";
 import {
 	SubmissionDocument,
 	SubmissionDocumentError,
@@ -66,6 +71,7 @@ import {
 	TEST_RESULT_LABELS,
 	TEST_RESULT_VARIANTS,
 } from "./submission-types";
+import { SubmittedTestsExportButton } from "./submitted-tests-export";
 
 /** The result filter, with the unfiltered case as a value rather than absence. */
 const RESULT_FILTERS = {
@@ -76,7 +82,7 @@ const RESULT_FILTERS = {
 
 type ResultFilter = keyof typeof RESULT_FILTERS;
 
-const COLUMN_COUNT = 6;
+const COLUMN_COUNT = 7;
 const SKELETON_ROWS = 6;
 const PAGE_SIZE = 25;
 
@@ -91,7 +97,10 @@ const PAGE_SIZE = 25;
  * something nobody has stood behind yet.
  *
  * The columns are limited to facts every submitted row actually carries — BIN,
- * type, date, result, certifier. The per-BFA-type readings live in the document
+ * customer, type, date, result, certifier. The customer is whoever occupied
+ * the asset on the test date, the same name the CSV statement puts on the
+ * line, so the table a WP checks before downloading agrees with the file.
+ * The per-BFA-type readings live in the document
  * view, because a column for them would either be eight columns or one that
  * means something different on every line.
  */
@@ -189,6 +198,24 @@ export function SubmittedTestsTable({
 	const hasFilters = result !== "all" || Boolean(from) || Boolean(to);
 	const total = data?.total ?? 0;
 
+	// Computed once per mount: a clerk who leaves the screen open past midnight
+	// gets yesterday's "this month" until they navigate, which is harmless —
+	// every preset only fills the two boxes, and the boxes are what is sent.
+	const [periods] = useState(() => statementPeriods(hawaiiToday()));
+	const activePeriod = periods.find(
+		(period) => period.from === fromIso && period.to === toIso,
+	);
+
+	function applyPeriod(period: StatementPeriod) {
+		setFrom(isoToUsDate(period.from));
+		setTo(isoToUsDate(period.to));
+		rangeValidation.reset();
+	}
+
+	// Nothing to download while the boxes do not form a range the server can
+	// answer — the table's own empty state and the field errors say why.
+	const rangeIsUsable = !rangeIsBackwards && !rangeHasInvalidDate;
+
 	function clearFilters() {
 		setResult("all");
 		setFrom("");
@@ -279,19 +306,63 @@ export function SubmittedTestsTable({
 				) : null}
 			</div>
 
-			{/* Both bounds are inclusive on the server, so this is worth saying:
-			    a WP asking for the 1st to the 31st gets the 31st. */}
-			<p className="text-[12px] text-muted-foreground">
-				{rangeIsBackwards
-					? "The end of the range comes before its start."
-					: "Both dates are included in the range."}
-			</p>
+			{/* The statement row: quick periods on the left, the download on the
+			    right. Each period only fills the two date boxes — the boxes stay
+			    the single source of the range, so a preset can be adjusted by
+			    hand afterwards like any typed date. */}
+			<div className="-mt-1 flex flex-wrap items-center justify-between gap-3">
+				<fieldset
+					aria-label="Quick periods"
+					className="flex min-w-0 flex-wrap items-center gap-2"
+				>
+					{periods.map((period) => {
+						const active = activePeriod?.key === period.key;
+
+						return (
+							<Button
+								key={period.key}
+								variant="outline"
+								size="xs"
+								aria-pressed={active}
+								onClick={() => applyPeriod(period)}
+								className={
+									active
+										? "border-accent bg-accent text-accent-foreground hover:bg-accent"
+										: undefined
+								}
+							>
+								{period.label}
+							</Button>
+						);
+					})}
+				</fieldset>
+
+				{/* Takes the same filters the query above does, so what downloads
+				    is what the table holds — every page of it, as the count on
+				    the button says. */}
+				<SubmittedTestsExportButton
+					filters={{
+						result: result === "all" ? undefined : (result as SubmissionResult),
+						from: fromIso ?? undefined,
+						to: toIso ?? undefined,
+					}}
+					count={rangeIsUsable && data ? total : undefined}
+					disabled={
+						!rangeIsUsable ||
+						!data ||
+						isError ||
+						isPlaceholderData ||
+						total === 0
+					}
+				/>
+			</div>
 
 			<div className="overflow-hidden rounded-lg border border-border bg-card shadow-[var(--shadow-card)]">
 				<Table className="whitespace-nowrap">
 					<TableHeader>
 						<TableRow>
 							<TableHead>BIN</TableHead>
+							<TableHead>Customer</TableHead>
 							<TableHead>BFA type</TableHead>
 							<TableHead>Test date</TableHead>
 							<TableHead>Result</TableHead>
@@ -386,13 +457,7 @@ export function SubmittedTestsTable({
 				</Table>
 			</div>
 
-			<div className="flex flex-wrap items-center justify-between gap-3">
-				<p className="text-[13px] text-muted-foreground">
-					{isPending || isError || rangeIsBackwards
-						? " "
-						: `${total} ${total === 1 ? "submitted test" : "submitted tests"}`}
-				</p>
-
+			<div className="flex flex-wrap items-center justify-end gap-3">
 				{data && data.pageCount > 1 ? (
 					<div className="flex items-center gap-2">
 						<Button
@@ -460,6 +525,13 @@ function SubmissionRow({
 						</span>
 					)}
 				</div>
+			</TableCell>
+			{/* Whoever occupied the asset on the test date — the same name the
+			    CSV statement puts on this line. */}
+			<TableCell>
+				{submission.customerName ?? (
+					<span className="text-muted-foreground">—</span>
+				)}
 			</TableCell>
 			<TableCell className="text-muted-foreground">
 				{submission.bfaType}

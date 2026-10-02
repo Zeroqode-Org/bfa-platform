@@ -219,14 +219,94 @@ of this — a failed draft sends nothing and appears on no list. And because the
 correction path short-circuits on a save that changed nothing, a no-op save
 schedules nothing either.
 
+## Exporting a statement
+
+The monthly statement (PRD § 6.12) is not a screen of its own. It is this
+list, as a file. Browsing the statement on screen and opening one of its tests
+is the list and the document view above; one row under the filters makes it a
+statement — quick periods on the left, the download on the right:
+
+- **Quick periods** under the filters — *This month*, *Last month*, *Year to
+  date*. Each only fills the *Tested from* / *Tested to* boxes, so the boxes
+  stay the one source of the range and a preset can be adjusted by hand; any
+  other range works the same way, the way a bank lets you choose a custom
+  statement period. The periods are Hawaii calendar months, not UTC's or the
+  browser's — at 3pm on the 31st in Honolulu it is already the 1st in UTC.
+  *This month* and *Year to date* end today; *Last month* is the closed month.
+  The matching button is marked pressed while the boxes hold exactly its range.
+- **Download CSV (n)** downloads every test the current filters match — result
+  filter and range — across every page, and the count on the button (the
+  list's own total) says so, rather than leaving a reader to guess whether it
+  is the page on screen.
+
+The table also carries a **Customer** column, by the same
+customer-on-the-test-date rule as the file (below), so what a WP checks before
+downloading names the same people the CSV will.
+
+The button is disabled while a date box holds something that is not a date,
+while the range runs backwards, and when nothing matched. On demand only —
+nothing is generated on a schedule; the automated monthly PDF emailed to WP
+admins is deferred (PRD § 12).
+
+### Columns
+
+BIN, Customer name, Service address, BFA type, Test date (`MM/DD/YYYY`),
+Result, Certifier — the build plan's set, with BIN first because it is what a
+reader looks a test up by, declared once in
+`STATEMENT_COLUMNS` (`packages/api/src/lib/statement-columns.ts`). Adding a
+field is one entry there; the header and every row read from the same list.
+
+BIN falls back to what the certifier typed when the submission never resolved
+to an asset, as it does in the table. An unresolved test is in the statement
+with its customer and address blank rather than missing from it.
+
+### The customer is whoever occupied the asset on the test date
+
+Not whoever occupies it today. A statement for last spring has to name who had
+the property last spring, even if it has changed hands since. The name is read
+from `customer_assignments` for the test date; on a changeover day — the old
+row closes and the new one opens on the same date — the newer occupant wins.
+
+`bfa_assets.current_customer_id` is used only for an asset with **no**
+occupancy history at all. An asset whose history shows nobody on the test date
+gets a blank name: borrowing today's occupant would put a test on a statement
+line of somebody who never had it. The customer join is tenant-scoped in its
+`ON` clause, like the asset join, so a crossed pointer reads as a blank name
+rather than another purveyor's customer.
+
+### How the file is served
+
+`GET /api/wp/submitted-tests/export?result=&from=&to=` is plumbing around
+`submittedTests.exportSubmittedTests`, called through `createCaller` with the
+same context the tRPC route builds — session, impersonation, `wpProcedure`, the
+input rules and the audit line are that procedure's. Its `where` is built by
+the same `submittedTestsMatching` function as the list's, so the table and the
+download cannot drift into different answers.
+
+- **Strict input.** An unknown query parameter is refused, not dropped — a
+  misspelt bound dropped silently would widen the statement.
+- **Bounded, loudly.** More than 5,000 matching tests is refused with
+  *"narrow the date range and export it in parts"* (HTTP 413) rather than
+  returning the first 5,000, because a statement missing its tail looks exactly
+  like a complete one.
+- **Spreadsheet-safe.** RFC 4180 quoting, CRLF line endings, a UTF-8 byte-order
+  mark so Excel opens Hawaiian names as written, and any cell starting with
+  `=`, `+`, `-`, `@`, tab or CR prefixed with `'` so a typed value cannot run
+  as a formula (CSV injection).
+- The file is named for its period — `submitted-tests_2027-03-01_2027-03-31.csv`,
+  `all` for an open bound — and served `no-store`.
+- The screen fetches it rather than linking to it, so a refusal is shown under
+  the button in the server's words instead of as a failed browser download.
+
 ## Procedures
 
 | Procedure | Who | What it does |
 |---|---|---|
-| `listSubmittedTests` | all three WP roles | One page of the caller's own purveyor's submitted tests, cross-certifier. Optional result filter and inclusive `from`/`to` bounds on `test_date`, narrowing together. |
+| `listSubmittedTests` | all three WP roles | One page of the caller's own purveyor's submitted tests, cross-certifier. Optional result filter and inclusive `from`/`to` bounds on `test_date`, narrowing together. Each row carries the customer on its test date. |
 | `getSubmittedTest` | all three WP roles | One submitted row in the caller's purveyor, or the same not-found a draft and a foreign id get. |
 | `updateSubmittedTest` | Admin, SubAdmin | Corrects the record, stamps `edited_by_wp_profile_id`, logs `test_submission_corrected`. |
 | `linkSubmissionAsset` | Admin, SubAdmin | Attaches an asset to an unresolved submission, logs `test_submission_asset_linked`. |
+| `exportSubmittedTests` | all three WP roles | Every row the list's filters match, unpaged, for the CSV statement; refuses past 5,000 rows; logs `submitted_tests_exported`. |
 
 The list orders by `test_date DESC NULLS LAST`, then `created_at DESC`, then
 `id`. Nulls last because a submission missing a test date is not the most recent
@@ -258,6 +338,14 @@ tenant.
 The link event carries both BINs — the asset's and what the certifier typed —
 because it is the write that decides which physical valve a test belongs to, and
 those are the two values somebody re-checking the decision needs.
+
+The CSV export is a read, but it takes a tenant's customer names and addresses
+off the platform in bulk, so it leaves a line too — the filters and the row
+count, never the rows:
+
+```json
+{"event":"submitted_tests_exported","actor_id":"…","effective_profile_id":"…","wp_id":"…","from":"2027-03-01","to":"2027-03-31","result":null,"row_count":212,"timestamp":"…"}
+```
 
 There is no audit-log screen. Per PRD § 9 there is none in v1; the data exists
 if a visible activity feed gets added later.
@@ -371,8 +459,10 @@ breaks both halves quietly.
 | Suite | Runs under | Covers |
 |---|---|---|
 | `packages/api/src/lib/submission-input.test.ts` | `npm test` | The input rules with no database: emptied fields, a backwards date range, a client-supplied tenant or actor, the no-op comparison, the marker parser. |
-| `apps/web/src/components/wp/submitted-tests-table.test.tsx` | `npm test` | List states and filters, the overridden-field flag, inline save, the link flow, and the Employee's read-only document. |
-| `packages/api/src/routers/submitted-tests.test.ts` | `npm run test:db` | The application's tenant boundary: role refusals, cross-tenant reads and writes, draft exclusion, filters, paging, attribution and logging, foreign-asset and foreign-submission refusal. |
+| `apps/web/src/components/wp/submitted-tests-table.test.tsx`, `statement-periods.test.ts` | `npm test` | List states and filters, the quick periods (Hawaii months, leap years, January), the customer column and the CSV button, the overridden-field flag, inline save, the link flow, and the Employee's read-only document. |
+| `packages/api/src/lib/statement-columns.test.ts` | `npm test` | The CSV format: column order, US dates, the typed-BIN fallback, quoting, the formula guard, the byte-order mark, the file name. |
+| `apps/web/src/app/api/wp/submitted-tests/export/route.test.ts` | `npm test` | The download route as plumbing: headers and file name, every parameter passed through, a refreshed session cookie kept, refusals mapped to 400/401/403/413, an unexpected failure saying nothing. |
+| `packages/api/src/routers/submitted-tests.test.ts` | `npm run test:db` | The application's tenant boundary: role refusals, cross-tenant reads and writes, draft exclusion, filters, paging, attribution and logging, foreign-asset and foreign-submission refusal; the export's tenancy, parity with the list, customer on the test date (changeover day, unoccupied gap, no-history fallback, crossed link) and row limit. |
 | `packages/db/src/test-submissions-rls.test.ts` | `npm run test:db` | The row policies as a second, independent boundary — two purveyors, a draft, an unresolved row, a blocked profile, a certifier, the Admin/SubAdmin/Employee write split, the asset-tenancy clause in both directions, and no-op suppression. |
 
 The two database suites seed deliberately interchangeable rows in both tenants —
@@ -389,8 +479,6 @@ Explicitly out of scope here, and each has its own owner:
   results-document layout it brings with it.
 - **PDF generation and storage** — the certifier's Submitted PDFs archive
   (§ 6.3) and whatever renders the document.
-- **The monthly CSV export** (§ 6.12), which reads submitted tests over a date
-  range and defines its column set in one place.
 - **The failure workflow and 30-day fail list** (§ 6.8). A failed test joins the
   fail list the instant it is *submitted*; correcting a result on this screen
   will need to interact with that when it ships.
