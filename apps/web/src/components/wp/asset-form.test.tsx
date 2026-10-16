@@ -12,6 +12,7 @@ import {
 	AddAssetForm,
 	assetToFormValues,
 	buildAssetPayload,
+	DEFAULT_ASSEMBLY_LOCATION,
 	EditAssetForm,
 	emptyAssetValues,
 } from "./asset-form";
@@ -173,39 +174,66 @@ describe("AddAssetForm", () => {
 		});
 	});
 
-	it("opens a new asset with the BFA type unanswered", () => {
+	it("opens a new asset with RP and the usual assembly location filled in", () => {
+		// The commonest answers, already there (WP/Admin feedback).
 		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
 
 		const type = screen.getByLabelText("BFA type");
-		expect(type.textContent).toContain("Select…");
-		expect(type.textContent).not.toContain("RP");
-		expect(type.hasAttribute("data-placeholder")).toBe(true);
+		expect(type.textContent).toContain("RP");
+		expect(type.textContent).not.toContain("Select…");
+		expect(
+			screen.getByLabelText<HTMLInputElement>("Assembly location").value,
+		).toBe(DEFAULT_ASSEMBLY_LOCATION);
+		expect(DEFAULT_ASSEMBLY_LOCATION).toBe(
+			"After meter prior to any tees or branches",
+		);
 	});
 
-	it("blocks a missing BFA type at the field and clears the error once one is chosen", () => {
+	it("sends the prefilled answers when they are left alone", () => {
 		const onSubmit = vi.fn();
 		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
 
-		fillRequired({ bfaType: null });
+		fillRequired({
+			bfaType: null,
+			assemblyLocation: DEFAULT_ASSEMBLY_LOCATION,
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				bfaType: "RP",
+				assemblyLocation: DEFAULT_ASSEMBLY_LOCATION,
+			}),
+		);
+	});
+
+	it("lets both prefilled answers be changed", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		fillRequired({
+			bfaType: "DCDA",
+			assemblyLocation: "Meter pit, north side",
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				bfaType: "DCDA",
+				assemblyLocation: "Meter pit, north side",
+			}),
+		);
+	});
+
+	it("still requires an assembly location once the prefilled one is cleared", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+		fillRequired({ assemblyLocation: "" });
 		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
-		const type = screen.getByLabelText("BFA type");
-		const message = screen.getByText("Select a BFA type.");
-		expect(message.getAttribute("data-slot")).toBe("field-error");
-		expect(type.getAttribute("aria-invalid")).toBe("true");
-		expect(type.getAttribute("aria-describedby")).toBe(message.id);
-		expect(document.activeElement).toBe(type);
-
-		chooseBfaType("DCDA");
-
-		expect(screen.queryByText("Select a BFA type.")).toBeNull();
-		expect(type.getAttribute("aria-invalid")).toBeNull();
-
-		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
-		expect(onSubmit).toHaveBeenCalledWith(
-			expect.objectContaining({ bfaType: "DCDA" }),
-		);
+		expect(screen.getByText("An assembly location is required.")).toBeTruthy();
 	});
 
 	it("keeps save available and names every missing answer when pressed", () => {
@@ -223,10 +251,10 @@ describe("AddAssetForm", () => {
 		expect(
 			screen.getAllByRole("alert").map((node) => node.textContent),
 		).toEqual([
+			// The BFA type and the assembly location open filled in, so they are
+			// not among the missing.
 			"A BIN is required.",
-			"Select a BFA type.",
 			"A service address is required.",
-			"An assembly location is required.",
 			"A make is required.",
 			"A model is required.",
 			"A serial number is required.",

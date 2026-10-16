@@ -43,8 +43,9 @@ import { BFA_TYPE_LABELS } from "./asset-types";
  * `annualTestDate` is the date as displayed, `MM/DD/YYYY`; the API's
  * `YYYY-MM-DD` exists only on the way in and out.
  *
- * `bfaType` may be `""`: a new asset opens with its type unanswered, so the
- * assembly type is always one somebody chose rather than the first in the list.
+ * `bfaType` may be `""` — the type before anything is chosen. The add form
+ * does not open that way any more (see `newAssetValues`), but the guard stays:
+ * `""` is never sent to the procedure's enum.
  */
 export type AssetFormValues = {
 	bin: string;
@@ -80,6 +81,25 @@ export const emptyAssetValues: AssetFormValues = {
 	serialNumber: "",
 	size: "",
 	annualTestDate: "",
+};
+
+/**
+ * Where most assemblies sit, as the purveyor phrases it (WP/Admin feedback).
+ * Prefilled on a new asset and editable like any typed value.
+ */
+export const DEFAULT_ASSEMBLY_LOCATION =
+	"After meter prior to any tees or branches";
+
+/**
+ * What **Add asset** opens with. The client asked for the commonest answers to
+ * be there already — RP is the usual type, and the location above the usual
+ * placement — so registering a typical assembly is fewer keystrokes. Both stay
+ * ordinary editable values: nothing marks them as defaults once saved.
+ */
+export const newAssetValues: AssetFormValues = {
+	...emptyAssetValues,
+	bfaType: "RP",
+	assemblyLocation: DEFAULT_ASSEMBLY_LOCATION,
 };
 
 /** An existing row as form values. Nullable columns become empty strings. */
@@ -450,6 +470,7 @@ export function AddAssetForm({
 	return (
 		<AssetForm
 			{...props}
+			initialValues={newAssetValues}
 			submitLabel="Add asset"
 			pendingLabel="Adding…"
 			onSubmit={(values) => onSubmit(buildAssetPayload(values))}

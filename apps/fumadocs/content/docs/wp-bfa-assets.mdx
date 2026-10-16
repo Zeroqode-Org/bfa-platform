@@ -66,11 +66,13 @@ not become a row.
 
 ### What the form checks, and what the server checks
 
-The same required answers, in both places. The BFA type opens unanswered on the
-add form — *Select…*, not a pre-chosen *RP* — and saving without one puts
-*Select a BFA type.* under the select; the edit form keeps the stored type
-selected, and `""` is never sent to `createAssetInput`, whose enum check is
-unchanged. The form trims before it
+The same required answers, in both places. **Add asset** opens with the
+commonest answers already filled in (WP/Admin feedback): BFA type *RP* and
+assembly location *After meter prior to any tees or branches*
+(`newAssetValues` in `asset-form.tsx`). Both are ordinary editable values —
+change them, or clear the location and the form asks for one like any other
+required field. The edit form keeps whatever is stored, and `""` is never sent
+to `createAssetInput`, whose enum check is unchanged. The form trims before it
 judges, so a BIN of spaces reads as empty exactly as it does in
 `createAssetInput`. The save button is never disabled for a missing answer:
 pressing it reveals an inline message under each field that is still missing or
