@@ -44,7 +44,7 @@ export function stepLabels(bfaType: BfaType): string[] {
 	const { sections } = WIZARD_TEST_SPEC[bfaType];
 	const test =
 		sections.length > 1
-			? // "DA TEST #2 — BYPASS ASSEMBLY" → "DA TEST #2"
+			? // "DA TEST 2 — BYPASS ASSEMBLY" → "DA TEST 2"
 				sections.map((section) => section.title?.split(" — ")[0] ?? "Test")
 			: ["Test"];
 

@@ -139,6 +139,8 @@ async function seedSubmission({
 	submittedBinText = null,
 	wizardData = { fixtureKey: "submission-fixture" },
 	overriddenFields = null,
+	signatureMethod = null,
+	signatureData = null,
 	id = randomUUID(),
 }: {
 	waterPurveyorId: string;
@@ -150,13 +152,17 @@ async function seedSubmission({
 	submittedBinText?: string | null;
 	wizardData?: Record<string, unknown>;
 	overriddenFields?: string[] | null;
+	signatureMethod?: string | null;
+	signatureData?: string | null;
 	id?: string;
 }) {
 	await pool.query(
 		`insert into test_submissions
 		   (id, bfa_asset_id, certifier_id, water_purveyor_id, status, bfa_type,
-		    wizard_data, overridden_fields, submitted_bin_text, test_date, test_result)
-		 values ($1, $2, $3, $4, $5::submission_status, $6::bfa_type, $7::jsonb, $8::jsonb, $9, $10, $11::test_result)`,
+		    wizard_data, overridden_fields, submitted_bin_text, test_date, test_result,
+		    signature_method, signature_data)
+		 values ($1, $2, $3, $4, $5::submission_status, $6::bfa_type, $7::jsonb, $8::jsonb, $9, $10, $11::test_result,
+		         $12::signature_method, $13)`,
 		[
 			id,
 			bfaAssetId,
@@ -169,6 +175,8 @@ async function seedSubmission({
 			submittedBinText,
 			testDate,
 			testResult,
+			signatureMethod,
+			signatureData,
 		],
 	);
 
@@ -882,7 +890,12 @@ describeDb("submitted-test procedures", () => {
 		});
 
 		it("emits a structured audit line naming the actor, tenant and changed fields", async () => {
-			const target = await seedSubmission({ waterPurveyorId: wpA });
+			// Linked, so typing a BIN corrects the record rather than registering
+			// a new assembly — that path has its own suite below.
+			const target = await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: assetA,
+			});
 			const row = await callerFor(ids.adminA).submittedTests.getSubmittedTest({
 				id: target,
 			});
@@ -949,6 +962,53 @@ describeDb("submitted-test procedures", () => {
 
 			expect(result.editedByWpProfileId).toBeNull();
 			expect(result.updatedAt).toEqual(row.updatedAt);
+			expect(
+				lines.find((line) => line.event === "test_submission_corrected"),
+			).toBeUndefined();
+		});
+
+		it("stores the disclaimer, never an image, when the owner was absent", async () => {
+			// The PDF prints the signature column as the disclaimer's text for an
+			// owner-absent test, so an image left there would print as base64.
+			const target = await seedSubmission({ waterPurveyorId: wpA });
+			const row = await callerFor(ids.adminA).submittedTests.getSubmittedTest({
+				id: target,
+			});
+
+			const saved = await callerFor(
+				ids.adminA,
+			).submittedTests.updateSubmittedTest(
+				asCorrection(row, {
+					signatureMethod: "owner_absent",
+					signatureData: "data:image/png;base64,AAAA",
+				}),
+			);
+
+			expect(saved.signatureData).toMatch(/^Owner was not present/);
+			expect(
+				(saved.wizardData as Record<string, unknown>).signOffDisclaimer,
+			).toBe(saved.signatureData);
+		});
+
+		it("leaves a stored sign-off alone on a save that does not change the method", async () => {
+			// A row stored before the sign-off rule: owner absent, yet an image.
+			// Saving it untouched must not rewrite it, re-attribute it or log it.
+			const target = await seedSubmission({
+				waterPurveyorId: wpA,
+				signatureMethod: "owner_absent",
+				signatureData: "data:image/png;base64,LEGACY",
+			});
+			const row = await callerFor(ids.adminA).submittedTests.getSubmittedTest({
+				id: target,
+			});
+			const lines = captureLogs();
+
+			const result = await callerFor(
+				ids.adminA,
+			).submittedTests.updateSubmittedTest(asCorrection(row));
+
+			expect(result.editedByWpProfileId).toBeNull();
+			expect(result.signatureData).toBe("data:image/png;base64,LEGACY");
 			expect(
 				lines.find((line) => line.event === "test_submission_corrected"),
 			).toBeUndefined();
@@ -1084,6 +1144,467 @@ describeDb("submitted-test procedures", () => {
 				bin: "SHARED-SUB-BIN",
 				submitted_bin_text: "HRB-?? 0142",
 			});
+		});
+	});
+
+	describe("assigning a BIN to an unlinked test", () => {
+		/** A no-BIN test as the wizard stores one: assembly and customer answers. */
+		const noBinAnswers = {
+			assemblyServiceAddress: "12 Kalakaua Ave",
+			assemblyMake: "Watts",
+			assemblyModel: "LF909",
+			assemblySerialNumber: "SN-NOBIN",
+			assemblySize: "1.5",
+			assemblyLocationText: "Front yard",
+			customerName: "Leilani Kahale",
+			customerEmail: "leilani@no-bin.test",
+		};
+
+		async function seedNoBinTest(
+			overrides: Partial<Parameters<typeof seedSubmission>[0]> = {},
+		) {
+			const id = await seedSubmission({
+				waterPurveyorId: wpA,
+				wizardData: noBinAnswers,
+				...overrides,
+			});
+
+			return callerFor(ids.adminA).submittedTests.getSubmittedTest({ id });
+		}
+
+		async function assetsWithBin(bin: string) {
+			const { rows } = await pool.query(
+				"select * from bfa_assets where water_purveyor_id = $1 and bin = $2",
+				[wpA, bin],
+			);
+
+			return rows;
+		}
+
+		// Inside this block rather than the suite's own hooks, because these tests
+		// leave assets, customers, occupancies and jobs behind, and those hold
+		// foreign keys the suite's per-test submission cleanup would trip over.
+		afterEach(async () => {
+			await pool.query(
+				"delete from scheduled_jobs where water_purveyor_id = $1",
+				[wpA],
+			);
+			await pool.query(
+				"delete from test_submissions where id = any($1::uuid[])",
+				[created],
+			);
+			created = [];
+			await pool.query(
+				`delete from customer_assignments
+				 where bfa_asset_id in (select id from bfa_assets where water_purveyor_id = $1 and id <> $2)`,
+				[wpA, assetA],
+			);
+			await pool.query(
+				"delete from bfa_assets where water_purveyor_id = $1 and id <> $2",
+				[wpA, assetA],
+			);
+			await pool.query(
+				"delete from customers where water_purveyor_id = $1 and email like '%@no-bin.test'",
+				[wpA],
+			);
+		});
+
+		it("registers the asset from the test and links the test to it", async () => {
+			const row = await seedNoBinTest();
+
+			const saved = await callerFor(
+				ids.adminA,
+			).submittedTests.updateSubmittedTest(
+				asCorrection(row, { submittedBinText: "NOBIN-5000" }),
+			);
+
+			const [asset] = await assetsWithBin("NOBIN-5000");
+
+			expect(asset).toMatchObject({
+				bfa_type: "RP",
+				service_address: "12 Kalakaua Ave",
+				make: "Watts",
+				model: "LF909",
+				serial_number: "SN-NOBIN",
+				size: "1.5",
+				assembly_location: "Front yard",
+				// The seeded test date is 2027-04-01; the next test is a year on.
+				annual_test_date: "2028-04-01",
+			});
+			expect(saved).toMatchObject({
+				bfaAssetId: asset.id,
+				bin: "NOBIN-5000",
+				serviceAddress: "12 Kalakaua Ave",
+				submittedBinText: "NOBIN-5000",
+				editedByWpProfileId: ids.adminA,
+			});
+		});
+
+		it("creates the wizard's customer and opens their occupancy", async () => {
+			const row = await seedNoBinTest();
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row, { submittedBinText: "NOBIN-5001" }),
+			);
+
+			const [asset] = await assetsWithBin("NOBIN-5001");
+			const { rows: customerRows } = await pool.query(
+				"select id, name, email from customers where water_purveyor_id = $1 and email = $2",
+				[wpA, "leilani@no-bin.test"],
+			);
+			const { rows: occupancy } = await pool.query(
+				"select customer_id, end_date from customer_assignments where bfa_asset_id = $1",
+				[asset.id],
+			);
+
+			expect(customerRows).toHaveLength(1);
+			expect(customerRows[0]).toMatchObject({ name: "Leilani Kahale" });
+			expect(asset.current_customer_id).toBe(customerRows[0].id);
+			expect(occupancy).toEqual([
+				{ customer_id: customerRows[0].id, end_date: null },
+			]);
+		});
+
+		it("attaches an existing customer matched by email rather than creating one", async () => {
+			const { rows } = await pool.query(
+				`insert into customers (water_purveyor_id, name, email)
+				 values ($1, 'Kahale Family Trust', 'leilani@no-bin.test') returning id`,
+				[wpA],
+			);
+			const row = await seedNoBinTest({
+				wizardData: {
+					...noBinAnswers,
+					customerEmail: "  Leilani@NO-BIN.test ",
+				},
+			});
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row, { submittedBinText: "NOBIN-5002" }),
+			);
+
+			const [asset] = await assetsWithBin("NOBIN-5002");
+			const { rows: count } = await pool.query(
+				"select count(*)::int as n from customers where water_purveyor_id = $1 and email like '%@no-bin.test'",
+				[wpA],
+			);
+
+			expect(asset.current_customer_id).toBe(rows[0].id);
+			expect(count[0].n).toBe(1);
+		});
+
+		it("registers the asset with no customer when the test recorded no email", async () => {
+			const row = await seedNoBinTest({
+				wizardData: { ...noBinAnswers, customerEmail: "" },
+			});
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row, { submittedBinText: "NOBIN-5003" }),
+			);
+
+			const [asset] = await assetsWithBin("NOBIN-5003");
+
+			expect(asset.current_customer_id).toBeNull();
+		});
+
+		it("refuses a BIN the purveyor already uses, and writes nothing", async () => {
+			const row = await seedNoBinTest();
+
+			await expect(
+				callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+					asCorrection(row, {
+						submittedBinText: "SHARED-SUB-BIN",
+						testResult: "fail",
+					}),
+				),
+			).rejects.toMatchObject({ code: "CONFLICT" });
+
+			const { rows } = await pool.query(
+				"select bfa_asset_id, submitted_bin_text, test_result from test_submissions where id = $1",
+				[row.id],
+			);
+
+			expect(rows[0]).toEqual({
+				bfa_asset_id: null,
+				submitted_bin_text: null,
+				test_result: "pass",
+			});
+			expect(await assetsWithBin("SHARED-SUB-BIN")).toHaveLength(1);
+		});
+
+		it("refuses a test with no service address, and writes nothing", async () => {
+			const row = await seedNoBinTest({
+				wizardData: { ...noBinAnswers, assemblyServiceAddress: "" },
+			});
+
+			await expect(
+				callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+					asCorrection(row, { submittedBinText: "NOBIN-5004" }),
+				),
+			).rejects.toThrow(/service address/i);
+
+			expect(await assetsWithBin("NOBIN-5004")).toHaveLength(0);
+		});
+
+		it("keeps next year's reminder scheduled after a passing test", async () => {
+			// A linked pass cancels the asset's open notice jobs. Scheduled before
+			// the link, the reminder this test's own date set would be cancelled.
+			const row = await seedNoBinTest();
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row, { submittedBinText: "NOBIN-5005" }),
+			);
+
+			const [asset] = await assetsWithBin("NOBIN-5005");
+			const { rows } = await pool.query(
+				"select job_type, status from scheduled_jobs where bfa_asset_id = $1",
+				[asset.id],
+			);
+
+			expect(rows).toEqual([{ job_type: "reminder", status: "pending" }]);
+		});
+
+		it("corrects an unlinked test whose certifier-typed BIN is taken, without touching the BIN", async () => {
+			// The BIN was on the row before this save, so this is a correction of
+			// another field, not an asset registration — and not refused for the BIN.
+			const row = await seedNoBinTest({ submittedBinText: "SHARED-SUB-BIN" });
+
+			const saved = await callerFor(
+				ids.adminA,
+			).submittedTests.updateSubmittedTest(
+				asCorrection(row, { testResult: "fail" }),
+			);
+
+			expect(saved).toMatchObject({ bfaAssetId: null, testResult: "fail" });
+			expect(await assetsWithBin("SHARED-SUB-BIN")).toHaveLength(1);
+		});
+
+		it("creates nothing on a save that changes nothing, BIN or not", async () => {
+			const row = await seedNoBinTest({ submittedBinText: "NOBIN-5008" });
+
+			const saved = await callerFor(
+				ids.adminA,
+			).submittedTests.updateSubmittedTest(asCorrection(row));
+
+			expect(saved.bfaAssetId).toBeNull();
+			expect(saved.editedByWpProfileId).toBeNull();
+			expect(await assetsWithBin("NOBIN-5008")).toHaveLength(0);
+		});
+
+		it("leaves a linked test's BIN text a plain correction", async () => {
+			const target = await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: assetA,
+				wizardData: noBinAnswers,
+			});
+			const row = await callerFor(ids.adminA).submittedTests.getSubmittedTest({
+				id: target,
+			});
+
+			const saved = await callerFor(
+				ids.adminA,
+			).submittedTests.updateSubmittedTest(
+				asCorrection(row, { submittedBinText: "NOBIN-5006" }),
+			);
+
+			expect(saved.bfaAssetId).toBe(assetA);
+			expect(await assetsWithBin("NOBIN-5006")).toHaveLength(0);
+		});
+
+		it("logs the new asset and the link it made", async () => {
+			const row = await seedNoBinTest();
+			const lines = captureLogs();
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row, { submittedBinText: "NOBIN-5007" }),
+			);
+
+			const [asset] = await assetsWithBin("NOBIN-5007");
+
+			expect(
+				lines.find((line) => line.event === "bfa_asset_created"),
+			).toMatchObject({
+				actor_id: ids.adminA,
+				wp_id: wpA,
+				asset_id: asset.id,
+				bin: "NOBIN-5007",
+				source: "no_bin_submission",
+			});
+			expect(
+				lines.find((line) => line.event === "test_submission_asset_linked"),
+			).toMatchObject({
+				submission_id: row.id,
+				bfa_asset_id: asset.id,
+				asset_created: true,
+			});
+		});
+	});
+
+	describe("a correction carried onto the asset", () => {
+		const syncAsset = randomUUID();
+
+		beforeEach(async () => {
+			await pool.query(
+				`insert into bfa_assets (id, water_purveyor_id, bin, bfa_type, service_address, make, annual_test_date)
+				 values ($1, $2, 'SYNC-BIN', 'RP', '1 Old Road', 'Watts', '2028-01-01')`,
+				[syncAsset, wpA],
+			);
+		});
+
+		afterEach(async () => {
+			await pool.query(
+				"delete from scheduled_jobs where water_purveyor_id = $1",
+				[wpA],
+			);
+			await pool.query(
+				"delete from test_submissions where id = any($1::uuid[])",
+				[created],
+			);
+			created = [];
+			await pool.query(
+				"delete from customer_assignments where bfa_asset_id = $1",
+				[syncAsset],
+			);
+			await pool.query("delete from bfa_assets where id = $1", [syncAsset]);
+			await pool.query(
+				"delete from customers where water_purveyor_id = $1 and email like '%@sync.test'",
+				[wpA],
+			);
+		});
+
+		async function seedLinked(
+			overrides: Partial<Parameters<typeof seedSubmission>[0]> = {},
+		) {
+			const id = await seedSubmission({
+				waterPurveyorId: wpA,
+				bfaAssetId: syncAsset,
+				wizardData: {
+					assemblyServiceAddress: "1 Old Road",
+					assemblyMake: "Watts",
+					customerName: "Kai Lono",
+					customerEmail: "kai@sync.test",
+				},
+				...overrides,
+			});
+
+			return callerFor(ids.adminA).submittedTests.getSubmittedTest({ id });
+		}
+
+		async function syncedAsset() {
+			const { rows } = await pool.query(
+				"select * from bfa_assets where id = $1",
+				[syncAsset],
+			);
+
+			return rows[0];
+		}
+
+		it("writes the details changed on the asset's latest test onto the asset", async () => {
+			const row = await seedLinked();
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row, {
+					bfaType: "DC",
+					wizardData: {
+						...(row.wizardData as Record<string, string>),
+						assemblyMake: "Febco",
+					},
+				}),
+			);
+
+			expect(await syncedAsset()).toMatchObject({
+				bfa_type: "DC",
+				make: "Febco",
+				// Not changed in this save, so not written.
+				service_address: "1 Old Road",
+			});
+		});
+
+		it("leaves the asset alone when an older test is corrected", async () => {
+			const older = await seedLinked({ testDate: "2026-01-01" });
+			await seedLinked({ testDate: "2027-01-01" });
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(older, {
+					wizardData: {
+						...(older.wizardData as Record<string, string>),
+						assemblyMake: "Febco",
+					},
+				}),
+			);
+
+			expect((await syncedAsset()).make).toBe("Watts");
+		});
+
+		it("moves the asset to the customer a changed email names", async () => {
+			const row = await seedLinked();
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row, {
+					wizardData: {
+						...(row.wizardData as Record<string, string>),
+						customerName: "Mele Kahananui",
+						customerEmail: "mele@sync.test",
+					},
+				}),
+			);
+
+			const asset = await syncedAsset();
+			const { rows } = await pool.query(
+				"select id, name from customers where water_purveyor_id = $1 and email = 'mele@sync.test'",
+				[wpA],
+			);
+			const { rows: occupancy } = await pool.query(
+				"select customer_id, end_date from customer_assignments where bfa_asset_id = $1",
+				[syncAsset],
+			);
+
+			expect(rows[0]).toMatchObject({ name: "Mele Kahananui" });
+			expect(asset.current_customer_id).toBe(rows[0].id);
+			expect(occupancy).toEqual([{ customer_id: rows[0].id, end_date: null }]);
+		});
+
+		it("does not move the asset back when only the customer's name changed", async () => {
+			// The asset was moved to another occupant on its own page after the
+			// test. The test still carries the old occupant's email; a name-only
+			// correction must not act on it.
+			const { rows } = await pool.query(
+				`insert into customers (water_purveyor_id, name, email)
+				 values ($1, 'Pono Ohana', 'pono@sync.test') returning id`,
+				[wpA],
+			);
+			await pool.query(
+				"update bfa_assets set current_customer_id = $1 where id = $2",
+				[rows[0].id, syncAsset],
+			);
+			const row = await seedLinked();
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row, {
+					wizardData: {
+						...(row.wizardData as Record<string, string>),
+						customerName: "Kai Lono Jr.",
+					},
+				}),
+			);
+
+			const { rows: created } = await pool.query(
+				"select id from customers where water_purveyor_id = $1 and email = 'kai@sync.test'",
+				[wpA],
+			);
+
+			expect((await syncedAsset()).current_customer_id).toBe(rows[0].id);
+			expect(created).toHaveLength(0);
+		});
+
+		it("does not touch the asset on a save that changes nothing", async () => {
+			const row = await seedLinked();
+			const before = await syncedAsset();
+
+			await callerFor(ids.adminA).submittedTests.updateSubmittedTest(
+				asCorrection(row),
+			);
+
+			expect((await syncedAsset()).updated_at).toEqual(before.updated_at);
 		});
 	});
 

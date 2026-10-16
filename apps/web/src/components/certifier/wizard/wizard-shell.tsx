@@ -55,6 +55,13 @@ export type WizardFormState = {
 	/** The BIN text that was last looked up — what `bfaAssetId` and the prefilled data belong to. */
 	resolvedBin: string;
 	bfaAssetId: string | null;
+	/**
+	 * The type the found asset is registered as, so changing the test's type
+	 * away from it — and back — can flag and unflag `bfaType` as overwritten.
+	 * Null when no asset was found, and on a resumed draft, where only the
+	 * stored flag says whether it differed.
+	 */
+	assetBfaType: BfaType | null;
 	submittedBinText: string | null;
 	prefilledKeys: Set<string>;
 	overriddenFields: Set<string>;
@@ -99,6 +106,7 @@ function emptyForm(): WizardFormState {
 		bin: "",
 		resolvedBin: "",
 		bfaAssetId: null,
+		assetBfaType: null,
 		submittedBinText: null,
 		prefilledKeys: new Set(),
 		overriddenFields: new Set(),
@@ -137,6 +145,7 @@ function dropPrefilled(input: WizardFormState): WizardFormState {
 		bfaType: form.bfaAssetId !== null ? "RP" : form.bfaType,
 		resolvedBin: "",
 		bfaAssetId: null,
+		assetBfaType: null,
 		submittedBinText: null,
 		prefilledKeys: new Set(),
 		overriddenFields: new Set(),
@@ -184,6 +193,53 @@ function clearAssemblyData(
 		),
 		prefilledKeys: without(form.prefilledKeys),
 		overriddenFields: without(form.overriddenFields),
+	};
+}
+
+/**
+ * A found assembly's type changed on the Assembly step (client, October 2026):
+ * the register said one type and the certifier is recording another. The
+ * assembly details and the customer stay — they are still this valve — but
+ * every test answer goes, because the new type asks different questions; that
+ * reset is deliberate and unannounced, as on the first screen. `bfaType` is
+ * flagged as overwritten while it differs from the asset's; at submit the
+ * server carries it onto the asset with the other overwritten details, and
+ * the flag stays on the test as the record of the change.
+ */
+function changeFoundAssetType(
+	form: WizardFormState,
+	bfaType: BfaType,
+): WizardFormState {
+	if (bfaType === form.bfaType) return form;
+
+	const assembly = new Set<string>(Object.values(ASSEMBLY_FIELD_KEYS));
+	const cleared = clearAssemblyData(form, form.bfaType);
+	const overriddenFields = new Set(cleared.overriddenFields);
+
+	if (form.assetBfaType !== null && bfaType === form.assetBfaType) {
+		overriddenFields.delete("bfaType");
+	} else {
+		overriddenFields.add("bfaType");
+	}
+
+	return {
+		...cleared,
+		bfaType,
+		// Put the assembly details back exactly as they were, flags included.
+		wizardData: {
+			...cleared.wizardData,
+			...Object.fromEntries(
+				Object.entries(form.wizardData).filter(([key]) => assembly.has(key)),
+			),
+		},
+		prefilledKeys: new Set([
+			...cleared.prefilledKeys,
+			...[...form.prefilledKeys].filter((key) => assembly.has(key)),
+		]),
+		overriddenFields: new Set([
+			...overriddenFields,
+			...[...form.overriddenFields].filter((key) => assembly.has(key)),
+		]),
 	};
 }
 
@@ -416,6 +472,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 	}
 
 	async function handleNext() {
+		if (needsLookup) return;
 		setSavingKind("next");
 		if (stepMissingKeys(step, form).length > 0) {
 			refuse();
@@ -465,6 +522,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 				signatureMethod: form.signatureMethod as "signed" | "owner_absent",
 				signatureData: form.signatureData,
 				photoPaths: form.photoPaths,
+				overriddenFields: Array.from(form.overriddenFields),
 			});
 			await queryClient.invalidateQueries({
 				queryKey: trpc.certifier.listDrafts.queryKey(),
@@ -513,6 +571,15 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 
 	const missing = new Set(stepMissingKeys(step, form));
 	const current = stepKind(step, form.bfaType);
+	// A typed BIN must be looked up before the wizard moves on (client,
+	// October 2026): looking it up is what links the test to an existing
+	// asset, and a BIN typed but never looked up would file an unlinked test
+	// under a number the purveyor may already have. An empty BIN is a new
+	// assembly and needs no lookup.
+	const needsLookup =
+		current.kind === "identification" &&
+		form.bin.trim() !== "" &&
+		form.resolvedBin !== form.bin.trim();
 	// Once the assembly type is known the heading names it — "RPDA Test Wizard".
 	const title =
 		current.kind === "identification" && !form.bfaAssetId
@@ -522,6 +589,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 		isFirst: step === 1,
 		isLast: step >= total,
 		nextLabel: step === total - 1 ? "Preview" : "Next",
+		nextDisabled: needsLookup,
 		saving: saveDraft.isPending,
 		savingKind,
 		submitting: submitTest.isPending,
@@ -659,6 +727,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 											...base,
 											resolvedBin: bin,
 											bfaAssetId: asset?.id ?? null,
+											assetBfaType: (asset?.bfaType as BfaType) ?? null,
 											submittedBinText: asset ? null : bin,
 											bfaType: (asset?.bfaType as BfaType) ?? base.bfaType,
 											wizardData: { ...base.wizardData, ...priorWizardData },
@@ -672,7 +741,13 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 						) : null}
 
 						{current.kind === "assembly" ? (
-							<AssemblyInfoStep form={form} onAnswer={setAnswer} />
+							<AssemblyInfoStep
+								form={form}
+								onAnswer={setAnswer}
+								onTypeChange={(bfaType) =>
+									setForm((current) => changeFoundAssetType(current, bfaType))
+								}
+							/>
 						) : null}
 
 						{current.kind === "test" ? (
@@ -707,6 +782,8 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 							<ReviewStep
 								form={form}
 								wpName={active.name}
+								wpAddress={active.address ?? null}
+								wpPwsid={active.pwsid ?? null}
 								waterPurveyorId={active.id}
 							/>
 						) : null}

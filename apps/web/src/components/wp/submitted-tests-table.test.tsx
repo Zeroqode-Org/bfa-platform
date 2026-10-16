@@ -52,7 +52,21 @@ vi.mock("@/utils/trpc", () => ({
 				queryKey: () => ["assets", "listAssets"],
 			},
 		},
+		// Saving a correction can register a customer with a new asset, so the
+		// customer list is refreshed alongside the assets.
+		customers: {
+			listCustomers: {
+				queryKey: () => ["customers", "listCustomers"],
+			},
+		},
 		submittedTests: {
+			// Signed links for the document's photo thumbnails.
+			getPhotoUrls: {
+				queryOptions: (input: { id: string }) => ({
+					queryKey: ["submittedTests", "getPhotoUrls", input],
+					queryFn: () => Promise.resolve({}),
+				}),
+			},
 			listSubmittedTests: {
 				queryOptions: (input: unknown, options: Record<string, unknown>) => ({
 					...options,

@@ -27,7 +27,7 @@ export default async function Page({
 
 	return (
 		<div className="flex flex-col gap-5">
-			<PageTitle>Submitted PDFs</PageTitle>
+			<PageTitle>Submitted Tests</PageTitle>
 			<SubmissionsTable initialSubmissionId={initialSubmissionId} />
 		</div>
 	);

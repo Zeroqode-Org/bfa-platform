@@ -729,7 +729,7 @@ Build in this order — do not start the per-type blocks before the shared shell
 
 **Step 2 — Identification and prefill**
 
-6. `lookupAssetByBin` procedure — resolves a BIN within the active WP only. Returns the asset plus the field values from its most recent submitted test.
+6. `lookupAssetByBin` procedure — resolves a BIN within the active WP only. Returns the asset plus the field values from its most recent submitted test. A typed BIN must be looked up before the first screen's **Next** is enabled (client, October 2026), and typing over a looked-up BIN asks for a new lookup. An empty BIN, for a new assembly that has none yet, needs no lookup and Next is available at once. This keeps a BIN the purveyor already has from being filed as an unlinked test.
 7. BIN found: prefill assembly details from the asset and the rest of the questionnaire from the prior submission. Every prefilled field stays editable.
 8. Track overwrites: when a certifier edits a prefilled value, record the field key in `overridden_fields`. The WP must be able to see what changed, not just the final value.
 9. BIN blank or not found: unlock all downstream fields for manual entry, store what was typed in `submitted_bin_text`, leave `bfa_asset_id` null.

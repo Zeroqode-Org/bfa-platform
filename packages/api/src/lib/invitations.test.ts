@@ -364,8 +364,8 @@ describe("sendInvitationEmail", () => {
 
 		expect(delivery?.subject).toBe(INVITATION_EMAIL_SUBJECT);
 		expect(html.startsWith("<!DOCTYPE html>")).toBe(true);
-		expect(html).toContain(">Backflow Assembly Platform</td>");
-		expect(html).toContain("Sent through Backflow Assembly Platform.");
+		expect(html).toContain(">Backflow Reporter.io</td>");
+		expect(html).toContain("Sent through Backflow Reporter.io.");
 		expect(html).toContain(">Set up your account</a>");
 	});
 });
@@ -424,7 +424,7 @@ describe("renderInvitationEmail", () => {
 		});
 
 		expect(html).toContain(
-			"join the Backflow Assembly platform as a Water Purveyor Administrator.",
+			"join Backflow Reporter.io as a Water Purveyor Administrator.",
 		);
 	});
 

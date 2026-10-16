@@ -32,7 +32,10 @@ import { SUBMISSION_FIELD_LIMITS } from "./submission-field-limits";
  *
  * `bfa_asset_id` is absent too, but for a different reason: attaching an asset
  * is `linkSubmissionAsset`'s job, and that has to check the asset's tenancy as
- * well as the submission's. A field on the correction form could not.
+ * well as the submission's. A field on the correction form could not. The one
+ * link a correction does make is to an asset it has just created itself — an
+ * unlinked test saved with a BIN (see `lib/submission-asset.ts`) — and that
+ * asset is the caller's by construction.
  */
 
 /** The eight assembly types, matching `bfa_type` and `asset-input`'s own list. */

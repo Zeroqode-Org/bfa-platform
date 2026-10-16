@@ -160,6 +160,6 @@ describe("the results document's name", () => {
 				bfaType: "DC",
 				testDate: "2026-09-25",
 			}),
-		).toBe("Backflow Assembly Test Form — SEED-BIN-200 — DC — 09/25/2026");
+		).toBe("Backflow Reporter.io Test Form — SEED-BIN-200 — DC — 09/25/2026");
 	});
 });

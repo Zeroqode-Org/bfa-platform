@@ -24,7 +24,12 @@ import { trpc } from "@/utils/trpc";
  * resolution. `use-impersonation.ts` documents a *later* week replacing its
  * own mock with a signed httpOnly cookie; nothing here asks for that.
  */
-export type WaterPurveyor = { id: string; name: string };
+export type WaterPurveyor = {
+	id: string;
+	name: string;
+	address?: string | null;
+	pwsid?: string | null;
+};
 
 const STORAGE_KEY = "bfa-certifier-active-wp-id";
 

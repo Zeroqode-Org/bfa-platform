@@ -4,12 +4,25 @@ import { ASSEMBLY_FIELD_KEYS } from "@bfa-platform/api/lib/wizard-input";
 import { Button } from "@bfa-platform/ui/components/button";
 import { Card, CardContent } from "@bfa-platform/ui/components/card";
 import { Input } from "@bfa-platform/ui/components/input";
+import {
+	Select,
+	SelectContent,
+	SelectGroup,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@bfa-platform/ui/components/select";
 import { PenLine } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { WizardField } from "../wizard-field";
 import type { WizardFormState } from "../wizard-shell";
-import type { WizardValues } from "../wizard-types";
+import {
+	BFA_TYPE_CODES,
+	BFA_TYPE_OPTIONS,
+	type BfaType,
+	type WizardValues,
+} from "../wizard-types";
 
 const FIELDS: { key: keyof typeof ASSEMBLY_FIELD_KEYS; label: string }[] = [
 	{ key: "serviceAddress", label: "Service address" },
@@ -25,19 +38,33 @@ const FIELDS: { key: keyof typeof ASSEMBLY_FIELD_KEYS; label: string }[] = [
  * styling for a prefilled field, a normal input when certifier-entered —
  * same layout either way, never two different screens. Every prefilled
  * field stays editable; typing over one flags it as overridden.
+ *
+ * A found assembly's BFA type is editable here too (client, October 2026),
+ * opening on the type the register holds. Changing it resets the test answers
+ * and flags the type as overwritten — see `changeFoundAssetType`. A BIN that
+ * was not found already chose its type on the first screen.
  */
 export function AssemblyInfoStep({
 	form,
 	onAnswer,
+	onTypeChange,
 }: {
 	form: WizardFormState;
 	onAnswer: (key: string, value: WizardValues[string]) => void;
+	onTypeChange: (bfaType: BfaType) => void;
 }) {
 	const isPrefilled = form.bfaAssetId !== null;
 
 	return (
 		<Card>
 			<CardContent className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				{isPrefilled ? (
+					<BfaTypeField
+						value={form.bfaType}
+						overridden={form.overriddenFields.has("bfaType")}
+						onChange={onTypeChange}
+					/>
+				) : null}
 				{FIELDS.map(({ key, label }) => (
 					<AssemblyField
 						key={key}
@@ -52,6 +79,76 @@ export function AssemblyInfoStep({
 				))}
 			</CardContent>
 		</Card>
+	);
+}
+
+/**
+ * The found assembly's BFA type, full width above the details. Locked like
+ * every other prefilled field — the same grey read-only input with a pencil —
+ * and the pencil turns it into the type dropdown in place.
+ */
+function BfaTypeField({
+	value,
+	overridden,
+	onChange,
+}: {
+	value: BfaType;
+	overridden: boolean;
+	onChange: (bfaType: BfaType) => void;
+}) {
+	const id = useId();
+	// Stays a dropdown once unlocked, as `AssemblyField` stays an input.
+	const [editing, setEditing] = useState(false);
+	const locked = !overridden && !editing;
+
+	return (
+		<WizardField
+			id={id}
+			label="BFA type"
+			required
+			flagged={overridden}
+			className="sm:col-span-2"
+		>
+			{(fid) =>
+				locked ? (
+					<div className="relative">
+						<div className="absolute inset-y-0 right-1 z-10 flex items-center">
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon-xs"
+								aria-label="Edit BFA type"
+								className="text-muted-foreground"
+								onClick={() => setEditing(true)}
+							>
+								<PenLine aria-hidden="true" />
+							</Button>
+						</div>
+						<Input id={fid} readOnly className="pr-9" value={value} />
+					</div>
+				) : (
+					<Select
+						items={BFA_TYPE_CODES}
+						value={value}
+						defaultOpen={editing && !overridden}
+						onValueChange={(next) => onChange(next as BfaType)}
+					>
+						<SelectTrigger id={fid}>
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectGroup>
+								{Object.entries(BFA_TYPE_OPTIONS).map(([option, label]) => (
+									<SelectItem key={option} value={option}>
+										{label}
+									</SelectItem>
+								))}
+							</SelectGroup>
+						</SelectContent>
+					</Select>
+				)
+			}
+		</WizardField>
 	);
 }
 

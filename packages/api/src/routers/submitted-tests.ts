@@ -10,6 +10,14 @@ import {
 import { and, asc, count, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
+import { assetColumns } from "../lib/asset-input";
+import {
+	BFA_TYPE_FIELD,
+	changedWizardKeys,
+	findOrCreateCustomer,
+	logAssetSync,
+	syncAssetFromSubmission,
+} from "../lib/asset-sync";
 import {
 	type AuditActor,
 	auditActor,
@@ -17,6 +25,8 @@ import {
 } from "../lib/audit-actor";
 import { publishResultPdf } from "../lib/result-pdf/document-url";
 import type { StatementRow } from "../lib/statement-columns";
+import { createStorageAdmin } from "../lib/storage-admin";
+import { newAssetFromSubmission } from "../lib/submission-asset";
 import {
 	changedSubmissionFields,
 	type ExportSubmittedTestsInput,
@@ -27,6 +37,14 @@ import {
 	submissionIdInput,
 	updateSubmittedTestInput,
 } from "../lib/submission-input";
+import { isUniqueViolation } from "../lib/unique-violation";
+import {
+	isOwnPhotoPath,
+	OWNER_ABSENT_DISCLAIMER,
+	PHOTO_PATH_KEYS,
+	SIGN_OFF_DISCLAIMER_KEY,
+} from "../lib/wizard-input";
+import { reconcileAssetNoticeChain } from "../scheduler/notice-chain";
 import { applySubmittedTestResult } from "../scheduler/submission-lifecycle";
 
 /**
@@ -287,6 +305,41 @@ export const submittedTestsRouter = router({
 		}),
 
 	/**
+	 * Short-lived links to view one submitted test's photos, keyed by storage
+	 * path — the document shows them as thumbnails rather than as paths.
+	 *
+	 * Takes only the submission id: the paths signed are the ones stored on the
+	 * row, and only those inside that submission's own folder, so a request can
+	 * never name a file to sign. Scoped like every read here, so a draft or a
+	 * foreign id gets the same not-found. Readable by all three WP roles, like
+	 * the document itself.
+	 */
+	getPhotoUrls: wpProcedure
+		.input(submissionIdInput)
+		.query(async ({ ctx, input }) => {
+			const row = await readSubmission(ctx.caller.waterPurveyorId, input.id);
+			const wizardData = (row.wizardData ?? {}) as Record<string, unknown>;
+			const storage = createStorageAdmin();
+			const urls: Record<string, string> = {};
+
+			for (const key of PHOTO_PATH_KEYS) {
+				const path = wizardData[key];
+
+				if (typeof path !== "string" || !isOwnPhotoPath(row.id, path)) {
+					continue;
+				}
+
+				urls[path] = await storage.createSignedDownloadUrl(
+					"test-photos",
+					path,
+					60 * 10,
+				);
+			}
+
+			return urls;
+		}),
+
+	/**
 	 * Corrects one submitted test, and records who did it.
 	 *
 	 * The whole record is sent, so an omitted optional field is a field being
@@ -319,8 +372,32 @@ export const submittedTestsRouter = router({
 
 			if (!existing) throw notFound();
 
-			const next = submissionColumns(input);
+			const next = withConsistentSignOff(
+				submissionColumns(input),
+				existing.signatureMethod,
+			);
 			const changed = changedSubmissionFields(existing, next);
+
+			// A BIN given to an unlinked test *in this save* numbers a new
+			// assembly: the save registers the asset and links the test to it. See
+			// `createAssetFromSubmission`. Only when the BIN is new or changed here
+			// — a BIN already on the row (typed by the certifier) does not turn
+			// every later correction into an asset registration, and a save that
+			// changes nothing stays a no-op.
+			if (
+				!existing.bfaAssetId &&
+				next.submittedBinText &&
+				next.submittedBinText !== existing.submittedBinText
+			) {
+				return createAssetFromSubmission({
+					waterPurveyorId,
+					editorProfileId: ctx.caller.profileId,
+					actor: auditActor(ctx),
+					existing,
+					next,
+					changed,
+				});
+			}
 
 			// Opening the document and pressing save without touching a field is not
 			// a correction, and writing one anyway would make two records lie.
@@ -367,7 +444,26 @@ export const submittedTestsRouter = router({
 					trigger: "test_submission_corrected",
 				});
 
-				return updated;
+				// What this save changed about the assembly goes onto the asset
+				// too — only the answers changed here, and only from the asset's
+				// latest test. See `lib/asset-sync.ts`.
+				const assetSync = existing.bfaAssetId
+					? await syncAssetFromSubmission({
+							executor: tx,
+							submissionId: updated.id,
+							assetId: existing.bfaAssetId,
+							waterPurveyorId,
+							fields: [
+								...changedWizardKeys(existing.wizardData, next.wizardData),
+								...(existing.bfaType !== next.bfaType ? [BFA_TYPE_FIELD] : []),
+							],
+							bfaType: next.bfaType,
+							wizardData: next.wizardData,
+							actor: auditActor(ctx),
+						})
+					: [];
+
+				return { ...updated, assetSync };
 			});
 
 			logSubmissionEvent("test_submission_corrected", {
@@ -381,6 +477,12 @@ export const submittedTestsRouter = router({
 					// customer's details have no business in a log stream.
 					changed_fields: changed,
 				},
+			});
+
+			logAssetSync(row.assetSync, {
+				actor: auditActor(ctx),
+				submissionId: row.id,
+				waterPurveyorId,
 			});
 
 			return readSubmission(waterPurveyorId, row.id);
@@ -524,6 +626,281 @@ export const submittedTestsRouter = router({
 			return readSubmission(waterPurveyorId, row.id);
 		}),
 });
+
+/**
+ * The sign-off kept consistent with how it was signed, whatever the client
+ * sent — the way `submitTest` writes it — when this save changes how it was
+ * signed. A save that leaves the method alone keeps the stored sign-off as it
+ * is, so a row stored before this rule (an owner-absent test carrying an
+ * image) does not read as changed on a save that touched nothing.
+ *
+ * - Owner absent: the signature column holds the mandatory disclaimer, and so
+ *   does `wizard_data`. Never an image: the PDF prints that column as the
+ *   disclaimer's text, so an image left there would print as base64.
+ * - Signed or not recorded: no disclaimer in `wizard_data`.
+ *
+ * The wording is the server's constant, never the client's — a correction
+ * cannot rewrite the certification text any more than the wizard can.
+ */
+function withConsistentSignOff(
+	next: ReturnType<typeof submissionColumns>,
+	storedMethod: string | null,
+): ReturnType<typeof submissionColumns> {
+	if (next.signatureMethod === storedMethod) return next;
+
+	const { [SIGN_OFF_DISCLAIMER_KEY]: _disclaimer, ...answers } =
+		next.wizardData;
+
+	if (next.signatureMethod === "owner_absent") {
+		return {
+			...next,
+			signatureData: OWNER_ABSENT_DISCLAIMER,
+			wizardData: {
+				...answers,
+				[SIGN_OFF_DISCLAIMER_KEY]: OWNER_ABSENT_DISCLAIMER,
+			},
+		};
+	}
+
+	return { ...next, wizardData: answers };
+}
+
+/** The constraint that makes a BIN unique inside one purveyor. */
+const ASSET_BIN_UNIQUE_KEY = "bfa_assets_water_purveyor_id_bin_key";
+
+function binTakenError(bin: string, cause?: unknown) {
+	return new TRPCError({
+		code: "CONFLICT",
+		message: `BIN ${bin} is already in use by another asset. To attach this test to it, use Link in the list above.`,
+		cause,
+	});
+}
+
+/**
+ * The no-BIN save: registers the assembly a WP has just given a BIN to, and
+ * links the test to it, in one transaction.
+ *
+ * A new BFA has no BIN when it is first tested, so the certifier leaves the
+ * field blank; the purveyor numbers it afterward by typing the BIN into the
+ * test and saving (client, October 2026). Every unlinked test saved with a BIN
+ * on it takes this path — including one whose certifier typed a BIN that
+ * matched nothing — because an unlinked test carrying a BIN is exactly the
+ * state "this assembly is not registered yet" describes.
+ *
+ * Refused before anything is written, and the save with it:
+ *
+ * - a BIN the purveyor already uses — that test belongs to an existing asset,
+ *   which `linkSubmissionAsset` attaches, and registering a second valve under
+ *   the same number is never the answer;
+ * - a test that cannot describe an asset (no test date, no service address) —
+ *   see `newAssetFromSubmission`.
+ *
+ * Order inside the transaction is load-bearing. The test is linked and its
+ * result applied *before* the reminder chain is scheduled, because a linked
+ * pass cancels the asset's open notice jobs: scheduled first, next year's
+ * reminder would be cancelled by the very test that set its date.
+ */
+async function createAssetFromSubmission({
+	waterPurveyorId,
+	editorProfileId,
+	actor,
+	existing,
+	next,
+	changed,
+}: {
+	waterPurveyorId: string;
+	/** The WP profile the edit is made as — see `updateSubmittedTest`. */
+	editorProfileId: string;
+	actor: AuditActor;
+	existing: {
+		id: string;
+		certifierId: string;
+		submittedBinText: string | null;
+	};
+	next: ReturnType<typeof submissionColumns>;
+	changed: string[];
+}) {
+	const result = newAssetFromSubmission(next);
+
+	if (!result.ok) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: result.message });
+	}
+
+	const { asset: assetInput, customer: wizardCustomer } = result.plan;
+
+	// Checked up front for the message; the unique index below is what actually
+	// decides, so a second clerk taking the BIN in between is refused too.
+	const [taken] = await db
+		.select({ id: bfaAssets.id })
+		.from(bfaAssets)
+		.where(
+			and(
+				eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+				eq(bfaAssets.bin, assetInput.bin),
+			),
+		)
+		.limit(1);
+
+	if (taken) throw binTakenError(assetInput.bin);
+
+	const outcome = await db.transaction(async (tx) => {
+		const customer = wizardCustomer
+			? await findOrCreateCustomer(tx, waterPurveyorId, wizardCustomer)
+			: null;
+
+		const [asset] = await tx
+			.insert(bfaAssets)
+			.values({
+				...assetColumns(assetInput),
+				waterPurveyorId,
+				currentCustomerId: customer?.id ?? null,
+			})
+			.returning({
+				id: bfaAssets.id,
+				bin: bfaAssets.bin,
+				bfaType: bfaAssets.bfaType,
+				annualTestDate: bfaAssets.annualTestDate,
+			})
+			.catch((error: unknown) => {
+				throw isUniqueViolation(error, ASSET_BIN_UNIQUE_KEY)
+					? binTakenError(assetInput.bin, error)
+					: error;
+			});
+
+		if (!asset) {
+			throw new TRPCError({
+				code: "INTERNAL_SERVER_ERROR",
+				message: "Asset insert returned no row",
+			});
+		}
+
+		if (customer) {
+			await tx.insert(customerAssignments).values({
+				bfaAssetId: asset.id,
+				customerId: customer.id,
+				startDate: sql`current_date`,
+			});
+		}
+
+		// `is null` in the predicate, as in `linkSubmissionAsset`: another clerk
+		// may have linked this test since it was read, and that answer is not
+		// this save's to overwrite.
+		const [linked] = await tx
+			.update(testSubmissions)
+			.set({
+				...next,
+				bfaAssetId: asset.id,
+				editedByWpProfileId: editorProfileId,
+			})
+			.where(
+				and(
+					eq(testSubmissions.id, existing.id),
+					isNull(testSubmissions.bfaAssetId),
+					submittedRowsOf(waterPurveyorId),
+				),
+			)
+			.returning({ id: testSubmissions.id });
+
+		if (!linked) {
+			throw new TRPCError({
+				code: "PRECONDITION_FAILED",
+				message: "This test was linked to an asset while you were working",
+			});
+		}
+
+		await applySubmittedTestResult({
+			executor: tx,
+			submissionId: linked.id,
+			bfaAssetId: asset.id,
+			testResult: next.testResult,
+			waterPurveyorId,
+			actor,
+			trigger: "test_submission_asset_linked",
+		});
+
+		await reconcileAssetNoticeChain({
+			executor: tx,
+			assetId: asset.id,
+			waterPurveyorId,
+			annualTestDate: asset.annualTestDate,
+			actor,
+			trigger: "asset_created",
+		});
+
+		return { asset, customer };
+	});
+
+	const { asset, customer } = outcome;
+
+	if (customer?.created) {
+		console.log(
+			JSON.stringify({
+				event: "customer_created",
+				...auditActorFields(actor),
+				customer_id: customer.id,
+				wp_id: waterPurveyorId,
+				rate_category: "standard",
+				status: customer.status,
+				source: "no_bin_submission",
+				submission_id: existing.id,
+				timestamp: new Date().toISOString(),
+			}),
+		);
+	}
+
+	logSubmissionEvent("bfa_asset_created", {
+		actor,
+		submissionId: existing.id,
+		waterPurveyorId,
+		extra: {
+			asset_id: asset.id,
+			bin: asset.bin,
+			bfa_type: asset.bfaType,
+			annual_test_date: asset.annualTestDate,
+			current_customer_id: customer?.id ?? null,
+			source: "no_bin_submission",
+		},
+	});
+
+	if (customer) {
+		logSubmissionEvent("bfa_asset_customer_assigned", {
+			actor,
+			submissionId: existing.id,
+			waterPurveyorId,
+			extra: {
+				asset_id: asset.id,
+				bin: asset.bin,
+				from: null,
+				to: customer.id,
+				to_customer_suspended: customer.status === "suspended",
+			},
+		});
+	}
+
+	if (changed.length > 0) {
+		logSubmissionEvent("test_submission_corrected", {
+			actor,
+			submissionId: existing.id,
+			waterPurveyorId,
+			extra: { certifier_id: existing.certifierId, changed_fields: changed },
+		});
+	}
+
+	logSubmissionEvent("test_submission_asset_linked", {
+		actor,
+		submissionId: existing.id,
+		waterPurveyorId,
+		extra: {
+			certifier_id: existing.certifierId,
+			bfa_asset_id: asset.id,
+			bin: asset.bin,
+			submitted_bin_text: existing.submittedBinText,
+			asset_created: true,
+		},
+	});
+
+	return readSubmission(waterPurveyorId, existing.id);
+}
 
 /**
  * The tenant-and-status predicate every statement in this router shares.
