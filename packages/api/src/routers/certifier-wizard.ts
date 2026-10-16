@@ -4,6 +4,14 @@ import { and, asc, desc, eq, ilike, isNull, lte, ne, sql } from "drizzle-orm";
 
 import { certifierProcedure, router, TRPCError } from "../index";
 import { auditActor } from "../lib/audit-actor";
+import {
+	discardUnusedPhotos,
+	freePhotoSlot,
+	PHOTO_BUCKET,
+	PRUNE_GRACE_MS,
+	photoSlotPath,
+	prunePhotoFolder,
+} from "../lib/photo-storage";
 import { sendResultDocumentEmails } from "../lib/result-pdf/distribute";
 import { publishResultPdf } from "../lib/result-pdf/document-url";
 import { createStorageAdmin } from "../lib/storage-admin";
@@ -25,6 +33,7 @@ import {
 	saveDraftStepInput,
 	searchBinsInput,
 	submitTestInput,
+	testRefInput,
 } from "../lib/wizard-input";
 import { applySubmittedTestResult } from "../scheduler/submission-lifecycle";
 import {
@@ -295,8 +304,9 @@ export const certifierWizardRouter = router({
 	 * Short-lived links to view a test's attached photos — for the closing
 	 * screen's thumbnails and the review, which cannot read the private bucket
 	 * themselves. Only the caller's own test (draft or submitted, under an
-	 * authorized purveyor) can be asked about, and only for paths inside that
-	 * test's own folder, so a request cannot be used to sign someone else's file.
+	 * authorized purveyor) can be asked about, and only for paths of exactly the
+	 * shape `getPhotoUploadUrl` mints inside that test's own folder
+	 * (`isOwnPhotoPath`), so a request cannot be used to sign someone else's file.
 	 */
 	getPhotoUrls: certifierProcedure
 		.input(photoUrlsInput)
@@ -321,13 +331,19 @@ export const certifierWizardRouter = router({
 			const urls: Record<string, string> = {};
 
 			for (const path of input.paths) {
-				if (!path.startsWith(`${row.id}/`) || path.includes("..")) continue;
+				if (!isOwnPhotoPath(row.id, path)) continue;
 
-				urls[path] = await storage.createSignedDownloadUrl(
-					"test-photos",
-					path,
-					60 * 10,
-				);
+				// A photo removed since the draft was last saved is already gone
+				// from Storage; it is skipped, not a reason to fail the others.
+				try {
+					urls[path] = await storage.createSignedDownloadUrl(
+						PHOTO_BUCKET,
+						path,
+						60 * 10,
+					);
+				} catch {
+					// Left out; the screen shows the photo as attached, without a preview.
+				}
 			}
 
 			return urls;
@@ -339,6 +355,18 @@ export const certifierWizardRouter = router({
 	 * directly to Storage, never through tRPC — this procedure only proves the
 	 * caller owns the draft it is uploading against and hands back a place to
 	 * put the file.
+	 *
+	 * The input's extension, MIME type and size are the client's claim about
+	 * the file, already held to the allowlist by `getPhotoUploadUrlInput`; they
+	 * only choose the key's canonical extension. The key itself — this draft's
+	 * folder and one of its fixed slot ids — is always the server's, never a
+	 * client name.
+	 *
+	 * Before choosing a slot, the draft's folder is pruned of every object the
+	 * form no longer shows (`keep`, the photos currently attached): removed
+	 * photos and abandoned uploads are deleted, freeing their slots. When every
+	 * slot is still taken, nothing is minted (see `photo-storage.ts` for why
+	 * this, and not a count, is what bounds the objects one test can create).
 	 */
 	getPhotoUploadUrl: certifierProcedure
 		.input(getPhotoUploadUrlInput)
@@ -358,11 +386,25 @@ export const certifierWizardRouter = router({
 
 			if (!draft) throw notFound();
 
-			const path = `${input.id}/${crypto.randomUUID()}.jpg`;
-			const { token } = await createStorageAdmin().createSignedUploadUrl(
-				"test-photos",
-				path,
+			const storage = createStorageAdmin();
+			const remaining = await prunePhotoFolder(
+				storage,
+				draft.id,
+				input.keep.filter((path) => isOwnPhotoPath(draft.id, path)),
+				new Date(Date.now() - PRUNE_GRACE_MS),
 			);
+			const slot = freePhotoSlot(draft.id, remaining);
+
+			if (slot === null) {
+				throw new TRPCError({
+					code: "TOO_MANY_REQUESTS",
+					message:
+						"Too many photo uploads for this test just now. Wait a minute and try again.",
+				});
+			}
+
+			const path = photoSlotPath(draft.id, slot, input.extension);
+			const { token } = await storage.createSignedUploadUrl(PHOTO_BUCKET, path);
 
 			return { token, path };
 		}),
@@ -373,7 +415,7 @@ export const certifierWizardRouter = router({
 	 * draft or missing id all answer the same not-found.
 	 */
 	getResultDocumentUrl: certifierProcedure
-		.input(getPhotoUploadUrlInput)
+		.input(testRefInput)
 		.mutation(async ({ ctx, input }) => {
 			await assertAuthorizedWp(ctx.caller.certifierId, input.waterPurveyorId);
 
@@ -442,8 +484,16 @@ export const certifierWizardRouter = router({
 				input.id,
 			);
 			for (const key of PHOTO_PATH_KEYS) delete answers[key];
-			const photoPaths = input.photoPaths.filter((path) =>
-				isOwnPhotoPath(input.id, path),
+			// Only this draft's own paths, and only ones still in Storage — a photo
+			// pruned after the form last saw it must not be filed as an attachment.
+			const storage = createStorageAdmin();
+			const stored = new Set(
+				(await storage.list(PHOTO_BUCKET, draft.id)).map(
+					(object) => `${draft.id}/${object.name}`,
+				),
+			);
+			const photoPaths = input.photoPaths.filter(
+				(path) => isOwnPhotoPath(input.id, path) && stored.has(path),
 			);
 
 			const missing = missingWizardFields(
@@ -553,6 +603,9 @@ export const certifierWizardRouter = router({
 
 				return updated;
 			});
+
+			// The photo set is final now; anything else in the folder is unused.
+			await discardUnusedPhotos(storage, row.id, photoPaths);
 
 			logCertifierEvent("test_submitted", {
 				actor: auditActor(ctx),

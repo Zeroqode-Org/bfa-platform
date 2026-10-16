@@ -28,6 +28,13 @@ export type StorageAdmin = {
 		expiresInSeconds: number,
 	): Promise<string>;
 	download(bucket: string, path: string): Promise<Buffer>;
+	/** The objects directly inside `folder`, with when each was created. */
+	list(
+		bucket: string,
+		folder: string,
+	): Promise<{ name: string; createdAt: Date | null }[]>;
+	/** Deletes the given object paths; a path that does not exist is not an error. */
+	remove(bucket: string, paths: string[]): Promise<void>;
 };
 
 /**
@@ -100,6 +107,36 @@ export function createStorageAdmin(): StorageAdmin {
 			}
 
 			return Buffer.from(await data.arrayBuffer());
+		},
+
+		async list(bucket, folder) {
+			const { data, error } = await supabase.storage
+				.from(bucket)
+				.list(folder, { limit: 1000 });
+
+			if (error || !data) {
+				throw new Error(
+					`Could not list ${bucket}/${folder}: ${error?.message}`,
+				);
+			}
+
+			// Sub-folders come back as entries with no id; only objects count.
+			return data
+				.filter((entry) => entry.id !== null)
+				.map((entry) => ({
+					name: entry.name,
+					createdAt: entry.created_at ? new Date(entry.created_at) : null,
+				}));
+		},
+
+		async remove(bucket, paths) {
+			if (paths.length === 0) return;
+
+			const { error } = await supabase.storage.from(bucket).remove(paths);
+
+			if (error) {
+				throw new Error(`Could not remove from ${bucket}: ${error.message}`);
+			}
 		},
 	};
 }

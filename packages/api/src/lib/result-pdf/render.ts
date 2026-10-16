@@ -9,6 +9,8 @@ import {
 import { renderToBuffer } from "@react-pdf/renderer";
 import { eq } from "drizzle-orm";
 
+import { sniffPhotoFormat } from "../photo-rules";
+import { PHOTO_BUCKET } from "../photo-storage";
 import { createStorageAdmin } from "../storage-admin";
 import {
 	CUSTOMER_EMAIL_KEY,
@@ -19,19 +21,14 @@ import { resultDocumentFileName, resultDocumentTitle } from "./document-name";
 import { ResultDocument } from "./frame";
 import { TestBlockForTypePdf } from "./test-blocks";
 
-/** The two image formats the PDF library can draw, told apart by their first bytes. */
-function imageFormat(bytes: Buffer): "jpg" | "png" | null {
-	if (bytes[0] === 0xff && bytes[1] === 0xd8) return "jpg";
-	if (bytes[0] === 0x89 && bytes[1] === 0x50) return "png";
-
-	return null;
-}
-
 /**
- * The test's photos, fetched from the private bucket for embedding. A photo
- * that cannot be fetched, or is in a format the PDF cannot draw (a HEIC that
- * slipped through), is left out rather than failing the whole document — the
- * attachment count on the form still records that it was attached.
+ * The test's photos, fetched from the private bucket for embedding. What is
+ * drawn is decided by each file's bytes, not its key: the wizard converts HEIC
+ * to JPEG before upload, and anything that still arrives — a `.heic` key
+ * whose bytes are in fact a JPEG, say — is drawn if it is a JPEG or PNG. A real
+ * HEIC (from a browser that could not convert it), a photo that cannot be
+ * fetched, or anything else is left out rather than failing the whole
+ * document; the attachment count on the form still records it.
  */
 async function loadPhotos(
 	wizardData: Record<string, unknown>,
@@ -44,10 +41,10 @@ async function loadPhotos(
 		if (typeof path !== "string" || path === "") continue;
 
 		try {
-			const data = await storage.download("test-photos", path);
-			const format = imageFormat(data);
+			const data = await storage.download(PHOTO_BUCKET, path);
+			const format = sniffPhotoFormat(data);
 
-			if (format) photos.push({ data, format });
+			if (format === "jpg" || format === "png") photos.push({ data, format });
 		} catch {
 			// Left out; see above.
 		}

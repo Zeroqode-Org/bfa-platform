@@ -26,11 +26,40 @@ Source: the client-supplied "Wizard data collection" spreadsheet, one column per
 - Comments (optional)
 - Customer Name (required), Customer Email (required)
 - Water Meter Start / Water Meter End (values)
-- Upload pictures — optional, up to 2
+- Upload pictures — optional, up to 2; HEIC, PNG or JPG/JPEG, at most 25 MB each (see [Closing-block photos](#closing-block-photos))
 - Sign-off — choose one: **Signature** (sign on mobile phone) or, if unavailable, the **checkbox** "THE ABOVE REPORT IS CERTIFIED TO BE TRUE"
 - Test Date
 
 **Context fields before the test block** (present on the reduced-pressure/double-check families — RP, RPDA, RPDA-2, DC, DCDA, DCDA-2; not on PVB/SVB): ADP (optional), Line Pressure (optional). PVB/SVB carries Line Pressure only.
+
+### Closing-block photos
+
+The contract lives in one module, `packages/api/src/lib/photo-rules.ts`, which the browser, the API and the stored-path checks all read.
+
+| Rule | Value |
+|---|---|
+| Count | at most **2** per test |
+| Formats | **HEIC** (`image/heic`), **PNG** (`image/png`), **JPG/JPEG** (`image/jpeg`) — nothing else; PDF, HEIF, WebP and GIF are refused |
+| Size | at most **25 MB** (25 × 1024² = 26,214,400 bytes) per file; an empty file is refused |
+| Stored as | `test-photos/<test id>/<slot id>.<jpg\|png\|heic>` in the private bucket — the key is always server-generated, `.jpeg` is stored as `.jpg`, the original file name is never used |
+| Objects per test | at most 4 slot ids (× 3 extensions) can ever exist for one test, however many upload URLs are requested |
+
+How a photo is checked, in order:
+
+1. **In the browser, before anything is sent.** The picker offers only the three formats, and on a phone it offers both the camera and the photo library (no `capture` attribute, which would open the camera only). A picked file is checked by its extension (case-insensitive) against its browser MIME type — an empty type is accepted, since browsers often leave it blank for HEIC, and so is `image/heif` for a `.heic` file (some Android galleries report it so — the photo is still sent and stored as `image/heic`; a `.heif` file is still refused), but a type that disagrees with the extension is not — and by size. A refused file shows an inline error ("Supported formats are HEIC, PNG and JPG/JPEG." / "Each photo must be 25 MB or smaller."). The file's **first bytes** then decide its real format: content that is not a JPEG, PNG or HEIC is refused whatever its name, and a file whose name and content disagree (a JPEG named `.heic`) is uploaded as what it is. A real HEIC is **converted to JPEG** in the browser, using the browser's own decoder and no extra library — Safari (iPhone, iPad, Mac), where HEIC photos come from, has one — scaled so its longest side is at most 4000 px (iOS refuses larger canvases). Where the browser cannot decode HEIC (Chrome on Android or Windows), the HEIC is uploaded unchanged. Nothing is requested from the server until all of this has passed.
+2. **`certifierWizard.getPhotoUploadUrl`.** Takes the normalised extension, MIME type and size, refuses anything but an allowlisted matching pair within the limit, then requires the caller's own draft under an actively authorized purveyor (another certifier's draft, another purveyor's, a submitted test or an unknown id all answer the same not-found) before minting a signed upload URL for a key of its own choosing. That key is one of the test's four fixed **slots** (ids derived from the test id), never a fresh random one: a signed upload URL stays valid for two hours and cannot be shortened, so a cap on *counted* objects could be beaten by requesting many URLs first — fixed keys cannot, because repeated requests name the same keys and a second upload to a taken key is refused. Before picking a slot, the folder is pruned: the form sends the photos it currently shows, and every other object older than a minute (removed photos, uploads that never reached the form) is deleted. If all four slots are still taken, no URL is minted ("Too many photo uploads for this test just now…").
+3. **The upload itself** goes straight from the browser to Storage with the canonical MIME type, not the browser's guess.
+4. **The `test-photos` bucket** allows only those three MIME types and 25 MB per object, configured by `apps/web/scripts/supabase-setup.mjs` from `apps/web/scripts/storage-buckets.mjs` — a second barrier independent of the app. `storage-buckets.test.ts` fails if the bucket policy and `photo-rules.ts` drift apart.
+5. **Afterwards,** `submitTest`, draft saves and `getPhotoUrls` accept a stored path only if it has exactly the server's key shape inside that test's own folder; anything else is dropped, never stored and never signed. `submitTest` also files only photos still present in Storage, then deletes every other object in the folder; deleting a draft (`certifier.deleteDraft`) deletes its whole folder. Both clean-ups are best-effort — a failure is logged (`test_photo_cleanup_failed`), never a reason to fail the submit or delete. `getPhotoUrls` skips a path whose object is already gone instead of failing.
+
+Why 25 MB: every phone camera's photo fits with room to spare (HEIC 1–5 MB, ordinary JPEG 3–6 MB, high-resolution 50–200 MP JPEG up to ~25 MB); it stays under the 50 MB global Storage limit of a Free project, so no plan change is needed; at that size the current single-request upload is adequate without resumable (TUS) upload; and the results PDF, which downloads each JPG/PNG photo into memory to embed it (HEIC is not downloaded at all), handles two such photos comfortably. Raising it later means changing `MAX_PHOTO_BYTES`, the bucket limit in the setup script, and — above 50 MB — the project's plan and global limit.
+
+Preview: every photo is shown as a thumbnail on the closing step and the review when the browser can draw it — JPG and PNG everywhere, HEIC in Safari. The image stays hidden until it has loaded; if it cannot be drawn (an unconverted HEIC in Chrome, an expired link) a "Photo attached · HEIC · no preview" tile takes its place, never a broken-image icon. The results PDF decides by each file's bytes, not its key: anything that is a JPEG or PNG is drawn — so a `.heic` that is really a JPEG is drawn too — and only a real, unconverted HEIC is left out (still counted in the attachment total).
+
+**Open decisions — not covered by this contract:**
+
+- **File content is not verified on the server.** The wizard checks the first bytes before uploading, and the PDF checks them before drawing, but the upload itself is direct to Storage, which (like the bucket's MIME policy) trusts the declared type. A modified client could still upload other bytes under an allowed key. Verifying every upload server-side, or scanning for malware, would need a separate post-upload inspection/quarantine flow. Until one is approved, safety rests on the private bucket, server-generated keys, short-lived signed links and the ownership checks above.
+- **HEIC from browsers without a decoder.** Conversion uses the browser's own HEIC support, so a real HEIC picked in Chrome on Android or Windows (e.g. a Samsung phone with "High efficiency pictures" on) is stored unconverted: it shows as a tile and is not drawn on the PDF. Closing that gap needs a HEIC decoder shipped to the browser — the maintained option, `heic-to`, is LGPL-3.0 and adds a ~1–2 MB lazily loaded WebAssembly chunk — or server-side conversion; either is a separate decision (licence, bundle size, HEVC patents).
 
 ## Per-type test block
 

@@ -21,6 +21,8 @@ import {
 	listSubmissionsInput,
 	updateProfileInput,
 } from "../lib/certifier-dashboard-input";
+import { discardUnusedPhotos } from "../lib/photo-storage";
+import { createStorageAdmin } from "../lib/storage-admin";
 import { newestSubmittedTestFirst } from "./submitted-tests";
 
 /**
@@ -164,6 +166,9 @@ export const certifierRouter = router({
 				.returning({ id: testSubmissions.id });
 
 			if (!row) throw notFound();
+
+			// The draft's photos go with it; nothing can reference them any more.
+			await discardUnusedPhotos(createStorageAdmin(), row.id, []);
 
 			logCertifierEvent("draft_deleted", {
 				actor: auditActor(ctx),
