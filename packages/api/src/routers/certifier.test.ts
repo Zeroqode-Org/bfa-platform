@@ -37,6 +37,21 @@ import type { AppRouter } from "./index";
 
 const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 
+// `deleteDraft` clears the draft's photo folder; a recording stand-in keeps
+// that from reaching a real Storage project.
+const storage = vi.hoisted(() => ({
+	list: vi.fn(async () => [] as { name: string; createdAt: Date | null }[]),
+	remove: vi.fn(async () => {}),
+	createSignedUploadUrl: vi.fn(),
+	createSignedDownloadUrl: vi.fn(),
+	upload: vi.fn(),
+	download: vi.fn(),
+}));
+
+vi.mock("../lib/storage-admin", () => ({
+	createStorageAdmin: () => storage,
+}));
+
 type Certifier = AppRouter["certifier"];
 type Inputs = {
 	[Procedure in keyof Certifier]: inferProcedureInput<Certifier[Procedure]>;
@@ -524,6 +539,26 @@ describeDb("certifier dashboard procedures", () => {
 				[submittedA],
 			);
 			expect(rows).toHaveLength(1);
+		});
+
+		it("deletes the draft's photos from Storage too", async () => {
+			const target = await seedSubmission({ certifierId: certifierA });
+			storage.list.mockResolvedValueOnce([
+				{
+					name: "33333333-3333-4333-8333-333333333333.jpg",
+					createdAt: new Date(),
+				},
+			]);
+
+			await callerFor(ids.certifierProfileA).certifier.deleteDraft({
+				id: target,
+				waterPurveyorId: wp,
+			});
+
+			expect(storage.list).toHaveBeenCalledWith("test-photos", target);
+			expect(storage.remove).toHaveBeenCalledWith("test-photos", [
+				`${target}/33333333-3333-4333-8333-333333333333.jpg`,
+			]);
 		});
 
 		it("emits a structured audit line naming the actor and the certifier", async () => {

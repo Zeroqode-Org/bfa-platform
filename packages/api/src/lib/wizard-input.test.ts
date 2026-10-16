@@ -1,17 +1,25 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	canonicalPhotoExtension,
+	checkPhotoFile,
+	MAX_PHOTO_BYTES,
+	PHOTO_ACCEPT,
+} from "./photo-rules";
+import {
 	ASSEMBLY_FIELD_KEYS,
 	allowedWizardKeys,
 	carryOverAnswers,
 	cleanWizardData,
 	deriveTestResult,
+	getPhotoUploadUrlInput,
 	INITIAL_TEST_KEY,
 	ISOLATES_PROPERTY_KEY,
 	isOwnPhotoPath,
 	missingWizardFields,
 	OWNER_ABSENT_DISCLAIMER,
 	parseSize,
+	photoUrlsInput,
 	recordOverride,
 	saveDraftStepInput,
 	submitTestInput,
@@ -272,17 +280,216 @@ describe("assembly size, a number", () => {
 	});
 });
 
+describe("photo file rules", () => {
+	const photo = (name: string, type: string, size = 1024) => ({
+		name,
+		type,
+		size,
+	});
+
+	it("accepts each allowlisted extension/MIME pair and normalises it", () => {
+		expect(checkPhotoFile(photo("a.jpg", "image/jpeg"))).toEqual({
+			ok: true,
+			extension: "jpg",
+			contentType: "image/jpeg",
+			size: 1024,
+		});
+		expect(checkPhotoFile(photo("a.jpeg", "image/jpeg"))).toMatchObject({
+			ok: true,
+			extension: "jpg",
+			contentType: "image/jpeg",
+		});
+		expect(checkPhotoFile(photo("a.png", "image/png"))).toMatchObject({
+			ok: true,
+			extension: "png",
+			contentType: "image/png",
+		});
+		expect(checkPhotoFile(photo("a.heic", "image/heic"))).toMatchObject({
+			ok: true,
+			extension: "heic",
+			contentType: "image/heic",
+		});
+	});
+
+	it("reads the extension case-insensitively, `.jpeg` becoming `jpg`", () => {
+		expect(canonicalPhotoExtension("IMG_0001.JPEG")).toBe("jpg");
+		expect(canonicalPhotoExtension("IMG_0001.HEIC")).toBe("heic");
+		expect(canonicalPhotoExtension("scan.Png")).toBe("png");
+		expect(checkPhotoFile(photo("IMG_1.HEIC", ""))).toMatchObject({
+			ok: true,
+			extension: "heic",
+			contentType: "image/heic",
+		});
+	});
+
+	it("accepts an empty browser type but not a mismatched one", () => {
+		expect(checkPhotoFile(photo("a.heic", "")).ok).toBe(true);
+		// Some galleries report a `.heic` as `image/heif`; it is still a HEIC,
+		// and still sent on as the canonical `image/heic`.
+		expect(checkPhotoFile(photo("a.heic", "image/heif"))).toMatchObject({
+			ok: true,
+			extension: "heic",
+			contentType: "image/heic",
+		});
+		expect(checkPhotoFile(photo("a.jpg", "image/heif"))).toEqual({
+			ok: false,
+			reason: "format",
+		});
+		expect(checkPhotoFile(photo("a.jpg", "image/png"))).toEqual({
+			ok: false,
+			reason: "format",
+		});
+		expect(checkPhotoFile(photo("a.png", "image/heic"))).toEqual({
+			ok: false,
+			reason: "format",
+		});
+	});
+
+	it("refuses other formats, PDF included, and names without an extension", () => {
+		for (const [name, type] of [
+			["a.pdf", "application/pdf"],
+			["a.pdf", ""],
+			["a.jpg", "application/pdf"],
+			["a.heif", "image/heif"],
+			["a.webp", "image/webp"],
+			["a.gif", "image/gif"],
+			["a.jpg.exe", ""],
+			["jpg", "image/jpeg"],
+			["a.", "image/jpeg"],
+		] as const) {
+			expect(checkPhotoFile(photo(name, type))).toEqual({
+				ok: false,
+				reason: "format",
+			});
+		}
+		expect(PHOTO_ACCEPT).not.toMatch(/pdf|heif|webp|gif|image\/\*/);
+	});
+
+	it("accepts exactly 25 MB and refuses one byte more, or an empty file", () => {
+		expect(MAX_PHOTO_BYTES).toBe(26_214_400);
+		expect(
+			checkPhotoFile(photo("a.jpg", "image/jpeg", MAX_PHOTO_BYTES)).ok,
+		).toBe(true);
+		expect(
+			checkPhotoFile(photo("a.jpg", "image/jpeg", MAX_PHOTO_BYTES + 1)),
+		).toEqual({ ok: false, reason: "size" });
+		expect(checkPhotoFile(photo("a.jpg", "image/jpeg", 0))).toEqual({
+			ok: false,
+			reason: "empty",
+		});
+	});
+});
+
+describe("getPhotoUploadUrlInput", () => {
+	const base = {
+		id: "11111111-1111-4111-8111-111111111111",
+		waterPurveyorId: "22222222-2222-4222-8222-222222222222",
+	};
+
+	it("takes only a normalised, allowlisted pair within the limit", () => {
+		expect(
+			getPhotoUploadUrlInput.safeParse({
+				...base,
+				extension: "heic",
+				contentType: "image/heic",
+				size: MAX_PHOTO_BYTES,
+			}).success,
+		).toBe(true);
+
+		for (const claim of [
+			{ extension: "jpeg", contentType: "image/jpeg", size: 1 },
+			{ extension: "JPG", contentType: "image/jpeg", size: 1 },
+			{ extension: "pdf", contentType: "application/pdf", size: 1 },
+			{ extension: "jpg", contentType: "image/png", size: 1 },
+			{ extension: "png", contentType: "image/png", size: 0 },
+			{
+				extension: "png",
+				contentType: "image/png",
+				size: MAX_PHOTO_BYTES + 1,
+			},
+			{ extension: "png", contentType: "image/png", size: 1.5 },
+			{ extension: "png", contentType: "image/png" },
+		]) {
+			expect(
+				getPhotoUploadUrlInput.safeParse({ ...base, ...claim }).success,
+			).toBe(false);
+		}
+	});
+
+	it("holds the photos-to-keep list to two entries", () => {
+		const claim = { extension: "png", contentType: "image/png", size: 10 };
+
+		expect(getPhotoUploadUrlInput.parse({ ...base, ...claim }).keep).toEqual(
+			[],
+		);
+		expect(
+			getPhotoUploadUrlInput.safeParse({
+				...base,
+				...claim,
+				keep: ["a", "b", "c"],
+			}).success,
+		).toBe(false);
+	});
+
+	it("carries no client path or file name through", () => {
+		const parsed = getPhotoUploadUrlInput.parse({
+			...base,
+			extension: "png",
+			contentType: "image/png",
+			size: 10,
+			path: "../other/file.png",
+			name: "evil.png",
+		});
+
+		expect(parsed).not.toHaveProperty("path");
+		expect(parsed).not.toHaveProperty("name");
+	});
+
+	it("caps the photo paths a signing request may carry at two", () => {
+		expect(
+			photoUrlsInput.safeParse({ ...base, paths: ["a", "b", "c"] }).success,
+		).toBe(false);
+	});
+});
+
 describe("photo paths and wizard-data cleaning", () => {
 	const id = "11111111-1111-4111-8111-111111111111";
 	const other = "22222222-2222-4222-8222-222222222222";
-	const file = "33333333-3333-4333-8333-333333333333.jpg";
+	const uuid = "33333333-3333-4333-8333-333333333333";
+	const file = `${uuid}.jpg`;
 
-	it("accepts only a jpg inside the submission's own folder", () => {
-		expect(isOwnPhotoPath(id, `${id}/${file}`)).toBe(true);
+	it("accepts a server-shaped key of each canonical extension, in the submission's own folder only", () => {
+		for (const extension of ["jpg", "png", "heic"]) {
+			expect(isOwnPhotoPath(id, `${id}/${uuid}.${extension}`)).toBe(true);
+		}
+		const lettered = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+		expect(isOwnPhotoPath(lettered.toUpperCase(), `${lettered}/${file}`)).toBe(
+			true,
+		);
 		expect(isOwnPhotoPath(id, `${other}/${file}`)).toBe(false);
-		expect(isOwnPhotoPath(id, `${id}/../${other}/${file}`)).toBe(false);
-		expect(isOwnPhotoPath(id, `${id}/notauuid.jpg`)).toBe(false);
 		expect(isOwnPhotoPath(id, null)).toBe(false);
+	});
+
+	it("refuses traversal, other extensions and anything not server-minted", () => {
+		for (const path of [
+			`${id}/../${other}/${file}`,
+			`${id}/./${file}`,
+			`${id}//${file}`,
+			`/${id}/${file}`,
+			`${id}/${other}/${file}`,
+			`${id}/notauuid.jpg`,
+			`${id}/${uuid}.jpeg`,
+			`${id}/${uuid}.JPG`,
+			`${id}/${uuid}.pdf`,
+			`${id}/${uuid}.heif`,
+			`${id}/${uuid}.jpg.pdf`,
+			`${id}/${uuid}`,
+			`${id}/AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA.jpg`,
+			`${id}/------------------------------------.jpg`,
+			`${id}/${file}\n`,
+		]) {
+			expect(isOwnPhotoPath(id, path)).toBe(false);
+		}
 	});
 
 	it("drops keys of another type, foreign photos and the disclaimer", () => {
@@ -302,6 +509,37 @@ describe("photo paths and wizard-data cleaning", () => {
 		);
 
 		expect(cleaned).toEqual({ comments: "ok", photo2Path: `${id}/${file}` });
+	});
+
+	it("keeps a PNG or HEIC photo of its own but drops an unlisted extension", () => {
+		const cleaned = cleanWizardData(
+			"RP",
+			{
+				photo1Path: `${id}/${uuid}.heic`,
+				photo2Path: `${id}/${uuid}.pdf`,
+			},
+			id,
+		);
+
+		expect(cleaned).toEqual({ photo1Path: `${id}/${uuid}.heic` });
+		expect(
+			cleanWizardData("RP", { photo1Path: `${id}/${uuid}.png` }, undefined),
+		).toEqual({});
+	});
+
+	it("submitTestInput holds at most two photo paths", () => {
+		const paths = [
+			`${id}/${uuid}.jpg`,
+			`${id}/${uuid}.png`,
+			`${id}/${uuid}.heic`,
+		];
+
+		expect(
+			submitTestInput.shape.photoPaths.safeParse(paths.slice(0, 2)).success,
+		).toBe(true);
+		expect(submitTestInput.shape.photoPaths.safeParse(paths).success).toBe(
+			false,
+		);
 	});
 
 	it("carries readings over but not a previous visit's photos or customer", () => {

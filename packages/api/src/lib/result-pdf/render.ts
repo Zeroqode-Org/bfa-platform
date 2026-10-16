@@ -9,6 +9,8 @@ import {
 import { renderToBuffer } from "@react-pdf/renderer";
 import { eq } from "drizzle-orm";
 
+import { isPreviewablePhotoPath } from "../photo-rules";
+import { PHOTO_BUCKET } from "../photo-storage";
 import { createStorageAdmin } from "../storage-admin";
 import {
 	CUSTOMER_EMAIL_KEY,
@@ -28,10 +30,12 @@ function imageFormat(bytes: Buffer): "jpg" | "png" | null {
 }
 
 /**
- * The test's photos, fetched from the private bucket for embedding. A photo
- * that cannot be fetched, or is in a format the PDF cannot draw (a HEIC that
- * slipped through), is left out rather than failing the whole document — the
- * attachment count on the form still records that it was attached.
+ * The test's photos, fetched from the private bucket for embedding. Only
+ * JPEG/PNG keys are fetched at all — a HEIC cannot be drawn, so downloading it
+ * would only be thrown away. A photo that cannot be fetched, or whose bytes
+ * are not what its key says, is left out rather than failing the whole
+ * document — the attachment count on the form still records that it was
+ * attached.
  */
 async function loadPhotos(
 	wizardData: Record<string, unknown>,
@@ -41,10 +45,10 @@ async function loadPhotos(
 
 	for (const key of PHOTO_PATH_KEYS) {
 		const path = wizardData[key];
-		if (typeof path !== "string" || path === "") continue;
+		if (typeof path !== "string" || !isPreviewablePhotoPath(path)) continue;
 
 		try {
-			const data = await storage.download("test-photos", path);
+			const data = await storage.download(PHOTO_BUCKET, path);
 			const format = imageFormat(data);
 
 			if (format) photos.push({ data, format });

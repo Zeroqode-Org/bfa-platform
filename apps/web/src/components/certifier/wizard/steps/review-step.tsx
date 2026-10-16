@@ -18,6 +18,7 @@ import type { ReactNode } from "react";
 
 import { trpc } from "@/utils/trpc";
 
+import { PhotoThumbnail } from "../photo-thumbnail";
 import { usePhotoUrls } from "../use-photo-urls";
 import type { WizardFormState } from "../wizard-shell";
 import { BFA_TYPE_OPTIONS } from "../wizard-types";
@@ -242,24 +243,20 @@ export function ReviewStep({
 					)}
 					{form.photoPaths.length > 0 ? (
 						<div className="grid grid-cols-2 gap-3 border-border border-t pt-3">
-							{form.photoPaths.map((path, index) =>
-								photoUrls[path] ? (
-									// biome-ignore lint/performance/noImgElement: a signed link to a private file, not an asset Next can optimise
-									<img
-										key={path}
+							{form.photoPaths.map((path, index) => (
+								<div
+									key={path}
+									className="flex h-40 items-center justify-center overflow-hidden rounded-md border border-border bg-muted"
+								>
+									<PhotoThumbnail
+										path={path}
 										src={photoUrls[path]}
 										alt={`Attachment ${index + 1} of ${form.photoPaths.length}`}
-										className="h-40 w-full rounded-md border border-border object-contain"
+										pendingLabel="Loading photo…"
+										imageClassName="size-full bg-card object-contain"
 									/>
-								) : (
-									<div
-										key={path}
-										className="flex h-40 items-center justify-center rounded-md bg-muted text-[12px] text-muted-foreground"
-									>
-										Loading photo…
-									</div>
-								),
-							)}
+								</div>
+							))}
 						</div>
 					) : null}
 					<p className="border-border border-t pt-2 text-[12px] text-muted-foreground">

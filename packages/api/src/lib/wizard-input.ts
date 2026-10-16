@@ -1,6 +1,15 @@
 import { z } from "zod";
 
 import { ASSET_FIELD_LIMITS } from "./asset-field-limits";
+import {
+	isOwnPhotoPath,
+	MAX_PHOTO_BYTES,
+	MAX_PHOTOS,
+	PHOTO_CONTENT_TYPES,
+	PHOTO_EXTENSIONS,
+	PHOTO_FORMATS,
+	PHOTO_REJECTION_MESSAGES,
+} from "./photo-rules";
 import { SUBMISSION_FIELD_LIMITS } from "./submission-field-limits";
 import {
 	BFA_TYPES,
@@ -151,13 +160,35 @@ export const searchBinsInput = z.object({
 export const photoUrlsInput = z.object({
 	id: z.uuid(),
 	waterPurveyorId: z.uuid(),
-	paths: z.array(z.string().max(500)).max(2),
+	paths: z.array(z.string().max(500)).max(MAX_PHOTOS),
 });
 
-export const getPhotoUploadUrlInput = z.object({
+/** One of the caller's own tests, under the purveyor it was filed with. */
+export const testRefInput = z.object({
 	id: z.uuid(),
 	waterPurveyorId: z.uuid(),
 });
+
+/**
+ * What the browser tells the server about a photo before it may upload one —
+ * already normalised by `checkPhotoFile`: canonical extension, its matching
+ * MIME type, and a size within the limit. A claim, not proof of the bytes
+ * (see `photo-rules.ts`); it only picks the key's extension and the content
+ * type, and is refused outright when it is anything but an allowlisted pair.
+ */
+export const getPhotoUploadUrlInput = testRefInput
+	.extend({
+		extension: z.enum(PHOTO_EXTENSIONS),
+		contentType: z.enum(PHOTO_CONTENT_TYPES),
+		size: z.number().int().min(1).max(MAX_PHOTO_BYTES),
+		// The photos the form currently shows; everything else in the draft's
+		// folder may be pruned before the new key is chosen.
+		keep: z.array(z.string().max(500)).max(MAX_PHOTOS).default([]),
+	})
+	.refine((input) => PHOTO_FORMATS[input.extension] === input.contentType, {
+		message: PHOTO_REJECTION_MESSAGES.format,
+		path: ["contentType"],
+	});
 
 /**
  * The submit-time shape. Everything a draft may leave blank is required here
@@ -183,7 +214,7 @@ export const submitTestInput = z.object({
 	// never trusted from the client, so the exact wording cannot be tampered
 	// with in transit.
 	signatureData: optionalText(SUBMISSION_FIELD_LIMITS.signatureData),
-	photoPaths: z.array(z.string().max(500)).max(2).default([]),
+	photoPaths: z.array(z.string().max(500)).max(MAX_PHOTOS).default([]),
 });
 
 export type SaveDraftStepInput = z.infer<typeof saveDraftStepInput>;
@@ -524,15 +555,8 @@ export function recordOverride(existing: string[], fieldKey: string): string[] {
 	return existing.includes(fieldKey) ? existing : [...existing, fieldKey];
 }
 
-const PHOTO_FILE_PATTERN = /^[0-9a-f-]{36}\.jpg$/;
-
-/** A photo path is the caller's own only when it is `<submission id>/<uuid>.jpg` — nothing else is ever signed, embedded or stored. */
-export function isOwnPhotoPath(submissionId: string, path: unknown): boolean {
-	if (typeof path !== "string" || !path.startsWith(`${submissionId}/`))
-		return false;
-
-	return PHOTO_FILE_PATTERN.test(path.slice(submissionId.length + 1));
-}
+/** Re-exported so callers keep one import for the wizard's rules; defined in `photo-rules.ts`. */
+export { isOwnPhotoPath };
 
 /** Every `wizard_data` key that makes sense for one assembly type. */
 export function allowedWizardKeys(

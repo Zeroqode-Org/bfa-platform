@@ -26,11 +26,40 @@ Source: the client-supplied "Wizard data collection" spreadsheet, one column per
 - Comments (optional)
 - Customer Name (required), Customer Email (required)
 - Water Meter Start / Water Meter End (values)
-- Upload pictures — optional, up to 2
+- Upload pictures — optional, up to 2; HEIC, PNG or JPG/JPEG, at most 25 MB each (see [Closing-block photos](#closing-block-photos))
 - Sign-off — choose one: **Signature** (sign on mobile phone) or, if unavailable, the **checkbox** "THE ABOVE REPORT IS CERTIFIED TO BE TRUE"
 - Test Date
 
 **Context fields before the test block** (present on the reduced-pressure/double-check families — RP, RPDA, RPDA-2, DC, DCDA, DCDA-2; not on PVB/SVB): ADP (optional), Line Pressure (optional). PVB/SVB carries Line Pressure only.
+
+### Closing-block photos
+
+The contract lives in one module, `packages/api/src/lib/photo-rules.ts`, which the browser, the API and the stored-path checks all read.
+
+| Rule | Value |
+|---|---|
+| Count | at most **2** per test |
+| Formats | **HEIC** (`image/heic`), **PNG** (`image/png`), **JPG/JPEG** (`image/jpeg`) — nothing else; PDF, HEIF, WebP and GIF are refused |
+| Size | at most **25 MB** (25 × 1024² = 26,214,400 bytes) per file; an empty file is refused |
+| Stored as | `test-photos/<test id>/<slot id>.<jpg\|png\|heic>` in the private bucket — the key is always server-generated, `.jpeg` is stored as `.jpg`, the original file name is never used |
+| Objects per test | at most 4 slot ids (× 3 extensions) can ever exist for one test, however many upload URLs are requested |
+
+How a photo is checked, in order:
+
+1. **In the browser, before anything is sent.** The picker offers only the three formats. A picked file is checked by its extension (case-insensitive) against its browser MIME type — an empty type is accepted, since browsers often leave it blank for HEIC, and so is `image/heif` for a `.heic` file (some Android galleries report it so — the photo is still sent and stored as `image/heic`; a `.heif` file is still refused), but a type that disagrees with the extension is not — and by size. A refused file shows an inline error ("Supported formats are HEIC, PNG and JPG/JPEG." / "Each photo must be 25 MB or smaller.") and no upload URL is requested.
+2. **`certifierWizard.getPhotoUploadUrl`.** Takes the normalised extension, MIME type and size, refuses anything but an allowlisted matching pair within the limit, then requires the caller's own draft under an actively authorized purveyor (another certifier's draft, another purveyor's, a submitted test or an unknown id all answer the same not-found) before minting a signed upload URL for a key of its own choosing. That key is one of the test's four fixed **slots** (ids derived from the test id), never a fresh random one: a signed upload URL stays valid for two hours and cannot be shortened, so a cap on *counted* objects could be beaten by requesting many URLs first — fixed keys cannot, because repeated requests name the same keys and a second upload to a taken key is refused. Before picking a slot, the folder is pruned: the form sends the photos it currently shows, and every other object older than a minute (removed photos, uploads that never reached the form) is deleted. If all four slots are still taken, no URL is minted ("Too many photo uploads for this test just now…").
+3. **The upload itself** goes straight from the browser to Storage with the canonical MIME type, not the browser's guess.
+4. **The `test-photos` bucket** allows only those three MIME types and 25 MB per object, configured by `apps/web/scripts/supabase-setup.mjs` from `apps/web/scripts/storage-buckets.mjs` — a second barrier independent of the app. `storage-buckets.test.ts` fails if the bucket policy and `photo-rules.ts` drift apart.
+5. **Afterwards,** `submitTest`, draft saves and `getPhotoUrls` accept a stored path only if it has exactly the server's key shape inside that test's own folder; anything else is dropped, never stored and never signed. `submitTest` also files only photos still present in Storage, then deletes every other object in the folder; deleting a draft (`certifier.deleteDraft`) deletes its whole folder. Both clean-ups are best-effort — a failure is logged (`test_photo_cleanup_failed`), never a reason to fail the submit or delete. `getPhotoUrls` skips a path whose object is already gone instead of failing.
+
+Why 25 MB: every phone camera's photo fits with room to spare (HEIC 1–5 MB, ordinary JPEG 3–6 MB, high-resolution 50–200 MP JPEG up to ~25 MB); it stays under the 50 MB global Storage limit of a Free project, so no plan change is needed; at that size the current single-request upload is adequate without resumable (TUS) upload; and the results PDF, which downloads each JPG/PNG photo into memory to embed it (HEIC is not downloaded at all), handles two such photos comfortably. Raising it later means changing `MAX_PHOTO_BYTES`, the bucket limit in the setup script, and — above 50 MB — the project's plan and global limit.
+
+Preview: JPG and PNG show a thumbnail (on the closing step and the review). HEIC shows a "Photo attached · HEIC · no preview" tile instead, because most browsers cannot draw it; a JPG/PNG that fails to load falls back to the same tile. The results PDF embeds JPG and PNG photos only — a HEIC photo is kept as a private attachment and counted in the attachment total, but is not drawn on the document.
+
+**Open decisions — not covered by this contract:**
+
+- **File content is not verified.** Extension, MIME type and the bucket's MIME policy all check what the client *says* the file is, not its bytes. Verifying real signatures or scanning for malware would need a separate server-side post-upload inspection/quarantine flow (downloading every upload whole to inspect it would not be the place to start). Until one is approved, safety rests on the private bucket, server-generated keys, short-lived signed links and the ownership checks above.
+- **HEIC conversion** — for browser preview or PDF embedding — is not done and needs its own decision on compatibility, performance and dependency.
 
 ## Per-type test block
 

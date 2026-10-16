@@ -11,6 +11,8 @@
 import { createClient } from "@supabase/supabase-js";
 import pg from "pg";
 
+import { BUCKETS } from "./storage-buckets.mjs";
+
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -34,26 +36,46 @@ const log = (fields) =>
 		JSON.stringify({ ...fields, timestamp: new Date().toISOString() }),
 	);
 
-const BUCKETS = ["test-photos", "result-documents"];
-
 const TEST_USER = {
 	email: "dev-superadmin@bfa.local",
 	password: "dev-superadmin-pw-2026",
 	fullName: "Dev Super Admin",
 };
 
-async function ensureBucket(name) {
-	const { error } = await supabase.storage.createBucket(name, {
-		public: false,
-	});
-	if (error && !/already exists/i.test(error.message)) {
-		throw new Error(`createBucket(${name}): ${error.message}`);
+async function ensureBucket(name, options, existing) {
+	const exists = existing.has(name);
+	// An existing bucket is brought to the same configuration, so running this
+	// again after a limit changes is what applies the change. Only buckets that
+	// declare limits are updated; `updateBucket` resets any option it is not
+	// given, which would silently clear settings made elsewhere.
+	const configured =
+		"allowedMimeTypes" in options || "fileSizeLimit" in options;
+
+	if (!exists) {
+		const { error } = await supabase.storage.createBucket(name, options);
+		if (error) throw new Error(`createBucket(${name}): ${error.message}`);
+	} else if (configured) {
+		const { error } = await supabase.storage.updateBucket(name, options);
+		if (error) throw new Error(`updateBucket(${name}): ${error.message}`);
 	}
+
 	log({
 		event: "storage_bucket_ensured",
 		bucket: name,
-		created: !error,
+		created: !exists,
+		updated: exists && configured,
+		public: options.public,
+		allowed_mime_types: options.allowedMimeTypes ?? null,
+		file_size_limit: options.fileSizeLimit ?? null,
 	});
+}
+
+/** The ids of the buckets that already exist — asked for directly, rather than read out of a create call's error text. */
+async function existingBuckets() {
+	const { data, error } = await supabase.storage.listBuckets();
+	if (error) throw new Error(`listBuckets: ${error.message}`);
+
+	return new Set(data.map((bucket) => bucket.id));
 }
 
 async function ensureTestUser() {
@@ -111,8 +133,9 @@ async function ensureTestUser() {
 }
 
 async function main() {
-	for (const name of BUCKETS) {
-		await ensureBucket(name);
+	const existing = await existingBuckets();
+	for (const [name, options] of Object.entries(BUCKETS)) {
+		await ensureBucket(name, options, existing);
 	}
 	if (withTestUser) {
 		await ensureTestUser();
