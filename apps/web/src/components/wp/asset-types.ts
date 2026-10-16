@@ -20,20 +20,6 @@ export type AssetAssignment = AssetDetail["assignments"][number];
  */
 export type AssetPayload = Omit<RouterInputs["assets"]["updateAsset"], "id">;
 
-/**
- * What registering an asset sends: the shared fields plus an optional first
- * occupant. Only the create path carries a customer — on an existing asset the
- * pointer moves through `assignCustomer`, which has occupancy to close.
- */
-export type CreateAssetPayload = RouterInputs["assets"]["createAsset"];
-
-/** One choice in the optional customer picker on the add-asset form. */
-export type AssetCustomerOption = {
-	id: string;
-	name: string;
-	status: "active" | "suspended";
-};
-
 /** The status the scheduler computes; never a value the form offers. */
 export type AssetStatus = Asset["assetStatus"];
 

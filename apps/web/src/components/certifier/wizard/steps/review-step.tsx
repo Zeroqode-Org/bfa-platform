@@ -92,9 +92,10 @@ export function ReviewStep({
 					<Cells cols={2}>
 						<Cell
 							label="BIN"
-							value={
-								form.bfaAssetId ? form.bin : form.submittedBinText || "No BIN"
-							}
+							// The BIN as typed — what the draft saves and the header shows.
+							// `submittedBinText` only changes on a lookup, so reading it
+							// here once showed "No BIN" for a BIN the record kept.
+							value={form.bin.trim() || "No BIN"}
 						/>
 						<Cell
 							label="Service address"

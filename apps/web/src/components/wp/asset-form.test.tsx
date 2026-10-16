@@ -12,7 +12,6 @@ import {
 	AddAssetForm,
 	assetToFormValues,
 	buildAssetPayload,
-	buildCreateAssetPayload,
 	EditAssetForm,
 	emptyAssetValues,
 } from "./asset-form";
@@ -66,16 +65,26 @@ function fillRequired({
 	bin = "BIN-10041",
 	bfaType = "RP" as string | null,
 	serviceAddress = "18 Canal Road",
+	assemblyLocation = "Meter pit, north side",
+	make = "Watts",
+	model = "909",
+	serialNumber = "SN-88120",
+	size = "2 in",
 	annualTestDate = "04/01/2027",
 } = {}) {
 	fireEvent.change(screen.getByLabelText("BIN"), { target: { value: bin } });
 	if (bfaType) chooseBfaType(bfaType);
-	fireEvent.change(screen.getByLabelText("Service address"), {
-		target: { value: serviceAddress },
-	});
-	fireEvent.change(screen.getByLabelText("Annual test date"), {
-		target: { value: annualTestDate },
-	});
+	for (const [label, value] of [
+		["Service address", serviceAddress],
+		["Assembly location", assemblyLocation],
+		["Make", make],
+		["Model", model],
+		["Serial number", serialNumber],
+		["Size", size],
+		["Annual test date", annualTestDate],
+	] as const) {
+		fireEvent.change(screen.getByLabelText(label), { target: { value } });
+	}
 }
 
 afterEach(() => {
@@ -83,22 +92,22 @@ afterEach(() => {
 });
 
 describe("buildAssetPayload", () => {
-	it("trims what it keeps and nulls the optional fields it does not", () => {
+	it("trims every text field it sends", () => {
 		expect(
 			buildAssetPayload({
 				...emptyAssetValues,
 				bfaType: "RP",
 				bin: "  BIN-10041 ",
 				serviceAddress: " 18 Canal Road ",
-				make: "   ",
-				model: "",
+				make: "  Watts ",
+				model: " 909",
 				annualTestDate: "04/01/2027",
 			}),
 		).toMatchObject({
 			bin: "BIN-10041",
 			serviceAddress: "18 Canal Road",
-			make: null,
-			model: null,
+			make: "Watts",
+			model: "909",
 			annualTestDate: "2027-04-01",
 		});
 	});
@@ -112,28 +121,6 @@ describe("buildAssetPayload", () => {
 		expect(keys).not.toContain("waterPurveyorId");
 		expect(keys).not.toContain("assetStatus");
 		expect(keys).not.toContain("currentCustomerId");
-	});
-});
-
-describe("buildCreateAssetPayload", () => {
-	it("carries the chosen first occupant", () => {
-		expect(
-			buildCreateAssetPayload({
-				...emptyAssetValues,
-				bfaType: "RP",
-				bin: "BIN-10041",
-				serviceAddress: "18 Canal Road",
-				annualTestDate: "04/01/2027",
-				currentCustomerId: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
-			}).currentCustomerId,
-		).toBe("8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607");
-	});
-
-	it("sends null when the picker was left alone", () => {
-		expect(
-			buildCreateAssetPayload({ ...emptyAssetValues, bfaType: "RP" })
-				.currentCustomerId,
-		).toBeNull();
 	});
 });
 
@@ -177,15 +164,12 @@ describe("AddAssetForm", () => {
 			bin: "BIN-10041",
 			bfaType: "RP",
 			serviceAddress: "18 Canal Road",
-			assemblyLocation: null,
-			make: null,
-			model: null,
-			serialNumber: null,
-			size: null,
+			assemblyLocation: "Meter pit, north side",
+			make: "Watts",
+			model: "909",
+			serialNumber: "SN-88120",
+			size: "2 in",
 			annualTestDate: "2027-04-01",
-			// Untouched picker: registering an asset before its occupant is known
-			// is normal, and `null` is the answer for it.
-			currentCustomerId: null,
 		});
 	});
 
@@ -224,7 +208,7 @@ describe("AddAssetForm", () => {
 		);
 	});
 
-	it("keeps save available and names the four missing answers when pressed", () => {
+	it("keeps save available and names every missing answer when pressed", () => {
 		const onSubmit = vi.fn();
 		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
 
@@ -242,6 +226,11 @@ describe("AddAssetForm", () => {
 			"A BIN is required.",
 			"Select a BFA type.",
 			"A service address is required.",
+			"An assembly location is required.",
+			"A make is required.",
+			"A model is required.",
+			"A serial number is required.",
+			"A size is required.",
 			"An annual test date is required.",
 		]);
 		expect(document.activeElement).toBe(screen.getByLabelText("BIN"));
@@ -328,33 +317,34 @@ describe("AddAssetForm", () => {
 		expect(screen.queryByLabelText("Status")).toBeNull();
 	});
 
-	it("offers an optional customer picker", () => {
-		render(
-			<AddAssetForm
-				customerOptions={[
-					{ id: "customer-a", name: "Marta Ellison", status: "active" },
-				]}
-				onSubmit={vi.fn()}
-				onCancel={vi.fn()}
-			/>,
-		);
+	it("marks the assembly's description required, and refuses one left blank", () => {
+		const onSubmit = vi.fn();
+		render(<AddAssetForm onSubmit={onSubmit} onCancel={vi.fn()} />);
 
-		expect(screen.getByLabelText("Customer")).toBeTruthy();
-		// Optional in the copy as well as in the payload — the person should not
-		// have to guess whether leaving it empty is allowed.
-		expect(screen.getByText(/Optional\. Leave it empty/)).toBeTruthy();
+		for (const label of [
+			"Assembly location",
+			"Make",
+			"Model",
+			"Serial number",
+			"Size",
+		]) {
+			expect(screen.getByLabelText(label).getAttribute("aria-required")).toBe(
+				"true",
+			);
+		}
+
+		fillRequired({ make: "   " });
+		fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText("A make is required.")).toBeTruthy();
+		expect(document.activeElement).toBe(screen.getByLabelText("Make"));
 	});
 
-	it("says so when the purveyor has no customers to pick yet", () => {
-		render(
-			<AddAssetForm
-				customerOptions={[]}
-				onSubmit={vi.fn()}
-				onCancel={vi.fn()}
-			/>,
-		);
+	it("has no customer control — a customer reaches an asset from the customer form", () => {
+		render(<AddAssetForm onSubmit={vi.fn()} onCancel={vi.fn()} />);
 
-		expect(screen.getByText(/No customers yet/)).toBeTruthy();
+		expect(screen.queryByLabelText("Customer")).toBeNull();
 	});
 
 	it("does not warn about a BIN change on a record that has no old BIN", () => {

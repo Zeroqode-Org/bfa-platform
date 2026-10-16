@@ -197,6 +197,12 @@ function newAsset(overrides: Partial<CreateAssetInput> = {}): CreateAssetInput {
 		bin: `WF1-${binCounter}-${randomUUID().slice(0, 6)}`,
 		bfaType: "RP",
 		serviceAddress: "12 Kalani Street",
+		// Required since the WP/Admin feedback.
+		assemblyLocation: "Meter pit",
+		make: "Watts",
+		model: "909",
+		serialNumber: "SN-1",
+		size: "2 in",
 		annualTestDate: longOverdueDate,
 		...overrides,
 	} as CreateAssetInput;

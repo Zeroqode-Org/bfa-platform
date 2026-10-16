@@ -46,11 +46,11 @@ mispointed row.
 | `bin` | yes | Unique **per purveyor** — two WPs may number their valves the same way |
 | `bfa_type` | yes | One of the eight types: RP, RPDA, RPDA-2, DC, DCDA, DCDA-2, PVB, SVB |
 | `service_address` | yes | Searchable alongside the BIN |
-| `assembly_location` | no | Where on the property the assembly sits; blank is stored as NULL |
-| `make`, `model`, `serial_number`, `size` | no | Assembly details; blank is stored as NULL |
+| `assembly_location` | yes | Where on the property the assembly sits |
+| `make`, `model`, `serial_number`, `size` | yes | Assembly details. Required on every WP save (WP/Admin feedback); the columns stay nullable, so a row saved before the rule — or built from a certifier submission — still reads, and editing it means filling them in |
 | `annual_test_date` | yes on this screen | What the reminder workflow schedules against |
 | `asset_status` | — | Computed by the scheduler; not editable by anyone |
-| `current_customer_id` | no | Optional on the add form; afterwards it moves only through `assignCustomer` |
+| `current_customer_id` | no | Not on either form. Moves through the customer form's BIN or `assignCustomer` — see below |
 | `water_purveyor_id` | — | Never sent by the client; derived from the caller |
 
 Every text field has a maximum length, defined once in
@@ -70,8 +70,7 @@ The same required answers, in both places. The BFA type opens unanswered on the
 add form — *Select…*, not a pre-chosen *RP* — and saving without one puts
 *Select a BFA type.* under the select; the edit form keeps the stored type
 selected, and `""` is never sent to `createAssetInput`, whose enum check is
-unchanged. The customer picker is different on purpose: *No customer yet* is a
-real answer, so it stays the default. The form trims before it
+unchanged. The form trims before it
 judges, so a BIN of spaces reads as empty exactly as it does in
 `createAssetInput`. The save button is never disabled for a missing answer:
 pressing it reveals an inline message under each field that is still missing or
@@ -95,8 +94,8 @@ that would be rejected is not sent.
 
 One thing the form will not let happen at all, rather than validating: there is
 no status control, because the scheduler owns it. The BFA type is a select over
-exactly the eight enum values, so there is no free-text path into it. The
-customer picker exists on the add form only — see below.
+exactly the eight enum values, so there is no free-text path into it. There is
+no customer control — see below.
 
 ### Why the annual test date is required
 
@@ -155,36 +154,22 @@ statement writes only the rows whose status is wrong, so an ordinary day changes
 nothing. See [`asset_status` is
 scheduler-owned](/docs/notice-workflow#asset_status-is-scheduler-owned).
 
-### The customer picker is on the add form and nowhere else
+### No customer control on either form
 
-Registering an asset and knowing who occupies it are usually the same moment, so
-**Add asset** carries an optional customer dropdown. Leaving it on *No customer
-yet* is a normal answer — an asset can be registered before its occupant is
-known and attached later from its own page.
+**Add asset** used to carry an optional customer dropdown. The WP/Admin feedback
+removed it: a customer now reaches an asset from the [customer form's
+BIN](/docs/wp-customers#the-bin), or from the asset's own page through
+`assignCustomer`. Both close and open `customer_assignments` rows as they go.
 
-Naming one there is safe for a reason that does not hold on the edit form: a
-brand-new asset has no occupancy to close, so attaching a customer *opens* the
-first `customer_assignments` row rather than replacing an existing one. The
-insert and that row go in a single transaction, so an asset never exists
-pointing at a customer with no record of when that started — and a failure in
-either (a taken BIN, say) leaves no asset behind. The customer's tenant is
-checked before anything is written, so a cross-purveyor id creates nothing
-either. The history afterwards reads exactly as it would if the customer had
-been attached a week later, and the same `bfa_asset_customer_assigned` line is
-logged, with `from: null`.
+`createAssetInput` still accepts an optional `currentCustomerId`, and
+`createAsset` still opens the first assignment in the insert's transaction when
+one is sent — a sound operation the notice-workflow suites build on — but no
+screen sends it.
 
-The **edit** form has no customer control at all, and `updateAssetInput` does
+The **edit** form has no customer control either, and `updateAssetInput` does
 not accept one. On an asset that already has an occupant, moving the pointer has
 to close the outgoing occupancy row in the same transaction — a field there
-would be the one way to change an occupant without recording it. That case
-belongs to `assignCustomer`, on the asset's own page, next to the history it
-writes.
-
-Choosing a *suspended* customer on the add form is allowed and warned about
-inline: the asset starts with its automated email already paused, and the form
-says so above the save button. It needs no separate confirmation the way a
-reassignment does, because there is no running notice pipeline to interrupt —
-the asset is new. The audit line still records `to_customer_suspended: true`.
+would be the one way to change an occupant without recording it.
 
 ## Changing a BIN
 

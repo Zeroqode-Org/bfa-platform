@@ -31,12 +31,7 @@ import {
 import { TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 
-import type {
-	Asset,
-	AssetCustomerOption,
-	AssetPayload,
-	CreateAssetPayload,
-} from "./asset-types";
+import type { Asset, AssetPayload } from "./asset-types";
 import { BFA_TYPE_LABELS } from "./asset-types";
 
 /**
@@ -61,12 +56,6 @@ export type AssetFormValues = {
 	serialNumber: string;
 	size: string;
 	annualTestDate: string;
-	/**
-	 * The optional first occupant, on the add form only. `null` is a real
-	 * answer: an asset registered before its occupant is known is normal, and
-	 * the customer can be attached later from the asset's own page.
-	 */
-	currentCustomerId: string | null;
 };
 
 /** Form values in which the BFA type holds a real choice — the only kind that is sent. */
@@ -91,11 +80,7 @@ export const emptyAssetValues: AssetFormValues = {
 	serialNumber: "",
 	size: "",
 	annualTestDate: "",
-	currentCustomerId: null,
 };
-
-/** The value the picker uses for "nobody" — a select cannot hold a real null. */
-const NO_CUSTOMER = "";
 
 /** An existing row as form values. Nullable columns become empty strings. */
 export function assetToFormValues(asset: Asset): CompletedAssetFormValues {
@@ -109,17 +94,11 @@ export function assetToFormValues(asset: Asset): CompletedAssetFormValues {
 		serialNumber: asset.serialNumber ?? "",
 		size: asset.size ?? "",
 		annualTestDate: isoToUsDate(asset.annualTestDate),
-		// Carried so the values are a complete record, not because the edit form
-		// renders it — that form has no customer control, and `buildAssetPayload`
-		// does not send one.
-		currentCustomerId: asset.currentCustomerId,
 	};
 }
 
 /**
- * Form values as the procedure's input. Blank optional fields become `null`, so
- * clearing one on the form is the same request as never having filled it in —
- * the server stores NULL either way rather than two spellings of empty.
+ * Form values as the procedure's input, every text field trimmed.
  *
  * The annual test date goes out as the API's `YYYY-MM-DD`. One that is not a
  * real day is sent as typed rather than blanked: the form does not submit it,
@@ -135,29 +114,12 @@ export function buildAssetPayload(
 		bin: values.bin.trim(),
 		bfaType: values.bfaType,
 		serviceAddress: values.serviceAddress.trim(),
-		assemblyLocation: values.assemblyLocation.trim() || null,
-		make: values.make.trim() || null,
-		model: values.model.trim() || null,
-		serialNumber: values.serialNumber.trim() || null,
-		size: values.size.trim() || null,
+		assemblyLocation: values.assemblyLocation.trim(),
+		make: values.make.trim(),
+		model: values.model.trim(),
+		serialNumber: values.serialNumber.trim(),
+		size: values.size.trim(),
 		annualTestDate: usDateToIso(values.annualTestDate) ?? values.annualTestDate,
-	};
-}
-
-/**
- * The same payload plus the optional first occupant, for the add form.
- *
- * Separate from `buildAssetPayload` rather than a flag on it, because the
- * difference is not cosmetic: `updateAsset` does not accept a customer at all,
- * and a shared builder that sometimes included one would be a field quietly
- * dropped on the way to the edit path.
- */
-export function buildCreateAssetPayload(
-	values: CompletedAssetFormValues,
-): CreateAssetPayload {
-	return {
-		...buildAssetPayload(values),
-		currentCustomerId: values.currentCustomerId,
 	};
 }
 
@@ -178,11 +140,26 @@ export const assetFormRules = {
 		required("A service address is required."),
 		maxLength(ASSET_FIELD_LIMITS.serviceAddress),
 	),
-	assemblyLocation: maxLength(ASSET_FIELD_LIMITS.assemblyLocation),
-	make: maxLength(ASSET_FIELD_LIMITS.make),
-	model: maxLength(ASSET_FIELD_LIMITS.model),
-	serialNumber: maxLength(ASSET_FIELD_LIMITS.serialNumber),
-	size: maxLength(ASSET_FIELD_LIMITS.size),
+	assemblyLocation: composeRules(
+		required("An assembly location is required."),
+		maxLength(ASSET_FIELD_LIMITS.assemblyLocation),
+	),
+	make: composeRules(
+		required("A make is required."),
+		maxLength(ASSET_FIELD_LIMITS.make),
+	),
+	model: composeRules(
+		required("A model is required."),
+		maxLength(ASSET_FIELD_LIMITS.model),
+	),
+	serialNumber: composeRules(
+		required("A serial number is required."),
+		maxLength(ASSET_FIELD_LIMITS.serialNumber),
+	),
+	size: composeRules(
+		required("A size is required."),
+		maxLength(ASSET_FIELD_LIMITS.size),
+	),
 	annualTestDate: composeRules(
 		required("An annual test date is required."),
 		usDate(),
@@ -201,19 +178,16 @@ export const assetFormRules = {
  * `asset_status` is deliberately absent: the scheduler computes it from the
  * annual test date, so there is nothing for a person to choose.
  *
- * The customer picker appears only when `customerOptions` is passed, which is
- * the add form and nothing else. On an existing asset, changing the occupant
- * has to close the outgoing occupancy row in the same transaction, so it
- * belongs to the control on the asset's own page — a field here would be the
- * one way to move an occupant without recording it.
+ * There is no customer control, on either form. A customer reaches an asset
+ * from the customer form, by BIN, or from the asset's own page — both close
+ * and open occupancy rows as they go (WP/Admin feedback removed the picker
+ * that used to sit on the add form).
  */
 export function AssetForm({
 	initialValues = emptyAssetValues,
 	pending = false,
 	errorMessage,
 	binErrorMessage,
-	customerOptions,
-	customersPending = false,
 	submitLabel,
 	pendingLabel,
 	onSubmit,
@@ -225,16 +199,12 @@ export function AssetForm({
 	errorMessage?: string;
 	/** A server refusal about the BIN — shown under that input, not above the form. */
 	binErrorMessage?: string;
-	/** Present on the add form only; its absence is what hides the picker. */
-	customerOptions?: AssetCustomerOption[];
-	customersPending?: boolean;
 	submitLabel: string;
 	pendingLabel: string;
 	onSubmit: (values: CompletedAssetFormValues) => void;
 	onCancel: () => void;
 }) {
 	const annualTestDateHintId = useId();
-	const currentCustomerId = useId();
 
 	const [values, setValues] = useState<AssetFormValues>(initialValues);
 	// Which BIN the rejected request carried. The server's "already in use"
@@ -275,14 +245,12 @@ export function AssetForm({
 	// can still take back.
 	const binChanged =
 		initialValues.bin !== "" && values.bin.trim() !== initialValues.bin;
-	const chosenCustomer = customerOptions?.find(
-		(customer) => customer.id === values.currentCustomerId,
-	);
 
-	/** One optional free-text field, with its limit reported inline. */
-	function optionalTextField(
+	/** One required free-text field, with its limit reported inline. */
+	function requiredTextField(
 		field: "make" | "model" | "serialNumber" | "size",
 		label: string,
+		placeholder: string,
 	) {
 		return (
 			<div className="flex flex-col gap-1.5">
@@ -292,9 +260,10 @@ export function AssetForm({
 					name={field}
 					value={values[field]}
 					onChange={(event) => update(field, event.target.value)}
-					placeholder="Optional"
+					placeholder={placeholder}
 					autoComplete="off"
 					disabled={pending}
+					aria-required="true"
 				/>
 				<FieldError {...validation.errorProps(field)} />
 			</div>
@@ -403,18 +372,19 @@ export function AssetForm({
 						name="assemblyLocation"
 						value={values.assemblyLocation}
 						onChange={(event) => update("assemblyLocation", event.target.value)}
-						placeholder="Optional — where on the property the assembly sits"
+						placeholder="Where on the property the assembly sits"
 						autoComplete="off"
 						disabled={pending}
+						aria-required="true"
 					/>
 					<FieldError {...validation.errorProps("assemblyLocation")} />
 				</div>
 
 				<div className="grid gap-4 sm:grid-cols-2">
-					{optionalTextField("make", "Make")}
-					{optionalTextField("model", "Model")}
-					{optionalTextField("serialNumber", "Serial number")}
-					{optionalTextField("size", "Size")}
+					{requiredTextField("make", "Make", "Watts")}
+					{requiredTextField("model", "Model", "LF909")}
+					{requiredTextField("serialNumber", "Serial number", "AB12345")}
+					{requiredTextField("size", "Size", '3/4"')}
 				</div>
 
 				<div className="flex flex-col gap-1.5">
@@ -444,71 +414,6 @@ export function AssetForm({
 					</p>
 				</div>
 
-				{/* Add form only. Registering an asset and knowing who occupies it are
-				    usually the same moment, and making that a second trip to the asset's
-				    own page would leave new assets with nowhere to send their email. */}
-				{customerOptions ? (
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={currentCustomerId}>Customer</Label>
-						<Select
-							items={{
-								[NO_CUSTOMER]: "No customer yet",
-								...Object.fromEntries(
-									customerOptions.map((customer) => [
-										customer.id,
-										customer.name,
-									]),
-								),
-							}}
-							value={values.currentCustomerId ?? NO_CUSTOMER}
-							onValueChange={(value) =>
-								update("currentCustomerId", (value as string) || null)
-							}
-							disabled={pending || customersPending}
-						>
-							<SelectTrigger id={currentCustomerId} name="currentCustomerId">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectGroup>
-									<SelectItem value={NO_CUSTOMER}>No customer yet</SelectItem>
-									{customerOptions.map((customer) => (
-										<SelectItem key={customer.id} value={customer.id}>
-											{customer.name}
-											{customer.status === "suspended" ? " — suspended" : ""}
-										</SelectItem>
-									))}
-								</SelectGroup>
-							</SelectContent>
-						</Select>
-
-						{/* Choosing a suspended customer means the asset starts with its
-						    email already paused. Said here, before saving, rather than
-						    discovered later as a notice that never went out. */}
-						{chosenCustomer?.status === "suspended" ? (
-							<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[12px] text-warning">
-								<TriangleAlert
-									className="mt-px size-3.5 shrink-0"
-									aria-hidden="true"
-								/>
-								{chosenCustomer.name} is suspended, so this asset&rsquo;s
-								automated email starts out paused.
-							</p>
-						) : customerOptions.length === 0 && !customersPending ? (
-							<p className="text-[12px] text-muted-foreground">
-								No customers yet. Register the asset anyway and attach one later
-								from its own page.
-							</p>
-						) : (
-							<p className="text-[12px] text-muted-foreground">
-								Optional. Leave it empty and attach one later from the
-								asset&rsquo;s own page — either way the assignment is recorded
-								with its start date.
-							</p>
-						)}
-					</div>
-				) : null}
-
 				<FormError message={errorMessage} />
 			</DialogBody>
 			<DialogFooter>
@@ -535,42 +440,24 @@ type BoundFormProps = {
 	onCancel: () => void;
 };
 
-/**
- * Registering a valve the WP owns, with no certifier submission behind it.
- *
- * Takes the customer list because this is the one form that may name an
- * occupant: a new asset has no occupancy to close, so attaching one opens the
- * first assignment rather than replacing an existing one.
- */
+/** Registering a valve the WP owns, with no certifier submission behind it. */
 export function AddAssetForm({
-	customerOptions = [],
-	customersPending,
 	onSubmit,
 	...props
 }: BoundFormProps & {
-	customerOptions?: AssetCustomerOption[];
-	customersPending?: boolean;
-	onSubmit: (payload: CreateAssetPayload) => void;
+	onSubmit: (payload: AssetPayload) => void;
 }) {
 	return (
 		<AssetForm
 			{...props}
-			customerOptions={customerOptions}
-			customersPending={customersPending}
 			submitLabel="Add asset"
 			pendingLabel="Adding…"
-			onSubmit={(values) => onSubmit(buildCreateAssetPayload(values))}
+			onSubmit={(values) => onSubmit(buildAssetPayload(values))}
 		/>
 	);
 }
 
-/**
- * Correcting an existing record, the BIN included.
- *
- * No customer control and no customer in the payload: on an asset that already
- * has an occupant, moving the pointer has to close the outgoing assignment in
- * the same transaction, and that is `assignCustomer`'s job.
- */
+/** Correcting an existing record, the BIN included. */
 export function EditAssetForm({
 	asset,
 	onSubmit,

@@ -37,8 +37,8 @@ const updateFn = vi.fn();
 vi.mock("@/utils/trpc", () => ({
 	trpc: {
 		customers: {
-			// Read only for the add dialog's optional customer picker, and only
-			// while that dialog is open.
+			// The add dialog used to read this for its customer picker. The picker
+			// is gone, and the test below holds the table to never asking.
 			listCustomers: {
 				queryOptions: (
 					_input: undefined,
@@ -336,7 +336,7 @@ describe("AssetsTable", () => {
 
 		const dialog = await screen.findByRole("dialog");
 
-		expect(await screen.findByLabelText("Customer")).toBeTruthy();
+		expect(await screen.findByLabelText("Size")).toBeTruthy();
 
 		for (const name of ["Cancel", "Add asset", "Close"] as const) {
 			const control = screen.getByRole("button", { name });
@@ -351,21 +351,16 @@ describe("AssetsTable", () => {
 		);
 	});
 
-	it("fetches the customer list only once the add dialog is opened", async () => {
-		listCustomersFn.mockResolvedValue([
-			{ id: "customer-a", name: "Marta Ellison", status: "active" },
-		]);
-
+	it("offers no customer picker and never loads the customer list", async () => {
+		// A customer reaches an asset from the customer form, by BIN, or from
+		// the asset's own page — not from registering it (WP/Admin feedback).
 		renderTable();
 		await screen.findByText("BIN-10041");
 
-		// Most visits to this page never open the dialog, so the picker's list is
-		// not part of loading the table.
-		expect(listCustomersFn).not.toHaveBeenCalled();
-
 		fireEvent.click(screen.getByRole("button", { name: /Add asset/ }));
 
-		expect(await screen.findByLabelText("Customer")).toBeTruthy();
-		await waitFor(() => expect(listCustomersFn).toHaveBeenCalled());
+		expect(await screen.findByLabelText("Size")).toBeTruthy();
+		expect(screen.queryByLabelText("Customer")).toBeNull();
+		expect(listCustomersFn).not.toHaveBeenCalled();
 	});
 });

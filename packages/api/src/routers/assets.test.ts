@@ -106,6 +106,12 @@ function newAsset(bin: string, overrides: Partial<Inputs["createAsset"]> = {}) {
 		bin,
 		bfaType: "RP" as const,
 		serviceAddress: "18 Canal Road",
+		// Required since the WP/Admin feedback.
+		assemblyLocation: "Meter pit, north side",
+		make: "Watts",
+		model: "909",
+		serialNumber: "SN-88120",
+		size: "2 in",
 		annualTestDate: "2027-04-01",
 		...overrides,
 	};
@@ -121,11 +127,12 @@ function asUpdate(
 		bin: asset.bin,
 		bfaType: asset.bfaType,
 		serviceAddress: asset.serviceAddress,
-		make: asset.make,
-		model: asset.model,
-		serialNumber: asset.serialNumber,
-		size: asset.size,
-		assemblyLocation: asset.assemblyLocation,
+		// The columns are nullable, but every asset created here has them.
+		make: asset.make ?? "",
+		model: asset.model ?? "",
+		serialNumber: asset.serialNumber ?? "",
+		size: asset.size ?? "",
+		assemblyLocation: asset.assemblyLocation ?? "",
 		annualTestDate: asset.annualTestDate as string,
 		...overrides,
 	};
@@ -621,11 +628,11 @@ describeDb("asset procedures", () => {
 					bin: "TAKEN-OVER",
 					bfaType: "PVB",
 					serviceAddress: "Taken Over",
-					make: null,
-					model: null,
-					serialNumber: null,
-					size: null,
-					assemblyLocation: null,
+					make: "Watts",
+					model: "909",
+					serialNumber: "SN-1",
+					size: "2 in",
+					assemblyLocation: "Meter pit",
 					annualTestDate: "2029-01-01",
 				}),
 			).rejects.toThrow(/not found/i);
@@ -743,16 +750,22 @@ describeDb("asset procedures", () => {
 			expect(updated.updatedAt.getTime()).not.toBe(created.updatedAt.getTime());
 		});
 
-		it("treats clearing an optional field as a real change", async () => {
+		it("refuses to clear a descriptive field", async () => {
 			const created = await callerFor(ids.adminA).assets.createAsset(
 				newAsset("CLEARS-A-MODEL", { model: "909" }),
 			);
 
-			const updated = await callerFor(ids.adminA).assets.updateAsset(
-				asUpdate(created, { model: null }),
-			);
+			await expect(
+				callerFor(ids.adminA).assets.updateAsset(
+					asUpdate(created, { model: "  " }),
+				),
+			).rejects.toThrow(/model is required/i);
 
-			expect(updated.model).toBeNull();
+			const { rows } = await pool.query(
+				"select model from bfa_assets where id = $1",
+				[created.id],
+			);
+			expect(rows[0]?.model).toBe("909");
 		});
 	});
 
