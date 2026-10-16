@@ -1,8 +1,6 @@
 "use client";
 
 import {
-	checkPhotoFile,
-	isPreviewablePhotoPath,
 	MAX_PHOTO_SIZE_LABEL,
 	MAX_PHOTOS,
 	PHOTO_ACCEPT,
@@ -26,6 +24,7 @@ import { createClient } from "@/lib/supabase/client";
 import { trpc } from "@/utils/trpc";
 
 import { PhotoThumbnail } from "../photo-thumbnail";
+import { preparePhoto } from "../prepare-photo";
 import { SignOffButtons } from "../test-blocks/choice-buttons";
 import { usePhotoUrls } from "../use-photo-urls";
 import { WizardField } from "../wizard-field";
@@ -152,9 +151,8 @@ export function PhotoUpload({
 	const [uploading, setUploading] = useState(false);
 	// Why the last picked file was refused before any upload started.
 	const [rejection, setRejection] = useState<string | null>(null);
-	// Object URLs of the JPEG/PNG files chosen this session, for the thumbnails;
-	// a resumed draft has none and waits for signed links, and a HEIC never
-	// gets one (see `PhotoThumbnail`).
+	// Object URLs of the photos uploaded this session, for the thumbnails; a
+	// resumed draft has none and waits for signed links.
 	const [previews, setPreviews] = useState<Record<string, string>>({});
 	// The same map for the unmount clean-up below, which must see the latest.
 	const previewsRef = useRef(previews);
@@ -197,48 +195,40 @@ export function PhotoUpload({
 		}
 		if (busy.current || photoPaths.length >= MAX_PHOTOS) return;
 
-		// Refused here, before an upload URL is asked for or a byte is sent. The
-		// server and the bucket hold the same rules again; this is the one that
-		// can say why in words.
-		const check = checkPhotoFile(file);
-		if (!check.ok) {
-			setRejection(PHOTO_REJECTION_MESSAGES[check.reason]);
-			return;
-		}
-		setRejection(null);
-
 		busy.current = true;
 		setUploading(true);
 		try {
+			// Checked — and a HEIC converted to JPEG — before an upload URL is
+			// asked for or a byte is sent. The server and the bucket hold the
+			// same rules again; this is the one that can say why in words.
+			const photo = await preparePhoto(file);
+			if (!photo.ok) {
+				setRejection(PHOTO_REJECTION_MESSAGES[photo.reason]);
+				return;
+			}
+			setRejection(null);
+
 			const { token, path } = await getUploadUrl.mutateAsync({
 				id: draftId,
 				waterPurveyorId,
-				extension: check.extension,
-				contentType: check.contentType,
-				size: check.size,
+				extension: photo.extension,
+				contentType: photo.contentType,
+				size: photo.size,
 				keep: photoPaths,
 			});
 
-			// For a Blob body supabase-js sends the Blob's own type and ignores a
-			// `contentType` option, and `File.type` may be empty or wrong — so the
-			// bytes go up as a slice typed with the canonical MIME. A slice is a
-			// view of the file, not a copy.
 			const { error } = await createClient()
 				.storage.from("test-photos")
-				.uploadToSignedUrl(
-					path,
-					token,
-					file.slice(0, file.size, check.contentType),
-				);
+				.uploadToSignedUrl(path, token, photo.body);
 
 			if (error) throw error;
 
-			if (isPreviewablePhotoPath(path)) {
-				setPreviews((current) => ({
-					...current,
-					[path]: URL.createObjectURL(file),
-				}));
-			}
+			// Every format gets a local preview; `PhotoThumbnail` falls back to a
+			// tile if this browser cannot draw it (an unconverted HEIC in Chrome).
+			setPreviews((current) => ({
+				...current,
+				[path]: URL.createObjectURL(photo.body),
+			}));
 			onChange([...photoPaths, path]);
 			forgetSignedLinks();
 		} catch (error) {
@@ -317,8 +307,6 @@ export function PhotoUpload({
 									id={inputId}
 									type="file"
 									accept={PHOTO_ACCEPT}
-									// Opens the camera straight away on a phone; ignored on desktop.
-									capture="environment"
 									className="sr-only"
 									disabled={uploading}
 									aria-describedby={rejection ? errorId : undefined}

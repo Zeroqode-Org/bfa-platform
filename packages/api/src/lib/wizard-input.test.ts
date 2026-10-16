@@ -5,6 +5,7 @@ import {
 	checkPhotoFile,
 	MAX_PHOTO_BYTES,
 	PHOTO_ACCEPT,
+	sniffPhotoFormat,
 } from "./photo-rules";
 import {
 	ASSEMBLY_FIELD_KEYS,
@@ -377,6 +378,54 @@ describe("photo file rules", () => {
 			ok: false,
 			reason: "empty",
 		});
+	});
+});
+
+describe("sniffPhotoFormat", () => {
+	const ascii = (text: string) => [...text].map((char) => char.charCodeAt(0));
+	const ftyp = (major: string, ...compatible: string[]) =>
+		new Uint8Array([
+			0,
+			0,
+			0,
+			16 + compatible.length * 4,
+			...ascii("ftyp"),
+			...ascii(major),
+			0,
+			0,
+			0,
+			0,
+			...compatible.flatMap(ascii),
+		]);
+
+	it("recognises JPEG, PNG and HEIC by their first bytes", () => {
+		expect(sniffPhotoFormat(new Uint8Array([0xff, 0xd8, 0xff, 0xe1]))).toBe(
+			"jpg",
+		);
+		expect(
+			sniffPhotoFormat(
+				new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+			),
+		).toBe("png");
+		expect(sniffPhotoFormat(ftyp("heic", "mif1", "heic"))).toBe("heic");
+		expect(sniffPhotoFormat(ftyp("heix"))).toBe("heic");
+		// A generic HEIF brand counts only with a HEIC brand alongside it.
+		expect(sniffPhotoFormat(ftyp("mif1", "miaf", "heic"))).toBe("heic");
+	});
+
+	it("refuses everything else: AVIF, generic HEIF, PDF, WebP, truncated", () => {
+		for (const bytes of [
+			ftyp("avif", "mif1", "miaf"),
+			ftyp("mif1", "avif"),
+			ftyp("mif1"),
+			new Uint8Array(ascii("%PDF-1.4 the rest of it")),
+			new Uint8Array(ascii("RIFF    WEBPVP8 ")),
+			new Uint8Array([0xff, 0xd8]),
+			new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+			new Uint8Array([]),
+		]) {
+			expect(sniffPhotoFormat(bytes)).toBeNull();
+		}
 	});
 });
 

@@ -87,8 +87,43 @@ function renderUpload(initial?: string[]) {
 	);
 }
 
-function file(name: string, type: string, size?: number) {
-	const picked = new File(["bytes"], name, { type });
+/** The first bytes of each format, padded to 32 — what `preparePhoto` sniffs. */
+const pad = (head: number[]) => [...head, ...Array(32 - head.length).fill(0)];
+const ascii = (text: string) => [...text].map((char) => char.charCodeAt(0));
+const BYTES = {
+	jpg: pad([0xff, 0xd8, 0xff, 0xe0]),
+	png: pad([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+	heic: pad([
+		0,
+		0,
+		0,
+		0x18,
+		...ascii("ftyp"),
+		...ascii("heic"),
+		0,
+		0,
+		0,
+		0,
+		...ascii("mif1"),
+		...ascii("heic"),
+	]),
+	pdf: pad(ascii("%PDF-1.4")),
+};
+
+/** The content a file's name implies, unless `content` says otherwise. */
+function file(
+	name: string,
+	type: string,
+	size?: number,
+	content?: keyof typeof BYTES,
+) {
+	const extension = name.split(".").pop()?.toLowerCase();
+	const kind =
+		content ??
+		(extension === "jpeg" ? "jpg" : (extension as keyof typeof BYTES));
+	const picked = new File([new Uint8Array(BYTES[kind] ?? BYTES.pdf)], name, {
+		type,
+	});
 	if (size !== undefined)
 		Object.defineProperty(picked, "size", { value: size });
 
@@ -122,8 +157,13 @@ afterEach(() => {
 });
 
 describe("PhotoUpload", () => {
-	it("offers only the accepted formats in the picker", () => {
+	it("offers only the accepted formats in the picker, with camera and gallery both", () => {
 		renderUpload();
+
+		// No `capture`: a phone then offers its camera *and* its photo library.
+		expect(screen.getByLabelText(/Add photo/).hasAttribute("capture")).toBe(
+			false,
+		);
 
 		const accept =
 			(screen.getByLabelText(/Add photo/) as HTMLInputElement).accept ?? "";
@@ -158,7 +198,7 @@ describe("PhotoUpload", () => {
 				waterPurveyorId: WP,
 				extension,
 				contentType,
-				size: 5,
+				size: 32,
 				keep: [],
 			});
 
@@ -167,7 +207,7 @@ describe("PhotoUpload", () => {
 			expect(token).toBe("signed-token");
 			// The canonical type travels on the uploaded Blob, not the browser's guess.
 			expect((body as Blob).type).toBe(contentType);
-			expect((body as Blob).size).toBe(5);
+			expect((body as Blob).size).toBe(32);
 		},
 	);
 
@@ -185,6 +225,70 @@ describe("PhotoUpload", () => {
 		expect(getUploadUrl).not.toHaveBeenCalled();
 		expect(uploadToSignedUrl).not.toHaveBeenCalled();
 		expect(screen.queryByRole("button", { name: /Remove photo/ })).toBeNull();
+	});
+
+	it("refuses a file whose content is not an image, whatever its name", async () => {
+		renderUpload();
+		pick(file("scan.jpg", "image/jpeg", undefined, "pdf"));
+
+		expect(
+			await screen.findByText("Supported formats are HEIC, PNG and JPG/JPEG."),
+		).toBeTruthy();
+		expect(getUploadUrl).not.toHaveBeenCalled();
+	});
+
+	it("uploads a JPEG named .heic as the JPEG it is", async () => {
+		renderUpload();
+		pick(file("IMG_1.heic", "image/heic", undefined, "jpg"));
+
+		await waitFor(() => expect(uploadToSignedUrl).toHaveBeenCalled());
+		expect(getUploadUrl).toHaveBeenCalledWith(
+			expect.objectContaining({ extension: "jpg", contentType: "image/jpeg" }),
+		);
+	});
+
+	it("converts a HEIC to JPEG where the browser can decode it, scaled to fit", async () => {
+		const close = vi.fn();
+		const drawImage = vi.fn();
+		const canvases: HTMLCanvasElement[] = [];
+		vi.stubGlobal(
+			"createImageBitmap",
+			vi.fn(async () => ({ width: 8000, height: 6000, close })),
+		);
+		vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+			function (this: HTMLCanvasElement) {
+				canvases.push(this);
+				return { drawImage } as never;
+			},
+		);
+		vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(
+			(callback, type) =>
+				callback(new Blob([new Uint8Array(BYTES.jpg)], { type: type ?? "" })),
+		);
+
+		try {
+			renderUpload();
+			pick(file("IMG_1.HEIC", ""));
+
+			await waitFor(() => expect(uploadToSignedUrl).toHaveBeenCalled());
+			expect(getUploadUrl).toHaveBeenCalledWith(
+				expect.objectContaining({
+					extension: "jpg",
+					contentType: "image/jpeg",
+					size: 32,
+				}),
+			);
+			const [path, , body] = uploadToSignedUrl.mock.calls[0] ?? [];
+			expect(path).toMatch(/\.jpg$/);
+			expect((body as Blob).type).toBe("image/jpeg");
+			// 8000 × 6000 does not fit an iOS canvas; the longest side becomes 4000.
+			expect([canvases[0]?.width, canvases[0]?.height]).toEqual([4000, 3000]);
+			expect(drawImage).toHaveBeenCalledTimes(1);
+			expect(close).toHaveBeenCalled();
+		} finally {
+			vi.unstubAllGlobals();
+			vi.restoreAllMocks();
+		}
 	});
 
 	it("refuses a file over 25 MB before asking for an upload URL", async () => {
@@ -220,17 +324,40 @@ describe("PhotoUpload", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
-	it("shows a HEIC as an attached tile, never a broken <img>", async () => {
+	it("keeps a HEIC the browser cannot convert, and shows it as a tile rather than a broken <img>", async () => {
 		renderUpload();
 		pick(file("IMG_1.heic", "image/heic"));
 
+		// No decoder here (as in Chrome): the HEIC goes up unchanged.
+		await waitFor(() => expect(uploadToSignedUrl).toHaveBeenCalled());
+		expect(getUploadUrl).toHaveBeenCalledWith(
+			expect.objectContaining({ extension: "heic", contentType: "image/heic" }),
+		);
+
+		// The preview is tried, but stays hidden until it loads…
+		const image = await screen.findByAltText("Attached 1 of 2");
+		expect(image.className).toContain("hidden");
+		expect(screen.getByText("Photo 1 added")).toBeTruthy();
+
+		// …and when the browser cannot draw it, the tile takes its place.
+		fireEvent.error(image);
 		expect(
 			await screen.findByRole("img", { name: /HEIC, no preview/ }),
 		).toBeTruthy();
 		expect(screen.getByText("Photo attached")).toBeTruthy();
 		expect(document.querySelector("img")).toBeNull();
-		expect(URL.createObjectURL).not.toHaveBeenCalled();
 		expect(screen.getByRole("button", { name: "Remove photo 1" })).toBeTruthy();
+	});
+
+	it("shows a preview once it has loaded", async () => {
+		renderUpload();
+		pick(file("IMG_1.jpg", "image/jpeg"));
+
+		const image = await screen.findByAltText("Attached 1 of 2");
+		fireEvent.load(image);
+
+		await waitFor(() => expect(image.className).not.toContain("hidden"));
+		expect(screen.queryByText("Photo 1 added")).toBeNull();
 	});
 
 	it("previews a JPEG, and falls back to the tile if the browser cannot draw it", async () => {

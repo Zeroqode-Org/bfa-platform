@@ -1,9 +1,7 @@
 "use client";
 
-import {
-	isPreviewablePhotoPath,
-	parsePhotoPath,
-} from "@bfa-platform/api/lib/photo-rules";
+import { parsePhotoPath } from "@bfa-platform/api/lib/photo-rules";
+import { cn } from "@bfa-platform/ui/lib/utils";
 import { ImageIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -11,11 +9,13 @@ import { useState } from "react";
  * One attached photo, as an image when the browser can draw it and as a plain
  * "Photo attached" tile when it cannot.
  *
- * HEIC is never handed to `<img>`: most browsers outside Safari cannot decode
- * it, and a broken-image icon reads as a failed upload when the file is in
- * fact stored. JPEG and PNG are drawn, and fall back to the same tile if the
- * image still fails to load (an expired link, a file that is not what its
- * name said).
+ * Every format is tried, HEIC included: Safari draws HEIC, most other browsers
+ * do not. The image stays hidden until it has loaded, so a browser that cannot
+ * decode it never shows a broken-image icon — which would read as a failed
+ * upload when the file is in fact stored — and falls back to the tile instead.
+ * The same happens for an expired link or a file that is not what it claims.
+ * (Photos uploaded through the wizard are normally JPEG already: it converts
+ * HEIC before upload where the browser can, see `prepare-photo.ts`.)
  */
 export function PhotoThumbnail({
 	path,
@@ -24,36 +24,40 @@ export function PhotoThumbnail({
 	pendingLabel,
 	imageClassName,
 }: {
-	/** The stored path; its extension decides whether a preview is attempted. */
+	/** The stored path; its extension names the format on the fallback tile. */
 	path: string;
 	/** A blob: or signed URL to draw; absent while it is still being fetched. */
 	src: string | undefined;
 	alt: string;
-	/** Shown for a previewable photo whose `src` has not arrived yet. */
+	/** Shown while there is no image to show yet. */
 	pendingLabel: string;
 	imageClassName?: string;
 }) {
 	const [failedSrc, setFailedSrc] = useState<string | null>(null);
-	const previewable = isPreviewablePhotoPath(path);
+	const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
 
-	if (previewable && src && failedSrc !== src) {
-		return (
-			// biome-ignore lint/performance/noImgElement: a blob: or signed link to a private file, not an asset Next can optimise
-			<img
-				src={src}
-				alt={alt}
-				className={imageClassName}
-				onError={() => setFailedSrc(src)}
-			/>
-		);
-	}
+	if (!src || failedSrc !== src) {
+		const loaded = Boolean(src) && loadedSrc === src;
 
-	if (previewable && !src) {
 		return (
-			<span className="flex flex-col items-center gap-1 text-[12px] text-muted-foreground">
-				<ImageIcon className="size-5" aria-hidden="true" />
-				{pendingLabel}
-			</span>
+			<>
+				{loaded ? null : (
+					<span className="flex flex-col items-center gap-1 text-[12px] text-muted-foreground">
+						<ImageIcon className="size-5" aria-hidden="true" />
+						{pendingLabel}
+					</span>
+				)}
+				{src ? (
+					// biome-ignore lint/performance/noImgElement: a blob: or signed link to a private file, not an asset Next can optimise
+					<img
+						src={src}
+						alt={alt}
+						className={cn(imageClassName, !loaded && "hidden")}
+						onLoad={() => setLoadedSrc(src)}
+						onError={() => setFailedSrc(src)}
+					/>
+				) : null}
+			</>
 		);
 	}
 

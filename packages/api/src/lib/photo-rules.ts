@@ -170,9 +170,53 @@ export function isOwnPhotoPath(submissionId: string, path: unknown): boolean {
 	return parsePhotoPath(path)?.submissionId === submissionId.toLowerCase();
 }
 
-/** Whether a browser `<img>` can be expected to draw this stored photo — JPEG and PNG, not HEIC. */
-export function isPreviewablePhotoPath(path: string): boolean {
-	const extension = parsePhotoPath(path)?.extension;
+/** How many leading bytes `sniffPhotoFormat` needs to see. */
+export const PHOTO_SNIFF_BYTES = 64;
 
-	return extension === "jpg" || extension === "png";
+/** ISO-BMFF brands that mean a HEVC-coded HEIF image, i.e. a HEIC. */
+const HEIC_BRANDS = new Set(["heic", "heix", "heim", "heis", "hevc", "hevx"]);
+/** Generic HEIF brands; a HEIC only when a HEIC brand is also listed (AVIF uses these too). */
+const HEIF_BRANDS = new Set(["mif1", "msf1"]);
+
+function ascii(bytes: Uint8Array, from: number, to: number): string {
+	return String.fromCharCode(...bytes.subarray(from, to));
+}
+
+/**
+ * What a file actually is, from its first bytes: JPEG, PNG or HEIC, or null
+ * for anything else. The name and `File.type` are claims; this is the one
+ * check that looks at the content. Used by the wizard to upload a photo in
+ * its real format (a JPEG named `.heic` goes up as a JPEG) and by the results
+ * PDF to decide what it can draw.
+ */
+export function sniffPhotoFormat(bytes: Uint8Array): PhotoExtension | null {
+	if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
+	if (
+		bytes.length >= 8 &&
+		[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every(
+			(byte, index) => bytes[index] === byte,
+		)
+	) {
+		return "png";
+	}
+
+	// HEIF: a `ftyp` box first — 4-byte size, "ftyp", major brand, minor
+	// version, then the compatible brands up to the box's size.
+	if (bytes.length < 16 || ascii(bytes, 4, 8) !== "ftyp") return null;
+
+	const major = ascii(bytes, 8, 12);
+	if (HEIC_BRANDS.has(major)) return "heic";
+	if (!HEIF_BRANDS.has(major)) return null;
+
+	const boxSize =
+		((bytes[0] ?? 0) << 24) |
+		((bytes[1] ?? 0) << 16) |
+		((bytes[2] ?? 0) << 8) |
+		(bytes[3] ?? 0);
+	const end = Math.min(boxSize, bytes.length);
+	for (let offset = 16; offset + 4 <= end; offset += 4) {
+		if (HEIC_BRANDS.has(ascii(bytes, offset, offset + 4))) return "heic";
+	}
+
+	return null;
 }
