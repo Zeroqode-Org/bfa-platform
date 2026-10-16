@@ -301,6 +301,11 @@ describeDb("submitted-test procedures", () => {
 			"delete from test_submissions where water_purveyor_id = any($1::uuid[])",
 			[[wpA, wpB]],
 		);
+		// A linked pass now queues next year's reminder for its asset.
+		await pool.query(
+			"delete from scheduled_jobs where water_purveyor_id = any($1::uuid[])",
+			[[wpA, wpB]],
+		);
 		await pool.query(
 			"delete from bfa_assets where water_purveyor_id = any($1::uuid[])",
 			[[wpA, wpB]],

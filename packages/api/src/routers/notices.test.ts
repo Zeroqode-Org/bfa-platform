@@ -191,11 +191,13 @@ describeDb("notices procedures", () => {
 
 		// Two past-due assemblies for one customer: the de-duplication case.
 		await pool.query(
-			`insert into bfa_assets (id, water_purveyor_id, bin, current_customer_id, bfa_type, service_address, asset_status)
-			 values ($1, $2, 'NOTICE-A-1', $3, 'RP', '1 Overdue Lane', 'past_due'),
-			        ($4, $2, 'NOTICE-A-2', $3, 'DC', '2 Overdue Lane', 'past_due'),
-			        ($5, $2, 'NOTICE-A-3', $6, 'RP', '3 Current Lane', 'active'),
-			        ($7, $8, 'NOTICE-B-1', $9, 'RP', '1 Other Tenant Lane', 'past_due')`,
+			// Past due means the annual test date has passed — the audience reads
+			// the date, not the stored status — so the dates carry the meaning.
+			`insert into bfa_assets (id, water_purveyor_id, bin, current_customer_id, bfa_type, service_address, annual_test_date, asset_status)
+			 values ($1, $2, 'NOTICE-A-1', $3, 'RP', '1 Overdue Lane', '2024-03-01', 'past_due'),
+			        ($4, $2, 'NOTICE-A-2', $3, 'DC', '2 Overdue Lane', '2025-03-01', 'past_due'),
+			        ($5, $2, 'NOTICE-A-3', $6, 'RP', '3 Current Lane', '2099-01-15', 'active'),
+			        ($7, $8, 'NOTICE-B-1', $9, 'RP', '1 Other Tenant Lane', '2024-03-01', 'past_due')`,
 			[
 				assetIds.pastDueOne,
 				wpA,

@@ -9,6 +9,7 @@ import {
 import { and, asc, eq, exists, sql } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
+import { isPastDue } from "../lib/asset-status-sql";
 import {
 	type AuditActor,
 	auditActor,
@@ -494,7 +495,9 @@ async function recipientsFor(
 										// mispointed asset in another tenant could decide that
 										// this customer is past due.
 										eq(bfaAssets.waterPurveyorId, waterPurveyorId),
-										eq(bfaAssets.assetStatus, "past_due"),
+										// As of today, from the date — not the stored column,
+										// which only a scheduler tick moves.
+										isPastDue(),
 									),
 								),
 						),

@@ -253,8 +253,8 @@ export function WpDashboard({ today }: { today: string }) {
 						<CardHeader>
 							<CardTitle>Delinquent assets</CardTitle>
 							<CardDescription>
-								Past due, worst first. The status is the scheduler&rsquo;s, read
-								from the asset rather than worked out here.
+								Past due, worst first — every assembly whose annual test date
+								has passed.
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -487,7 +487,8 @@ const CARDS: readonly DashboardCard[] = [
 		tone: "danger",
 		Icon: TriangleAlert,
 		hint: "Assets outside their test window — open the fail list",
-		// The card's number is the scheduler's past-due count; the fail list it
+		// The card's number is the past-due count, from each asset's annual test
+		// date as of today; the fail list it
 		// opens is the failure-based work queue. Related answers, and the build
 		// plan routes one through the other.
 		href: failListHref,

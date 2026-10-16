@@ -15,6 +15,7 @@ import {
 	listAssetsInput,
 	updateAssetInput,
 } from "../lib/asset-input";
+import { effectiveAssetStatus } from "../lib/asset-status-sql";
 import {
 	type AuditActor,
 	auditActor,
@@ -64,6 +65,16 @@ const assetSelection = {
 };
 
 /**
+ * `assetSelection` with the status worked out from the annual test date as of
+ * now, rather than read from the scheduler-written column — see
+ * `effectiveAssetStatus`. A function, not a constant, because "today" has to
+ * be the request's today.
+ */
+function assetReadSelection(now = new Date()) {
+	return { ...assetSelection, assetStatus: effectiveAssetStatus(now) };
+}
+
+/**
  * BFA assets are the WP's own record of the physical valves it is responsible
  * for. A WP registers one directly from this screen — no certifier submission
  * needed (PRD § 7, flow 3) — and the annual test date it is given here is what
@@ -87,9 +98,14 @@ export const assetsRouter = router({
 	listAssets: wpProcedure
 		.input(listAssetsInput)
 		.query(async ({ ctx, input }) => {
+			const now = new Date();
 			const where = and(
 				eq(bfaAssets.waterPurveyorId, ctx.caller.waterPurveyorId),
-				input.status ? eq(bfaAssets.assetStatus, input.status) : undefined,
+				// Filtered on the status as of today, not the stored column — the
+				// Past due filter once came back empty while assets were years late.
+				input.status
+					? sql`${effectiveAssetStatus(now)} = ${input.status}::asset_status`
+					: undefined,
 				searchPredicate(input.search),
 			);
 
@@ -103,7 +119,7 @@ export const assetsRouter = router({
 			const total = totalRow?.value ?? 0;
 
 			const rows = await db
-				.select(assetSelection)
+				.select(assetReadSelection(now))
 				.from(bfaAssets)
 				.leftJoin(customers, tenantOccupant(ctx.caller.waterPurveyorId))
 				.where(where)
@@ -499,7 +515,7 @@ function tenantAssignmentCustomer(waterPurveyorId: string) {
 /** One asset with its occupancy history, or a not-found. */
 async function readAssetDetail(waterPurveyorId: string, assetId: string) {
 	const [asset] = await db
-		.select(assetSelection)
+		.select(assetReadSelection())
 		.from(bfaAssets)
 		.leftJoin(customers, tenantOccupant(waterPurveyorId))
 		.where(

@@ -21,6 +21,7 @@ import type { EmailDriver } from "../lib/email";
 import {
 	addCalendarDays,
 	addCalendarMonths,
+	addCalendarYears,
 	honoluluDayStart,
 	honoluluToday,
 } from "../lib/honolulu-dates";
@@ -1365,6 +1366,28 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			return id;
 		}
 
+		/**
+		 * What a linked pass leaves behind now: the assembly moved to its next
+		 * cycle (WP/Admin feedback) and exactly one pending reminder for it.
+		 * Every asset here is due `longOverdueDate`, six months ago, and every
+		 * test is dated today — so the next cycle is a year after the old date.
+		 */
+		async function expectNextCycle(assetId: string) {
+			const nextDate = addCalendarYears(longOverdueDate, 1);
+			const { rows } = await pool.query<{ annual_test_date: string }>(
+				"select annual_test_date::text from bfa_assets where id = $1",
+				[assetId],
+			);
+			expect(rows[0]?.annual_test_date).toBe(nextDate);
+
+			const live = await liveJobFor(assetId);
+			expect(live.job_type).toBe("reminder");
+			expect(live.status).toBe("pending");
+			expect(live.run_at.getTime()).toBe(
+				noticeRunAt(nextDate, "reminder").getTime(),
+			);
+		}
+
 		it("cancels every remaining stage when a submitted passing test is corrected", async () => {
 			const caller = callerFor(ids.adminA);
 			const asset = await caller.assets.createAsset(
@@ -1396,7 +1419,8 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 
 			expect(byType.get("late_notice_1")?.status).toBe("cancelled");
 			expect(byType.get("late_notice_1")?.last_error).toMatch(/passing test/i);
-			expect(rows.filter((row) => row.status === "pending")).toEqual([]);
+			// Nothing of this cycle survives; next year's reminder is queued.
+			await expectNextCycle(asset.id);
 
 			const cancelled = eventsNamed(lines, "scheduler_job_cancelled");
 			expect(cancelled).toHaveLength(1);
@@ -1478,9 +1502,10 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			});
 
 			const rows = await jobsFor(asset.id);
-			expect(rows).toHaveLength(1);
-			expect(rows[0]?.status).toBe("cancelled");
-			expect(rows[0]?.last_error).toMatch(/passing test/i);
+			const cancelled = rows.filter((row) => row.status === "cancelled");
+			expect(cancelled).toHaveLength(1);
+			expect(cancelled[0]?.last_error).toMatch(/passing test/i);
+			await expectNextCycle(asset.id);
 		});
 
 		it("does not cancel the chain when a failed test is linked", async () => {
@@ -1531,12 +1556,15 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			expect(eventsNamed(lines, "scheduler_job_superseded")).toHaveLength(1);
 
 			const rows = await jobsFor(asset.id);
-			expect(rows).toHaveLength(1);
-			expect(rows[0]?.status).toBe("cancelled");
-			// The cancellation won; no late notice was queued behind it.
+			expect(rows.find((row) => row.id === claimed?.id)?.status).toBe(
+				"cancelled",
+			);
+			// The cancellation won; no late notice was queued behind it — only
+			// next year's reminder, for the date the pass moved the asset to.
 			expect(rows.filter((row) => row.job_type === "late_notice_1")).toEqual(
 				[],
 			);
+			await expectNextCycle(asset.id);
 		});
 	});
 

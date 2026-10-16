@@ -10,6 +10,7 @@ import { and, asc, eq, gte, isNotNull, lte, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import { router, wpProcedure } from "../index";
+import { isPastDue } from "../lib/asset-status-sql";
 import {
 	monthRangeOf,
 	passRate,
@@ -72,7 +73,8 @@ export const dashboardRouter = router({
 	 *     trend chart below it. Which month counts as "current" is
 	 *     `monthRangeOf(new Date())`, the one zone-dependent step in this
 	 *     feature and documented at `dashboard-calendar`.
-	 *   * **Past due** — assets the scheduler has marked `past_due`.
+	 *   * **Past due** — assets whose annual test date has passed, as of today
+	 *     in Hawaii (`isPastDue`), not the scheduler-written column.
 	 *   * **Submitted reports** — every submitted row in the tenant.
 	 *   * **No-BIN submissions** — submitted rows with a null `bfa_asset_id`.
 	 *
@@ -99,7 +101,10 @@ export const dashboardRouter = router({
 			db
 				.select({
 					totalAssets: sql<number>`count(*)::int`,
-					pastDue: countWhere(sql`${bfaAssets.assetStatus} = 'past_due'`),
+					// From the annual test date as of today, not the scheduler-written
+					// column — see `isPastDue`. The card read 0 while assets were
+					// years late on a deployment whose tick rarely ran.
+					pastDue: countWhere(isPastDue()),
 				})
 				.from(bfaAssets)
 				.where(eq(bfaAssets.waterPurveyorId, waterPurveyorId)),
@@ -350,7 +355,8 @@ export const dashboardRouter = router({
 	}),
 
 	/**
-	 * The assets the scheduler has marked `past_due`, oldest test date first.
+	 * The assets whose annual test date has passed (`isPastDue`), oldest test
+	 * date first.
 	 *
 	 * `asset_status` is read here and written nowhere: the scheduler computes it
 	 * from `annual_test_date`, and no procedure in the app accepts one. This
@@ -358,10 +364,10 @@ export const dashboardRouter = router({
 	 *
 	 * Ordered by the date that made them delinquent rather than by BIN, because
 	 * the question this list answers is "who is worst" rather than "who is
-	 * where". `nulls last`: a past-due asset carrying no annual test date is a
-	 * data problem rather than the most overdue valve on the system, so it does
-	 * not sort to the top of a work queue. `bin` breaks the tie, so two assets
-	 * due the same day hold a stable order between renders.
+	 * where". An asset with no annual test date is never on this list — past
+	 * due is read from the date — so `nulls last` is only a guard. `bin` breaks
+	 * the tie, so two assets due the same day hold a stable order between
+	 * renders.
 	 *
 	 * The occupant's name comes along because this list is a work queue — the
 	 * next action on one of these rows is contacting somebody — and the join is
@@ -402,7 +408,7 @@ export const dashboardRouter = router({
 				.where(
 					and(
 						eq(bfaAssets.waterPurveyorId, ctx.caller.waterPurveyorId),
-						eq(bfaAssets.assetStatus, "past_due"),
+						isPastDue(),
 					),
 				)
 				.orderBy(
