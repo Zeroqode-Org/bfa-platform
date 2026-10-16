@@ -19,6 +19,7 @@ import {
 const standard = {
 	name: "Marta Ellison",
 	email: "marta@example.com",
+	address: "12 Canal Road",
 	rateCategory: "standard" as const,
 	status: "active" as const,
 };
@@ -26,6 +27,7 @@ const standard = {
 const agricultural = {
 	name: "Ridgeline Orchards",
 	email: "billing@ridgeline.example",
+	address: "88 Mamalahoa Hwy",
 	rateCategory: "agricultural" as const,
 	agRenewalDate: "2027-03-01",
 	status: "active" as const,
@@ -36,12 +38,47 @@ describe("createCustomerInput", () => {
 		const parsed = createCustomerInput.parse({
 			name: "Marta Ellison",
 			email: "marta@example.com",
+			address: "12 Canal Road",
 			rateCategory: "standard",
 		});
 
 		expect(parsed.status).toBe("active");
 		expect(parsed.accountNumber).toBeNull();
-		expect(parsed.address).toBeNull();
+		expect(parsed.attachBin).toBeNull();
+	});
+
+	it("requires an address, and trims the one it keeps", () => {
+		// The WP/Admin feedback made the address mandatory on the customer form.
+		for (const address of [undefined, null, "", "   "]) {
+			expect(
+				createCustomerInput.safeParse({ ...standard, address }).success,
+			).toBe(false);
+		}
+
+		expect(
+			createCustomerInput.parse({ ...standard, address: "  12 Canal Road " })
+				.address,
+		).toBe("12 Canal Road");
+	});
+
+	it("carries the BIN to attach trimmed, and a blank one as null", () => {
+		// Whether one is needed depends on the row, so the shape leaves it
+		// optional and the procedures decide.
+		expect(
+			createCustomerInput.parse({ ...standard, attachBin: " 1201 " }).attachBin,
+		).toBe("1201");
+		expect(
+			createCustomerInput.parse({ ...standard, attachBin: "  " }).attachBin,
+		).toBeNull();
+	});
+
+	it("keeps the BIN out of the columns a customer row is written with", () => {
+		// It is not a column: it moves an asset's pointer instead.
+		expect(
+			customerColumns(
+				createCustomerInput.parse({ ...standard, attachBin: "1201" }),
+			),
+		).not.toHaveProperty("attachBin");
 	});
 
 	it("rejects a name that is only whitespace", () => {
@@ -81,11 +118,9 @@ describe("createCustomerInput", () => {
 		const parsed = createCustomerInput.parse({
 			...standard,
 			accountNumber: "   ",
-			address: "",
 		});
 
 		expect(parsed.accountNumber).toBeNull();
-		expect(parsed.address).toBeNull();
 	});
 
 	it("requires an AG renewal date on the agricultural rate", () => {

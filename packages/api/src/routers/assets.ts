@@ -4,7 +4,7 @@ import {
 	customerAssignments,
 	customers,
 } from "@bfa-platform/db/schema";
-import { and, asc, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
 import {
@@ -20,10 +20,8 @@ import {
 	auditActor,
 	auditActorFields,
 } from "../lib/audit-actor";
-import {
-	reconcileAssetNoticeChain,
-	resumeHeldNoticeChain,
-} from "../scheduler/notice-chain";
+import { attachCustomerToAsset } from "../lib/customer-assignment";
+import { reconcileAssetNoticeChain } from "../scheduler/notice-chain";
 
 /**
  * The columns every asset procedure returns. Declared once so the table, the
@@ -341,15 +339,10 @@ export const assetsRouter = router({
 	/**
 	 * Attaches a customer to an asset, preserving whoever was there before.
 	 *
-	 * Three writes, one transaction: close the open occupancy row with today's
-	 * `end_date`, open a new one starting today, and move the asset's live
-	 * pointer. Doing only the third — the update a "current customer" field
-	 * invites — would answer "who gets the email" while quietly erasing "who had
-	 * this valve last year", which is the question a disputed test needs.
-	 *
-	 * Both dates come from `current_date` in Postgres rather than from the Node
-	 * process, so the closing and the opening row cannot disagree about what day
-	 * it is.
+	 * The writes themselves — close the open occupancy row, open a new one, move
+	 * the live pointer, resume a held chain — are `attachCustomerToAsset`'s, in
+	 * one transaction, shared with the customer form's BIN so both sides write
+	 * the same history.
 	 */
 	assignCustomer: wpProcedure
 		.input(assignCustomerInput)
@@ -408,51 +401,16 @@ export const assetsRouter = router({
 				});
 			}
 
-			await db.transaction(async (tx) => {
-				await tx
-					.update(customerAssignments)
-					.set({ endDate: sql`current_date` })
-					.where(
-						and(
-							eq(customerAssignments.bfaAssetId, asset.id),
-							isNull(customerAssignments.endDate),
-						),
-					);
-
-				await tx.insert(customerAssignments).values({
-					bfaAssetId: asset.id,
+			await db.transaction((tx) =>
+				attachCustomerToAsset({
+					executor: tx,
+					assetId: asset.id,
 					customerId: customer.id,
-					startDate: sql`current_date`,
-				});
-
-				await tx
-					.update(bfaAssets)
-					.set({ currentCustomerId: customer.id })
-					.where(
-						and(
-							eq(bfaAssets.id, asset.id),
-							eq(bfaAssets.waterPurveyorId, waterPurveyorId),
-						),
-					);
-
-				// Attaching an *active* customer is what ends a hold. A suspended
-				// one continues it, which is the confirmed rule (PRD § 9): the
-				// asset's notices stop entirely until somebody who can be written
-				// to is attached to the BIN.
-				//
-				// What resumes is the single stage that was waiting, and nothing
-				// already sent is replayed — see `resumeHeldNoticeChain` for why
-				// that reading was chosen over restarting the chain or skipping to
-				// whichever stage the calendar now says is due.
-				if (customer.status === "active") {
-					await resumeHeldNoticeChain({
-						executor: tx,
-						assetId: asset.id,
-						waterPurveyorId,
-						actor: auditActor(ctx),
-					});
-				}
-			});
+					customerStatus: customer.status,
+					waterPurveyorId,
+					actor: auditActor(ctx),
+				}),
+			);
 
 			logAssetEvent("bfa_asset_customer_assigned", {
 				actor: auditActor(ctx),

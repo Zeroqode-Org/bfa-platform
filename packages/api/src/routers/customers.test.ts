@@ -14,6 +14,11 @@ import {
 	vi,
 } from "vitest";
 
+import {
+	CUSTOMER_BIN_NOT_FOUND_MESSAGE,
+	CUSTOMER_BIN_REQUIRED_MESSAGE,
+	customerBinReassignMessage,
+} from "../lib/customer-bin";
 import { CUSTOMER_STALE_MESSAGE } from "../lib/customer-revision";
 import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "../lib/email-uniqueness";
 
@@ -30,8 +35,15 @@ import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "../lib/email-uniqueness";
  * The row policies are a second, independent boundary and have their own suite
  * in `packages/db/src/customers-rls.test.ts`.
  *
+ * Every customer must hold an asset, so `callerFor` registers a fresh one for
+ * each customer it creates and attaches it by BIN, and fills in an address
+ * when a test does not care about one. The BIN rules themselves are exercised
+ * through `rawCallerFor`, which adds nothing.
+ *
  * Opt-in: this suite writes real rows, so it runs only under `npm run test:db`.
  */
+
+const FIXTURE_ADDRESS = "1 Fixture Street";
 
 const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 
@@ -59,6 +71,7 @@ type CustomerRow = {
 	agRenewalDate: string | null;
 	status: "active" | "suspended";
 	revision: number;
+	bins: string[];
 	createdAt: Date;
 	updatedAt: Date;
 };
@@ -68,12 +81,14 @@ type CustomerInput = {
 	accountNumber?: string | null;
 	address?: string | null;
 	status?: "active" | "suspended";
+	attachBin?: string | null;
+	acknowledgeReassign?: boolean;
 } & (
 	| { rateCategory: "standard"; agRenewalDate?: null }
 	| { rateCategory: "agricultural"; agRenewalDate: string }
 );
 
-let callerFor: (profileId: string) => {
+let rawCallerFor: (profileId: string) => {
 	customers: {
 		listCustomers: () => Promise<CustomerRow[]>;
 		createCustomer: (input: CustomerInput) => Promise<CustomerRow>;
@@ -82,6 +97,78 @@ let callerFor: (profileId: string) => {
 		) => Promise<CustomerRow>;
 	};
 };
+
+/**
+ * The caller every test that is not about the BIN uses: a customer it creates
+ * gets an asset of its own, and an address when the test gave none — the two
+ * things a save now needs that those tests are not about.
+ */
+function callerFor(profileId: string): ReturnType<typeof rawCallerFor> {
+	const caller = rawCallerFor(profileId);
+
+	return {
+		customers: {
+			listCustomers: () => caller.customers.listCustomers(),
+			createCustomer: async (input) =>
+				caller.customers.createCustomer({
+					address: FIXTURE_ADDRESS,
+					...input,
+					attachBin: input.attachBin ?? (await fixtureBinFor(profileId)),
+				}),
+			updateCustomer: (input) =>
+				caller.customers.updateCustomer({ address: FIXTURE_ADDRESS, ...input }),
+		},
+	};
+}
+
+/**
+ * A fresh, unoccupied asset in the profile's own purveyor, by BIN. A profile
+ * without a purveyor gets none: the procedure refuses it before the BIN
+ * matters.
+ */
+async function fixtureBinFor(profileId: string) {
+	const { rows } = await pool.query<{ water_purveyor_id: string | null }>(
+		"select water_purveyor_id from profiles where id = $1",
+		[profileId],
+	);
+	const wp = rows[0]?.water_purveyor_id;
+	if (!wp) return null;
+
+	return seedAsset(wp);
+}
+
+/** Registers an unoccupied asset straight into the table and returns its BIN. */
+async function seedAsset(wp: string, bin = `CF-${randomUUID().slice(0, 8)}`) {
+	await pool.query(
+		`insert into bfa_assets (water_purveyor_id, bin, bfa_type, service_address)
+		 values ($1, $2, 'RP', '1 Fixture Street')`,
+		[wp, bin],
+	);
+
+	return bin;
+}
+
+/** The asset's live pointer and its open occupancy rows. */
+async function occupancy(bin: string, wp: string) {
+	const { rows: assets } = await pool.query<{
+		id: string;
+		current_customer_id: string | null;
+	}>(
+		"select id, current_customer_id from bfa_assets where water_purveyor_id = $1 and bin = $2",
+		[wp, bin],
+	);
+	const asset = assets[0];
+	const { rows: open } = await pool.query<{ customer_id: string }>(
+		`select customer_id from customer_assignments
+		  where bfa_asset_id = $1 and end_date is null`,
+		[asset?.id],
+	);
+
+	return {
+		currentCustomerId: asset?.current_customer_id ?? null,
+		open: open.map((row) => row.customer_id),
+	};
+}
 
 function captureLogs() {
 	const lines: Record<string, unknown>[] = [];
@@ -109,14 +196,14 @@ describeDb("customers procedures", () => {
 		const { appRouter } = await import("./index");
 		const createCaller = t.createCallerFactory(appRouter);
 
-		callerFor = (profileId: string) =>
+		rawCallerFor = (profileId: string) =>
 			createCaller({
 				// `protectedProcedure` re-resolves the profile from the database, so
 				// only the auth user id matters here.
 				supabase: {} as never,
 				user: { id: profileId } as never,
 				resHeaders: new Headers(),
-			}) as ReturnType<typeof callerFor>;
+			}) as ReturnType<typeof rawCallerFor>;
 
 		await pool.query(
 			`insert into water_purveyors (id, company_name, pwsid, status)
@@ -165,6 +252,16 @@ describeDb("customers procedures", () => {
 		// references the customer row.
 		await pool.query(
 			"delete from scheduled_jobs where water_purveyor_id = any($1::uuid[])",
+			[[wpA, wpB]],
+		);
+		// Every customer holds a fixture asset, and the assets point back at them.
+		await pool.query(
+			`delete from customer_assignments
+			  where bfa_asset_id in (select id from bfa_assets where water_purveyor_id = any($1::uuid[]))`,
+			[[wpA, wpB]],
+		);
+		await pool.query(
+			"delete from bfa_assets where water_purveyor_id = any($1::uuid[])",
 			[[wpA, wpB]],
 		);
 		await pool.query(
@@ -560,8 +657,8 @@ describeDb("customers procedures", () => {
 			// `null` and the value it replaces are both "sent every time", so the
 			// comparison has to tell them apart rather than reading both as absent.
 			const created = await callerFor(ids.adminA).customers.createCustomer({
-				...standardCustomer("Clears An Address"),
-				address: "8 Pump House Row",
+				...standardCustomer("Clears An Account Number"),
+				accountNumber: "AC-9004",
 			});
 
 			const updated = await callerFor(ids.adminA).customers.updateCustomer({
@@ -569,13 +666,31 @@ describeDb("customers procedures", () => {
 				expectedRevision: created.revision,
 				name: created.name,
 				email: created.email,
-				accountNumber: created.accountNumber,
-				address: null,
+				accountNumber: null,
+				address: created.address,
 				rateCategory: "standard",
 				status: "active",
 			});
 
-			expect(updated.address).toBeNull();
+			expect(updated.accountNumber).toBeNull();
+		});
+
+		it("refuses to clear the address", async () => {
+			const created = await callerFor(ids.adminA).customers.createCustomer(
+				standardCustomer("Keeps An Address"),
+			);
+
+			await expect(
+				rawCallerFor(ids.adminA).customers.updateCustomer({
+					id: created.id,
+					expectedRevision: created.revision,
+					name: created.name,
+					email: created.email,
+					address: "  ",
+					rateCategory: "standard",
+					status: "active",
+				}),
+			).rejects.toThrow(/address is required/i);
 		});
 
 		it("logs a status change on its own line, on top of the update line", async () => {
@@ -817,6 +932,167 @@ describeDb("customers procedures", () => {
 				name: "Shared Name Holdings",
 				revision: 1,
 			});
+		});
+	});
+
+	describe("the BIN", () => {
+		it("refuses a new customer with no BIN, and leaves no customer behind", async () => {
+			const email = `no.bin.${randomUUID().slice(0, 6)}@example.com`;
+
+			await expect(
+				rawCallerFor(ids.adminA).customers.createCustomer({
+					name: "No BIN Given",
+					email,
+					address: FIXTURE_ADDRESS,
+					rateCategory: "standard",
+				}),
+			).rejects.toThrow(CUSTOMER_BIN_REQUIRED_MESSAGE);
+
+			const { rows } = await pool.query(
+				"select 1 from customers where email = $1",
+				[email],
+			);
+			expect(rows).toHaveLength(0);
+		});
+
+		it("refuses a BIN no asset of this purveyor has — another purveyor's included", async () => {
+			const foreignBin = await seedAsset(wpB);
+			const email = `unknown.bin.${randomUUID().slice(0, 6)}@example.com`;
+
+			for (const attachBin of ["NOT-A-REAL-BIN", foreignBin]) {
+				await expect(
+					rawCallerFor(ids.adminA).customers.createCustomer({
+						name: "Unknown BIN",
+						email,
+						address: FIXTURE_ADDRESS,
+						rateCategory: "standard",
+						attachBin,
+					}),
+				).rejects.toThrow(CUSTOMER_BIN_NOT_FOUND_MESSAGE);
+			}
+
+			const { rows } = await pool.query(
+				"select 1 from customers where email = $1",
+				[email],
+			);
+			expect(rows).toHaveLength(0);
+			expect((await occupancy(foreignBin, wpB)).currentCustomerId).toBeNull();
+		});
+
+		it("makes the new customer the asset's occupant and returns the BIN", async () => {
+			const bin = await seedAsset(wpA);
+			const lines = captureLogs();
+
+			const created = await rawCallerFor(ids.adminA).customers.createCustomer({
+				name: "Attached On Create",
+				email: `attached.${randomUUID().slice(0, 6)}@example.com`,
+				address: FIXTURE_ADDRESS,
+				rateCategory: "standard",
+				attachBin: ` ${bin} `,
+			});
+
+			expect(created.bins).toEqual([bin]);
+			expect(await occupancy(bin, wpA)).toEqual({
+				currentCustomerId: created.id,
+				open: [created.id],
+			});
+			expect(
+				lines.find((line) => line.event === "bfa_asset_customer_assigned"),
+			).toMatchObject({ bin, from: null, to: created.id, wp_id: wpA });
+
+			const listed = (
+				await rawCallerFor(ids.adminA).customers.listCustomers()
+			).find((row) => row.id === created.id);
+			expect(listed?.bins).toEqual([bin]);
+		});
+
+		it("asks before taking a BIN from another customer, and moves it once confirmed", async () => {
+			const first = await callerFor(ids.adminA).customers.createCustomer(
+				standardCustomer(`First Occupant ${randomUUID().slice(0, 6)}`),
+			);
+			const [bin] = first.bins;
+			if (!bin) throw new Error("fixture customer holds no BIN");
+
+			const second = {
+				name: "Second Occupant",
+				email: `second.${randomUUID().slice(0, 6)}@example.com`,
+				address: FIXTURE_ADDRESS,
+				rateCategory: "standard" as const,
+				attachBin: bin,
+			};
+
+			await expect(
+				rawCallerFor(ids.adminA).customers.createCustomer(second),
+			).rejects.toThrow(customerBinReassignMessage(bin, first.name));
+			expect((await occupancy(bin, wpA)).currentCustomerId).toBe(first.id);
+
+			const moved = await rawCallerFor(ids.adminA).customers.createCustomer({
+				...second,
+				acknowledgeReassign: true,
+			});
+
+			expect(await occupancy(bin, wpA)).toEqual({
+				currentCustomerId: moved.id,
+				open: [moved.id],
+			});
+			// The previous occupancy is closed, not erased.
+			const { rows } = await pool.query(
+				`select end_date from customer_assignments ca
+				   join bfa_assets a on a.id = ca.bfa_asset_id
+				  where a.bin = $1 and a.water_purveyor_id = $2 and ca.customer_id = $3`,
+				[bin, wpA, first.id],
+			);
+			expect(rows[0]?.end_date).not.toBeNull();
+		});
+
+		it("lets an existing customer attach another BIN without touching the row", async () => {
+			const created = await callerFor(ids.adminA).customers.createCustomer(
+				standardCustomer(`Two Assets ${randomUUID().slice(0, 6)}`),
+			);
+			const another = await seedAsset(wpA);
+
+			const updated = await rawCallerFor(ids.adminA).customers.updateCustomer({
+				id: created.id,
+				expectedRevision: created.revision,
+				name: created.name,
+				email: created.email,
+				address: created.address,
+				rateCategory: "standard",
+				status: "active",
+				attachBin: another,
+			});
+
+			expect([...updated.bins].sort()).toEqual(
+				[...created.bins, another].sort(),
+			);
+			// Attaching moves an asset's pointer, not the customer row.
+			expect(updated.revision).toBe(created.revision);
+		});
+
+		it("requires a BIN from an existing customer who holds no asset", async () => {
+			// The seeded fixture customer was written straight into the table and
+			// occupies nothing.
+			const update = {
+				id: customerA,
+				expectedRevision: 1,
+				name: "Shared Name Holdings",
+				email: "shared@example.com",
+				address: FIXTURE_ADDRESS,
+				rateCategory: "standard" as const,
+				status: "active" as const,
+			};
+
+			await expect(
+				rawCallerFor(ids.adminA).customers.updateCustomer(update),
+			).rejects.toThrow(CUSTOMER_BIN_REQUIRED_MESSAGE);
+
+			const bin = await seedAsset(wpA);
+			const updated = await rawCallerFor(ids.adminA).customers.updateCustomer({
+				...update,
+				attachBin: bin,
+			});
+
+			expect(updated.bins).toEqual([bin]);
 		});
 	});
 });

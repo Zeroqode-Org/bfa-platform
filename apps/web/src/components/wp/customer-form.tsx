@@ -1,7 +1,13 @@
 "use client";
 
+import { ASSET_FIELD_LIMITS } from "@bfa-platform/api/lib/asset-field-limits";
+import {
+	isCustomerBinError,
+	isCustomerBinReassignError,
+} from "@bfa-platform/api/lib/customer-bin";
 import { CUSTOMER_FIELD_LIMITS } from "@bfa-platform/api/lib/customer-field-limits";
 import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
+import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import { DateInput } from "@bfa-platform/ui/components/date-input";
 import { DialogBody, DialogFooter } from "@bfa-platform/ui/components/dialog";
@@ -57,8 +63,13 @@ export const STATUS_LABELS = {
  *
  * `agRenewalDate` is the date as displayed, `MM/DD/YYYY`; the API's
  * `YYYY-MM-DD` exists only on the way in and out.
+ *
+ * `attachBin` is not a column of the customer: it is the BIN of an asset to
+ * attach them to on save. It always opens empty — the BINs a customer already
+ * holds are listed beside it, not loaded into it.
  */
 export type CustomerFormValues = {
+	attachBin: string;
 	name: string;
 	accountNumber: string;
 	email: string;
@@ -75,6 +86,7 @@ export type CompletedCustomerFormValues = CustomerFormValues & {
 };
 
 export const emptyCustomerValues: CustomerFormValues = {
+	attachBin: "",
 	name: "",
 	accountNumber: "",
 	email: "",
@@ -89,6 +101,7 @@ export function customerToFormValues(
 	customer: Customer,
 ): CompletedCustomerFormValues {
 	return {
+		attachBin: "",
 		name: customer.name,
 		accountNumber: customer.accountNumber ?? "",
 		email: customer.email,
@@ -129,8 +142,9 @@ export function buildCustomerPayload(
 		name: values.name.trim(),
 		email: values.email.trim(),
 		accountNumber: values.accountNumber.trim() || null,
-		address: values.address.trim() || null,
+		address: values.address.trim(),
 		status: values.status,
+		attachBin: values.attachBin.trim() || null,
 	};
 
 	return values.rateCategory === "agricultural"
@@ -154,16 +168,30 @@ export function buildCustomerPayload(
  * They are told apart by the message rather than by the code, so a third
  * conflict added later lands in the banner instead of being mislabelled as an
  * email problem.
+ *
+ * The BIN has two kinds of refusal. A missing or unknown BIN goes under the
+ * BIN field. A BIN that belongs to somebody else is a question rather than an
+ * error — the form asks it there and offers to move the asset.
  */
 export function customerFormErrors(
 	error: { message: string; data?: { code?: string | null } | null } | null,
 ) {
 	if (!error) return {};
 
+	if (isCustomerBinReassignError(error)) {
+		return { binReassignMessage: error.message };
+	}
+	if (isCustomerBinError(error)) return { binErrorMessage: error.message };
+
 	return error.data?.code === "CONFLICT" &&
 		error.message === CUSTOMER_EMAIL_TAKEN_MESSAGE
 		? { emailErrorMessage: error.message }
 		: { errorMessage: error.message };
+}
+
+/** The spelling the server matches a BIN in: trimmed, otherwise exact. */
+function normalizedBin(value: string) {
+	return value.trim();
 }
 
 /** The spelling the server compares addresses in: trimmed and lowercased. */
@@ -186,26 +214,45 @@ const agRenewalDateRule = composeRules(
  */
 export function CustomerForm({
 	initialValues = emptyCustomerValues,
+	heldBins = [],
 	pending = false,
 	errorMessage,
 	emailErrorMessage,
+	binErrorMessage,
+	binReassignMessage,
 	submitLabel,
 	pendingLabel,
 	onSubmit,
 	onCancel,
 }: {
 	initialValues?: CustomerFormValues;
+	/** BINs of the assets the customer already occupies; empty for a new one. */
+	heldBins?: string[];
 	pending?: boolean;
 	/** A server refusal with no field of its own. */
 	errorMessage?: string;
 	/** A server refusal about the email address — shown under that input. */
 	emailErrorMessage?: string;
+	/** A missing or unknown BIN — shown under the BIN input. */
+	binErrorMessage?: string;
+	/** The BIN belongs to another customer — asked under the BIN input. */
+	binReassignMessage?: string;
 	submitLabel: string;
 	pendingLabel: string;
 	onSubmit: (payload: CustomerPayload) => void;
 	onCancel: () => void;
 }) {
 	const [values, setValues] = useState<CustomerFormValues>(initialValues);
+	// Which BIN the rejected request carried, for the same reason as the email
+	// below: the server's answer is about that BIN and stops applying the moment
+	// the field holds a different one.
+	const [rejectedBin, setRejectedBin] = useState<string | null>(null);
+	const binAnswerApplies = rejectedBin === normalizedBin(values.attachBin);
+	const binRefusal =
+		binErrorMessage && binAnswerApplies ? binErrorMessage : undefined;
+	const reassignQuestion =
+		binReassignMessage && binAnswerApplies ? binReassignMessage : undefined;
+	const holdsAsset = heldBins.length > 0;
 	// Which address the rejected request carried. The server's "already used"
 	// answer is about that exact address, so it stops applying the moment the
 	// field holds a different one — and comes back if the same address is typed
@@ -220,6 +267,14 @@ export function CustomerForm({
 	const validation = useFormValidation({
 		values,
 		rules: {
+			// A customer reaches notices only through an asset, so one who holds
+			// none must name one. Once they hold one, another is optional.
+			attachBin: holdsAsset
+				? maxLength(ASSET_FIELD_LIMITS.bin)
+				: composeRules(
+						required("Enter the BIN of the assembly this customer occupies."),
+						maxLength(ASSET_FIELD_LIMITS.bin),
+					),
 			name: composeRules(
 				required("Name is required."),
 				maxLength(CUSTOMER_FIELD_LIMITS.name),
@@ -230,7 +285,10 @@ export function CustomerForm({
 				maxLength(CUSTOMER_FIELD_LIMITS.email),
 			),
 			accountNumber: maxLength(CUSTOMER_FIELD_LIMITS.accountNumber),
-			address: maxLength(CUSTOMER_FIELD_LIMITS.address),
+			address: composeRules(
+				required("Address is required."),
+				maxLength(CUSTOMER_FIELD_LIMITS.address),
+			),
 			rateCategory: required("Select a rate category."),
 			// Only the agricultural rate carries a renewal date, so only that rate
 			// asks for one — the same condition the field's visibility uses.
@@ -240,7 +298,7 @@ export function CustomerForm({
 					: undefined,
 			status: required("Select a status."),
 		},
-		externalErrors: { email: emailTaken },
+		externalErrors: { email: emailTaken, attachBin: binRefusal },
 	});
 
 	function update<Field extends keyof CustomerFormValues>(
@@ -252,12 +310,20 @@ export function CustomerForm({
 
 	const isAgricultural = values.rateCategory === "agricultural";
 
-	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-		event.preventDefault();
+	function submit({ acknowledgeReassign }: { acknowledgeReassign: boolean }) {
 		if (!validation.validate() || !isCompletedCustomer(values)) return;
 
 		setRejectedEmail(normalizedEmail(values.email));
-		onSubmit(buildCustomerPayload(values));
+		setRejectedBin(normalizedBin(values.attachBin));
+		onSubmit({
+			...buildCustomerPayload(values),
+			...(acknowledgeReassign ? { acknowledgeReassign: true } : {}),
+		});
+	}
+
+	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		submit({ acknowledgeReassign: false });
 	}
 
 	return (
@@ -270,6 +336,62 @@ export function CustomerForm({
 			noValidate
 		>
 			<DialogBody>
+				{/* First, because it is what ties this record to anything: every
+				    notice is addressed through an asset's current customer. */}
+				<div className="flex flex-col gap-1.5">
+					{holdsAsset ? (
+						<div className="flex flex-col gap-1.5">
+							<span className="font-medium text-[13px]">Attached BINs</span>
+							<ul className="flex flex-wrap gap-1.5">
+								{heldBins.map((bin) => (
+									<li key={bin}>
+										<Badge variant="primary">{bin}</Badge>
+									</li>
+								))}
+							</ul>
+						</div>
+					) : null}
+					<Label htmlFor={validation.fieldId("attachBin")}>
+						{holdsAsset ? "Attach another BIN" : "BIN"}
+					</Label>
+					<Input
+						{...validation.controlProps("attachBin")}
+						name="attachBin"
+						value={values.attachBin}
+						onChange={(event) => update("attachBin", event.target.value)}
+						placeholder={holdsAsset ? "Optional" : "BIN-10041"}
+						autoComplete="off"
+						disabled={pending}
+						aria-required={holdsAsset ? undefined : "true"}
+					/>
+					<FieldError {...validation.errorProps("attachBin")} />
+					{reassignQuestion ? (
+						<div className="flex flex-col items-start gap-2 rounded-md bg-warning-bg px-3 py-2 text-[13px] text-warning">
+							<p className="flex items-start gap-1.5">
+								<TriangleAlert
+									className="mt-px size-4 shrink-0"
+									aria-hidden="true"
+								/>
+								{reassignQuestion}
+							</p>
+							<Button
+								type="button"
+								variant="secondary"
+								size="sm"
+								disabled={pending}
+								onClick={() => submit({ acknowledgeReassign: true })}
+							>
+								Move it to this customer
+							</Button>
+						</div>
+					) : (
+						<p className="text-[12px] text-muted-foreground">
+							Saving makes this customer the assembly&rsquo;s current occupant —
+							its reminders and notices go to them from then on.
+						</p>
+					)}
+				</div>
+
 				<div className="flex flex-col gap-1.5">
 					<Label htmlFor={validation.fieldId("name")}>Name</Label>
 					<Input
@@ -324,9 +446,10 @@ export function CustomerForm({
 						name="address"
 						value={values.address}
 						onChange={(event) => update("address", event.target.value)}
-						placeholder="Optional"
+						placeholder="1450 Ala Moana Blvd"
 						autoComplete="off"
 						disabled={pending}
+						aria-required="true"
 					/>
 					<FieldError {...validation.errorProps("address")} />
 				</div>

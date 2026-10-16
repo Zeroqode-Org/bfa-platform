@@ -60,7 +60,7 @@ function savedMessage(row: Customer) {
 		: `${row.name} saved`;
 }
 
-const COLUMN_COUNT = 6;
+const COLUMN_COUNT = 7;
 const SKELETON_ROWS = 4;
 
 /**
@@ -86,9 +86,14 @@ export function CustomersTable() {
 	const [suspendTarget, setSuspendTarget] = useState<Customer | null>(null);
 	const [isSuspendOpen, setIsSuspendOpen] = useState(false);
 
-	function invalidateList() {
-		return queryClient.invalidateQueries({
+	async function invalidateList() {
+		await queryClient.invalidateQueries({
 			queryKey: trpc.customers.listCustomers.queryKey(),
+		});
+		// A save can attach a BIN, which moves an asset's current customer — so
+		// the assets screens' cached rows and detail pages are stale too.
+		await queryClient.invalidateQueries({
+			queryKey: trpc.assets.pathKey(),
 		});
 	}
 
@@ -200,6 +205,7 @@ export function CustomersTable() {
 					<TableHeader>
 						<TableRow>
 							<TableHead>Name</TableHead>
+							<TableHead>BIN</TableHead>
 							<TableHead>Account number</TableHead>
 							<TableHead>Email</TableHead>
 							<TableHead>Rate category</TableHead>
@@ -264,6 +270,16 @@ export function CustomersTable() {
 									<TableRow key={customer.id}>
 										<TableCell className="font-semibold">
 											{customer.name}
+										</TableCell>
+										{/* A customer holding nothing is one no notice can
+										    reach, so the gap is flagged rather than left as a
+										    dash that reads like an optional field. */}
+										<TableCell className="tabular-nums">
+											{customer.bins.length > 0 ? (
+												customer.bins.join(", ")
+											) : (
+												<Badge variant="warning">No BIN</Badge>
+											)}
 										</TableCell>
 										<TableCell className="text-muted-foreground tabular-nums">
 											{customer.accountNumber ?? "—"}
@@ -370,6 +386,7 @@ export function CustomersTable() {
 									? customerToFormValues(formTarget.customer)
 									: undefined
 							}
+							heldBins={isEditing ? formTarget.customer.bins : []}
 							pending={formMutation.isPending}
 							// A duplicate email goes under the Email field; anything else
 							// is the form-wide message. Never a toast.

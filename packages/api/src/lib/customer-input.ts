@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { ASSET_FIELD_LIMITS } from "./asset-field-limits";
 import { CUSTOMER_FIELD_LIMITS } from "./customer-field-limits";
 
 /**
@@ -46,8 +47,31 @@ const customerFields = {
 		.toLowerCase()
 		.pipe(z.email().max(CUSTOMER_FIELD_LIMITS.email)),
 	accountNumber: optionalText(CUSTOMER_FIELD_LIMITS.accountNumber),
-	address: optionalText(CUSTOMER_FIELD_LIMITS.address),
+	// Required: the address is what the notices are written about, and a
+	// customer record without one is incomplete (WP/Admin feedback). The column
+	// stays nullable — rows saved before the rule keep reading — but no save
+	// through here can leave it blank, so editing such a row means filling it.
+	address: z
+		.string()
+		.trim()
+		.min(1, "Address is required")
+		.max(CUSTOMER_FIELD_LIMITS.address),
 	status: z.enum(["active", "suspended"]).default("active"),
+	/**
+	 * The BIN of an asset to attach this customer to — not a column. Saving it
+	 * makes the customer that asset's current occupant, through the same writes
+	 * as `assets.assignCustomer`; see `customer-bin.ts` for the rule.
+	 *
+	 * Optional at the shape level because whether one is needed depends on the
+	 * row: a new customer always needs one, an existing customer only while they
+	 * hold no asset. The procedures decide that, with one message for both.
+	 */
+	attachBin: optionalText(ASSET_FIELD_LIMITS.bin),
+	/**
+	 * The caller has seen that the BIN belongs to another occupant and wants it
+	 * moved anyway. Without it, such a save is refused with the question.
+	 */
+	acknowledgeReassign: z.boolean().optional(),
 };
 
 /**
