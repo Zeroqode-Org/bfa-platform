@@ -127,29 +127,10 @@ export function binLabel(submission: {
 }
 
 /**
- * A `wizard_data` key as a label.
- *
- * The per-BFA-type field set is the wizard's to define (§ 6.5, week 4), so this
- * screen cannot carry a label table for fields that do not exist yet — and
- * inventing one now would mean inventing it twice, then reconciling. Splitting
- * `camelCase` and `snake_case` on the boundaries the key already has is the
- * honest middle: it reads as English for every key a JavaScript or Postgres
- * codebase produces, and it does not pretend to know what the key means.
- *
- * When the wizard lands with a real per-type field reference, this is the one
- * function that gets replaced by a lookup.
+ * A `wizard_data` key as a label. Shared with the certifier's own list, so a
+ * field reads the same on both sides — see `lib/wizard-answers.ts`.
  */
-export function humanizeFieldName(key: string): string {
-	const spaced = key
-		.replace(/[_-]+/g, " ")
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.replace(/\s+/g, " ")
-		.trim();
-
-	if (!spaced) return key;
-
-	return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
+export { humanizeFieldName } from "@/lib/wizard-answers";
 
 /**
  * The wizard answers in a stable order.

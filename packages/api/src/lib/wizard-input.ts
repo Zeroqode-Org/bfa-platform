@@ -215,6 +215,15 @@ export const submitTestInput = z.object({
 	// with in transit.
 	signatureData: optionalText(SUBMISSION_FIELD_LIMITS.signatureData),
 	photoPaths: z.array(z.string().max(500)).max(MAX_PHOTOS).default([]),
+	/**
+	 * The prefilled answers the certifier typed over, as the form holds them at
+	 * submit — the last draft save may predate an edit on the final screens.
+	 * Stored on the test, and what `submitTest` carries onto the asset.
+	 */
+	overriddenFields: z
+		.array(z.string().max(SUBMISSION_FIELD_LIMITS.wizardKeyLength))
+		.max(SUBMISSION_FIELD_LIMITS.wizardKeys)
+		.optional(),
 });
 
 export type SaveDraftStepInput = z.infer<typeof saveDraftStepInput>;
@@ -242,30 +251,18 @@ export function parseSize(text: string | null | undefined): string {
 	return decimal ? decimal[0] : raw;
 }
 
-/** The full name of each type, for headings on the results document. */
-export const BFA_TYPE_NAMES: Record<(typeof BFA_TYPES)[number], string> = {
-	RP: "Reduced Pressure Zone Assembly",
-	RPDA: "Reduced Pressure Detector Assembly",
-	"RPDA-2": "Double Reduced Pressure Detector Assembly",
-	DC: "Double Check Assembly",
-	DCDA: "Double Check Detector Assembly",
-	"DCDA-2": "Double Double-Check Detector Assembly",
-	PVB: "Pressure Vacuum Breaker",
-	SVB: "Spill-Resistant Vacuum Breaker",
-};
-
 export type WizardQuestion = {
 	/** `wizard_data` key of the Yes/No answer. */
 	key: string;
 	label: string;
 	/** Present when answering Yes asks for a value ("If Yes → Value"). */
 	valueKey?: string;
-	/** What that value is, as its field label: "PSID across Check Valve #1". */
+	/** What that value is, as its field label: "PSID across Check Valve 1". */
 	valueLabel?: string;
 };
 
 export type WizardSection = {
-	/** Heading such as "DA TEST #2 — BYPASS ASSEMBLY"; null for an untitled block. */
+	/** Heading such as "DA TEST 2 — BYPASS ASSEMBLY"; null for an untitled block. */
 	title: string | null;
 	questions: WizardQuestion[];
 };
@@ -295,19 +292,19 @@ function rpLine(prefix: string, labelPrefix = ""): WizardQuestion[] {
 	return [
 		question(
 			`${prefix}reliefValveOpened`,
-			`${labelPrefix}Relief Valve Opened?`,
+			`${labelPrefix}Relief Valve Opened`,
 			`${prefix}reliefValveValue`,
 			`${labelPrefix}Relief Valve opened at`,
 		),
 		question(
 			`${prefix}checkValve2ShutTight`,
-			`${labelPrefix}Check Valve #2 Shut Tight?`,
+			`${labelPrefix}Check Valve 2 Shut Tight`,
 		),
 		question(
 			`${prefix}checkValve1ShutTight`,
-			`${labelPrefix}Check Valve #1 Shut Tight?`,
+			`${labelPrefix}Check Valve 1 Shut Tight`,
 			`${prefix}checkValve1Value`,
-			`PSID across ${labelPrefix}Check Valve #1`,
+			`PSID across ${labelPrefix}Check Valve 1`,
 		),
 	];
 }
@@ -317,15 +314,15 @@ function dcLine(prefix: string, labelPrefix = ""): WizardQuestion[] {
 	return [
 		question(
 			`${prefix}checkValve1ShutTight`,
-			`${labelPrefix}Check Valve #1 Shut Tight?`,
+			`${labelPrefix}Check Valve 1 Shut Tight`,
 			`${prefix}checkValve1Value`,
-			`PSID across ${labelPrefix}Check Valve #1`,
+			`PSID across ${labelPrefix}Check Valve 1`,
 		),
 		question(
 			`${prefix}checkValve2ShutTight`,
-			`${labelPrefix}Check Valve #2 Shut Tight?`,
+			`${labelPrefix}Check Valve 2 Shut Tight`,
 			`${prefix}checkValve2Value`,
-			`PSID across ${labelPrefix}Check Valve #2`,
+			`PSID across ${labelPrefix}Check Valve 2`,
 		),
 	];
 }
@@ -339,14 +336,14 @@ const vacuumBreaker: WizardTestSpec = {
 			questions: [
 				question(
 					"airInletValveOpened",
-					"Air Inlet Valve Opened?",
+					"Air Inlet Valve Opened",
 					"airInletValveValue",
 					"PSID across Air Inlet Valve",
 				),
 				question("airInletValveFullyOpened", "Air Inlet Valve FULLY Opened"),
 				question(
 					"checkValveShutTight",
-					"Check Valve Shut Tight?",
+					"Check Valve Shut Tight",
 					"checkValveValue",
 					"PSID across Check Valve",
 				),
@@ -374,9 +371,9 @@ export const WIZARD_TEST_SPEC: Record<
 		hasAdp: true,
 		hasMeter: true,
 		sections: [
-			{ title: "RP TEST #1", questions: rpLine("main.") },
+			{ title: "RP TEST 1", questions: rpLine("main.") },
 			{
-				title: "DA TEST #2 — BYPASS ASSEMBLY",
+				title: "DA TEST 2 — BYPASS ASSEMBLY",
 				questions: rpLine("bypass.", "Bypass "),
 			},
 		],
@@ -385,13 +382,13 @@ export const WIZARD_TEST_SPEC: Record<
 		hasAdp: true,
 		hasMeter: true,
 		sections: [
-			{ title: "RP TEST #1", questions: rpLine("main.") },
+			{ title: "RP TEST 1", questions: rpLine("main.") },
 			{
-				title: "DA TEST #2 — BYPASS ASSEMBLY",
+				title: "DA TEST 2 — BYPASS ASSEMBLY",
 				questions: [
 					question(
 						"bypass.checkValve1ShutTight",
-						"Bypass Check Valve Shut Tight?",
+						"Bypass Check Valve Shut Tight",
 						"bypass.checkValve1Value",
 						"PSID across Bypass Check Valve",
 					),
@@ -409,10 +406,10 @@ export const WIZARD_TEST_SPEC: Record<
 		hasMeter: true,
 		sections: [
 			{
-				title: "DA TEST #1 — BYPASS ASSEMBLY",
+				title: "DA TEST 1 — BYPASS ASSEMBLY",
 				questions: dcLine("bypass.", "Bypass Assembly "),
 			},
-			{ title: "DC TEST #2 — MAIN ASSEMBLY", questions: dcLine("main.") },
+			{ title: "DC TEST 2 — MAIN ASSEMBLY", questions: dcLine("main.") },
 		],
 	},
 	"DCDA-2": {
@@ -420,17 +417,17 @@ export const WIZARD_TEST_SPEC: Record<
 		hasMeter: true,
 		sections: [
 			{
-				title: "DA TEST #1 — BYPASS ASSEMBLY",
+				title: "DA TEST 1 — BYPASS ASSEMBLY",
 				questions: [
 					question(
 						"bypass.checkValve1ShutTight",
-						"Bypass Assembly Check Valve #1 Shut Tight?",
+						"Bypass Assembly Check Valve 1 Shut Tight",
 						"bypass.checkValve1Value",
-						"PSID across Bypass Assembly Check Valve #1",
+						"PSID across Bypass Assembly Check Valve 1",
 					),
 				],
 			},
-			{ title: "DC TEST #2 — MAIN ASSEMBLY", questions: dcLine("main.") },
+			{ title: "DC TEST 2 — MAIN ASSEMBLY", questions: dcLine("main.") },
 		],
 	},
 	PVB: vacuumBreaker,

@@ -24,15 +24,11 @@ import { trpc } from "@/utils/trpc";
 import { WizardField } from "../wizard-field";
 import type { WizardFormState } from "../wizard-shell";
 import {
+	BFA_TYPE_CODES,
 	BFA_TYPE_OPTIONS,
 	type BfaType,
 	type WizardValues,
 } from "../wizard-types";
-
-/** Each type's bare code, for the closed select trigger. */
-const BFA_TYPE_CODES = Object.fromEntries(
-	Object.keys(BFA_TYPE_OPTIONS).map((code) => [code, code]),
-);
 
 /** Long enough that typing a BIN is one request, short enough to feel live. */
 const SUGGEST_DEBOUNCE_MS = 250;
@@ -263,14 +259,17 @@ export function IdentificationStep({
 						No BIN found. Choose the assembly type below and fill in the rest
 						manually.
 					</p>
+				) : status === "idle" && form.bin.trim() ? (
+					<p className="text-[13px] text-muted-foreground">
+						Look up this BIN to continue — or clear it if the assembly has no
+						BIN yet.
+					</p>
 				) : null}
 
 				{status !== "found" ? (
 					<WizardField id={typeId} required label="Assembly type">
 						{(id) => (
 							<Select
-								// The closed field shows just the code ("RPDA-2"), which fits one
-								// line; the open list below spells each type out.
 								items={BFA_TYPE_CODES}
 								value={form.bfaType}
 								onValueChange={(value) => onTypeChange(value as BfaType)}

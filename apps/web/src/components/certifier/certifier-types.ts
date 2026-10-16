@@ -96,25 +96,6 @@ export function wizardEntries(
 		.sort(([left], [right]) => left.localeCompare(right));
 }
 
-/** A `wizard_data` key as a label — see `wizardEntries` for why it is generic. */
-export function humanizeFieldName(key: string): string {
-	const spaced = key
-		.replace(/[_-]+/g, " ")
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.replace(/\s+/g, " ")
-		.trim();
-
-	if (!spaced) return key;
-	return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
-
-/** A wizard answer as display text. Booleans read as Yes/No, not "true". */
-export function wizardValueText(value: WizardValue): string {
-	if (value === null) return "—";
-	if (typeof value === "boolean") return value ? "Yes" : "No";
-	return String(value);
-}
-
 /**
  * A table column that only gets its own cell once the card is wide enough for
  * every column — a container query, so a tablet with the sidebar open counts

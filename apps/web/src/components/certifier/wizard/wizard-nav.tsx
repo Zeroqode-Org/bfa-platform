@@ -17,6 +17,7 @@ export function WizardNav({
 	isFirst,
 	isLast,
 	nextLabel,
+	nextDisabled = false,
 	saving,
 	savingKind,
 	submitting,
@@ -31,6 +32,8 @@ export function WizardNav({
 	isLast: boolean;
 	/** "Next", or "Preview" on the screen before the review. */
 	nextLabel: string;
+	/** Next is held back until the screen is ready — a typed BIN not yet looked up. */
+	nextDisabled?: boolean;
 	saving: boolean;
 	savingKind: "save" | "next";
 	submitting: boolean;
@@ -88,7 +91,7 @@ export function WizardNav({
 				) : (
 					<Button
 						className="h-10 flex-1 min-[780px]:flex-none"
-						disabled={saving}
+						disabled={saving || nextDisabled}
 						onClick={onNext}
 					>
 						{nextLabel}

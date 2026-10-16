@@ -43,23 +43,23 @@ describe("WIZARD_TEST_SPEC — the client's sheet, type by type", () => {
 
 	it("gives RPDA and RPDA-2 an RP main test, then a bypass", () => {
 		expect(headings("RPDA")).toEqual([
-			"RP TEST #1",
-			"DA TEST #2 — BYPASS ASSEMBLY",
+			"RP TEST 1",
+			"DA TEST 2 — BYPASS ASSEMBLY",
 		]);
 		expect(headings("RPDA-2")).toEqual([
-			"RP TEST #1",
-			"DA TEST #2 — BYPASS ASSEMBLY",
+			"RP TEST 1",
+			"DA TEST 2 — BYPASS ASSEMBLY",
 		]);
 	});
 
 	it("puts the bypass first for DCDA and DCDA-2", () => {
 		expect(headings("DCDA")).toEqual([
-			"DA TEST #1 — BYPASS ASSEMBLY",
-			"DC TEST #2 — MAIN ASSEMBLY",
+			"DA TEST 1 — BYPASS ASSEMBLY",
+			"DC TEST 2 — MAIN ASSEMBLY",
 		]);
 		expect(headings("DCDA-2")).toEqual([
-			"DA TEST #1 — BYPASS ASSEMBLY",
-			"DC TEST #2 — MAIN ASSEMBLY",
+			"DA TEST 1 — BYPASS ASSEMBLY",
+			"DC TEST 2 — MAIN ASSEMBLY",
 		]);
 	});
 

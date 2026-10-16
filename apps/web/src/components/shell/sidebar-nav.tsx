@@ -49,7 +49,7 @@ export function SidebarNav({
 					</svg>
 				</span>
 				<span className="truncate font-bold text-[13px] tracking-tight">
-					Backflow Assembly
+					Backflow Reporter.io
 				</span>
 			</Link>
 

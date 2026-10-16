@@ -240,6 +240,11 @@ export function SubmittedTestsTable({
 		await queryClient.invalidateQueries({
 			queryKey: trpc.assets.listAssets.queryKey(),
 		});
+		// Assigning a BIN to an unlinked test can register a customer along with
+		// the new asset.
+		await queryClient.invalidateQueries({
+			queryKey: trpc.customers.listCustomers.queryKey(),
+		});
 	}
 
 	return (

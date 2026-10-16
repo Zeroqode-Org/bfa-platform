@@ -112,11 +112,55 @@ boundaries it already has. When the per-type blocks land, the answers section is
 what they replace; `humanizeFieldName` is the one function that becomes a
 lookup.
 
+**Answers are listed the way the PDF lists them** (client, October 2026). The
+order and labels come from `packages/api/src/lib/wizard-answer-layout.ts`,
+which reads the same `WIZARD_TEST_SPEC` as the wizard and the results PDF. The
+order is assembly details, customer, Line Pressure, ADP, Water Meter Start/End,
+then the type's valve questions in spec order with each reading directly after
+its Yes/No, then property isolation, initial test result, comments, sign-off,
+and photos. The document is laid out in the PDF's sections, each boxed with
+an uppercase heading: Assembly information, Customer information, Initial
+test, Property isolation and result, Comment, Photos, and the sign-off
+disclaimer under Sign-off. Initial test has the reading fields first (Line
+Pressure beside ADP, the water meter pair together), then a table per test
+section (Main/Bypass) with one row per valve question: its wording, a Yes/No
+dropdown, and the PSID input beside it when the question takes a reading and
+the answer is Yes. A stored answer this type's form does not ask goes under
+"Other answers" rather than disappearing, labelled by `humanizeFieldName`
+(every word capitalised). Valve rows carry the spec's wording without the "#"
+and the "?" ("Check Valve 1 Shut Tight"); the section heading says whether it
+is the main or the bypass line.
+
+- **PSID readings always show one decimal place** ("2" reads "2.0"), on this
+  screen, the certifier's list, the wizard's review and the PDF. This is display
+  only: the stored value is not rewritten, so opening and saving a test without
+  edits is still a no-op. While a reading is being typed into, it shows as typed.
+- **Photos are thumbnails**, opening full size in a new tab, never storage
+  paths. `getPhotoUrls` signs short-lived links for the paths stored on the
+  row, inside the submission's own folder only; the client never names a file.
+- **Coded answers use the wizard's labels.** `initialTestResult` (`pass`/`fail`)
+  and `isolatesEntireProperty` (`yes`/`no`/`undetermined`) read Pass, Fail,
+  Yes, No, Undetermined, and are corrected from a dropdown of exactly those
+  choices. Both are required in the wizard, so there is no "Not recorded"
+  option: a WP can change them but not clear them. Yes/no answers are
+  booleans, corrected from a Yes/No dropdown.
+
 **The signature is shown, not typed into.** It is a drawing the property owner
 made on a phone. The correction a purveyor actually makes to one is removing a
 signature that should not be there and recording the owner-absent bypass
 instead, which is the control beside it — a text box over image bytes would
 offer an edit nobody wants and every accidental keystroke would corrupt.
+
+**The sign-off follows how it was signed.** "Signed" shows the owner's drawing
+(the one captured at the test). "Owner absent" shows the fixed disclaimer in
+its place, never the drawing, and the disclaimer is not editable text.
+Switching back to "Signed" brings the captured drawing back. The server
+enforces the same rule whenever a correction changes the signing method
+(`withConsistentSignOff`): an owner-absent test stores the disclaimer constant
+in `signature_data` and `wizard_data`, whatever the client sent, because the
+PDF prints that column as the disclaimer's text. A save that leaves the method
+alone keeps the stored sign-off, so a row stored before this rule is not
+rewritten (or re-attributed) by a save that touched nothing.
 
 ### A save that changes nothing is not a save
 
@@ -187,6 +231,107 @@ Three further rules on that mutation:
 
 What the certifier typed is kept, not overwritten by the BIN it resolved to.
 `submitted_bin_text` records what was written on the day.
+
+### A new assembly: assigning its BIN creates the asset
+
+Linking answers "which existing assembly is this?". The other answer, and the
+usual one for a no-BIN test, is "none yet": a new BFA has no BIN until the
+purveyor gives it one (client, October 2026). So the purveyor types the BIN into
+the test's BIN field and presses **Save corrections**, and that save registers
+the asset and links the test to it, in one transaction.
+
+The rule: **an unlinked test saved with a BIN that is new or changed in that
+save creates an asset.** A BIN already on the row (typed by the certifier) does
+not turn every later correction into an asset registration. Correcting another
+field of such a test saves normally, even when that BIN belongs to an existing
+asset, and a save that changes nothing stays a no-op. A linked test's BIN field
+stays a plain correction of what was written on the day.
+
+**Search first, then create.** While the purveyor types a BIN into an unlinked
+test, the screen looks it up among their own assets. If it already exists, the
+field says so and offers **Link** to that asset, because the test belongs to it
+and saving that BIN would be refused. If it does not exist, saving creates the
+asset.
+
+What the new asset gets:
+
+| Asset field | From |
+|---|---|
+| BIN | The BIN the WP typed |
+| BFA type | The test's BFA type |
+| Service address, make, model, serial number, size, assembly location | The wizard's assembly answers (`assemblyServiceAddress`, `assemblyMake`, …) |
+| Annual test date | The test date plus one year (29 February clamps to the 28th) |
+| Customer | The wizard's customer, matched by email (`lower(btrim(email))`, as the unique index compares) to an existing customer of this purveyor; created when there is none. No usable email, or a new customer with no name, leaves the asset unassigned. |
+
+When an asset gets a customer, an occupancy row is opened for that customer from today, the same way `createAsset` does it.
+
+The save is refused, and nothing is written, when:
+
+- **the BIN is already used by one of this purveyor's assets.** That test
+  belongs to the existing asset, so **Link** is the right action. A second valve
+  is never registered under the same number. The per-purveyor unique index is
+  what actually enforces this, so two clerks racing for one BIN cannot both
+  succeed.
+- **the test has no test date**, so there would be nothing to set next year's
+  date from;
+- **the test has no service address.** Every asset needs one, and the purveyor
+  fills it in among the test answers first.
+
+The order inside the transaction matters. The test is linked and its result
+applied *before* the reminder chain is scheduled, because a linked pass cancels
+the asset's open notice jobs. If the reminder were scheduled first, the test that
+set next year's date would cancel next year's reminder. A linked fail queues
+its failure notice exactly as a manual link does.
+
+Log lines: `bfa_asset_created` (with `source: "no_bin_submission"`),
+`customer_created` when a customer was made, `bfa_asset_customer_assigned`,
+`test_submission_corrected` when other fields changed in the same save, and
+`test_submission_asset_linked` with `asset_created: true`.
+
+There is no unlink. A wrong BIN is corrected on the asset's own page, as any
+asset's BIN is.
+
+## A test updates its asset
+
+What a test changes about its assembly is written onto the asset (client,
+October 2026). Before this change, overwritten details stayed on the test, and
+the register disagreed with the latest visit. The rules are in
+`packages/api/src/lib/asset-sync.ts`, called from two places:
+
+| When | What is written |
+|---|---|
+| Certifier **submits** a test linked to an asset | The answers in `overridden_fields`, the prefilled values the certifier typed over. `submitTest` takes the form's `overriddenFields` (the last draft save may predate an edit on the final screens) but does not trust them. A flag on an asset answer (details, BFA type, customer) is kept only if the server finds the value really differs from the asset and its current customer (`differingAssetAnswers`). Any other flag is kept only if the key belongs to this type's form. A forged flag therefore writes nothing to the asset and records nothing false on the test. |
+| WP **saves a correction** to a linked test | Only the answers changed *in that save*, compared answer by answer. Untouched fields are never written back, because they may have been corrected on the asset's own page since. A save that changes nothing changes nothing here either. |
+
+Both apply only when the test is the asset's **latest** submitted test (newest
+test date, then newest filed). Correcting last year's test changes the test
+alone and does not put last year's address back on the register.
+
+What carries over:
+
+- **Assembly details**: service address, make, model, serial number, size,
+  assembly location. A blank service address on the test is ignored rather
+  than erasing the asset's address.
+- **BFA type.** A type the certifier changed on the Assembly step becomes the
+  asset's type, so the next test of that BIN opens on it.
+- **Customer, by email.**
+  - If the email matches the current occupant's, only the name is updated, and
+    the customer's revision is bumped so an open edit form cannot restore the
+    old name.
+  - If the email changed (in that save, or among the certifier's overwritten
+    answers) and differs from the occupant's, that customer is found (or
+    created) and becomes the occupant. A save that changed only the name never
+    moves the asset: its email may be a former occupant's, if the asset was
+    reassigned on its own page after the test. The old occupancy row is closed and a new one opened from
+    today, as `assignCustomer` does, and a held notice chain resumes for an
+    active customer.
+  - If there is no usable email, the customer is left alone.
+
+The asset write is in the same transaction as the submit or correction. Its log
+lines (`bfa_asset_updated_from_test` with the changed column names,
+`customer_updated_from_test`, `customer_created`, `bfa_asset_customer_assigned`)
+are emitted only after the transaction commits. The "Overwritten by the
+certifier" flags stay on the test as the record of what was changed on site.
 
 ## Corrections and links drive the notice machinery
 
@@ -304,7 +449,8 @@ download cannot drift into different answers.
 |---|---|---|
 | `listSubmittedTests` | all three WP roles | One page of the caller's own purveyor's submitted tests, cross-certifier. Optional result filter and inclusive `from`/`to` bounds on `test_date`, narrowing together. Each row carries the customer on its test date. |
 | `getSubmittedTest` | all three WP roles | One submitted row in the caller's purveyor, or the same not-found a draft and a foreign id get. |
-| `updateSubmittedTest` | Admin, SubAdmin | Corrects the record, stamps `edited_by_wp_profile_id`, logs `test_submission_corrected`. |
+| `updateSubmittedTest` | Admin, SubAdmin | Corrects the record, stamps `edited_by_wp_profile_id`, logs `test_submission_corrected`. On an unlinked test saved with a BIN, also creates the asset (and customer) from the test and links it — see [A new assembly](#a-new-assembly-assigning-its-bin-creates-the-asset). |
+| `getPhotoUrls` | all three WP roles | Ten-minute signed links for the photos stored on one submitted test, keyed by path. |
 | `linkSubmissionAsset` | Admin, SubAdmin | Attaches an asset to an unresolved submission, logs `test_submission_asset_linked`. |
 | `exportSubmittedTests` | all three WP roles | Every row the list's filters match, unpaged, for the CSV statement; refuses past 5,000 rows; logs `submitted_tests_exported`. |
 

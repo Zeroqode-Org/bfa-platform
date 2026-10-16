@@ -48,12 +48,12 @@ export default async function LoginPage({
 							strokeLinejoin="round"
 							aria-hidden="true"
 						>
-							<title>Backflow Assembly</title>
+							<title>Backflow Reporter.io</title>
 							<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z" />
 						</svg>
 					</span>
 					<span className="font-bold text-[13px] text-foreground tracking-tight">
-						Backflow Assembly
+						Backflow Reporter.io
 					</span>
 				</div>
 
