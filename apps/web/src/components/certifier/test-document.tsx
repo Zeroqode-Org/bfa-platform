@@ -1,5 +1,6 @@
 "use client";
 
+import { SHOW_WP_ADDRESS_ON_DOCUMENT } from "@bfa-platform/api/lib/result-document-options";
 import { formatPsid } from "@bfa-platform/api/lib/wizard-answer-layout";
 import {
 	ASSEMBLY_FIELD_KEYS,
@@ -275,8 +276,9 @@ export function TestDocument({
 			<header className="mb-4 flex flex-wrap items-start justify-between gap-3">
 				<div className="text-[13px]">
 					<p className="font-bold text-[15px]">{wp?.name}</p>
-					{/* As the results PDF heads it: address, then PWSID. */}
-					{wp?.address ? (
+					{/* As the results PDF heads it: address (hidden for now — see
+					    `SHOW_WP_ADDRESS_ON_DOCUMENT`), then PWSID. */}
+					{SHOW_WP_ADDRESS_ON_DOCUMENT && wp?.address ? (
 						<p className="text-muted-foreground">{wp.address}</p>
 					) : null}
 					{wp?.pwsid ? (

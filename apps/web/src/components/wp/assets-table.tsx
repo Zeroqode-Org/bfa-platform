@@ -141,7 +141,7 @@ export function AssetsTable() {
 	const createAsset = useMutation(
 		trpc.assets.createAsset.mutationOptions({
 			onSuccess: async (row) => {
-				toast.success(`${row.bin} registered`);
+				toast.success(`${row.bin ?? "Asset"} registered`);
 				// Refetch rather than patch the cache: the list is sorted and paged,
 				// so a new row's position is the server's to decide.
 				await invalidateList();
@@ -155,7 +155,7 @@ export function AssetsTable() {
 	const saveAsset = useMutation(
 		trpc.assets.updateAsset.mutationOptions({
 			onSuccess: async (row) => {
-				toast.success(`${row.bin} saved`);
+				toast.success(`${row.bin ?? "Asset"} saved`);
 				await invalidateList();
 				await queryClient.invalidateQueries({
 					queryKey: trpc.assets.getAsset.queryKey({ id: row.id }),
@@ -312,7 +312,7 @@ export function AssetsTable() {
 											href={`/wp/assets/${asset.id}`}
 											className="text-primary hover:underline"
 										>
-											{asset.bin}
+											{asset.bin ?? "No BIN"}
 										</Link>
 									</TableCell>
 									<TableCell className="text-muted-foreground">

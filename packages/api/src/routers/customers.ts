@@ -62,8 +62,10 @@ const customerSelection = {
  * to the *asset's* id, comparing the asset with itself and returning an empty
  * list for every customer.
  */
+// A no-BIN asset (0021) reads as "No BIN": it is still an asset the customer
+// holds, which is what the list and the form's "holds an asset" rule ask.
 const heldBins = sql<string[]>`coalesce((
-	select array_agg(held.bin order by held.bin)
+	select array_agg(coalesce(held.bin, 'No BIN') order by held.bin nulls last)
 	from bfa_assets held
 	where held.current_customer_id = "customers"."id"
 	  and held.water_purveyor_id = "customers"."water_purveyor_id"
@@ -474,8 +476,10 @@ async function attachByBin({
 
 		throw new TRPCError({
 			code: "PRECONDITION_FAILED",
+			// `bin`, not `asset.bin`: the row matched it, and the column is
+			// nullable since no-BIN assets (0021).
 			message: customerBinReassignMessage(
-				asset.bin,
+				bin,
 				occupant?.name ?? "another customer",
 			),
 		});
@@ -490,7 +494,7 @@ async function attachByBin({
 		actor,
 	});
 
-	return { assetId: asset.id, bin: asset.bin, from: asset.currentCustomerId };
+	return { assetId: asset.id, bin, from: asset.currentCustomerId };
 }
 
 /**

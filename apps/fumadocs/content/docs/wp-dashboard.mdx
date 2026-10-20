@@ -95,7 +95,7 @@ set of filtered aggregates over a single scan.
 | **Tests this month** | Submitted tests whose `test_date` falls in the current calendar month | Accent |
 | **Past due** | Assets the scheduler has marked `asset_status = 'past_due'`. The whole card is a link to the [fail list](#the-fail-list) | Danger |
 | **Submitted reports** | Every submitted row in the tenant | Primary |
-| **No-BIN submissions** | Submitted rows with a null `bfa_asset_id` | Accent |
+| **No-BIN submissions** | Submitted rows with no BIN: linked to a no-BIN asset, or (filed before `0021`) not linked at all | Accent |
 
 "Tests this month" is dated by when the test was **performed**, not by when the
 row was created. That is the number a compliance officer is asked for, and it
@@ -148,9 +148,10 @@ The newest submitted tests filed against the purveyor, cross-certifier — this 
 the purveyor's inbox, not one certifier's archive. Each row shows the BIN, the
 assembly type, the certifier who filed it, the test date, and the result.
 
-A submission that never resolved to an asset shows **what the certifier typed**
-(`submitted_bin_text`) and is flagged *"Not linked to an asset"*. A submission
-with neither says it has no BIN at all. That is `binLabel`, shared with the
+A submission with no BIN — on a [no-BIN asset](/docs/wp-bfa-assets#the-no-bin-asset),
+or filed before those existed and never linked — is flagged *"Waiting for a
+BIN"*. An older unlinked one shows **what the certifier typed**
+(`submitted_bin_text`) if anything; otherwise it says it has no BIN at all. That is `binLabel`, shared with the
 Submitted Tests table, so the two screens cannot describe the same row
 differently.
 
@@ -171,6 +172,32 @@ owns the record.
 The id in that query string is not trusted. `getSubmittedTest` scopes by tenant
 *and* status, so a foreign id, a draft id and an invented one all get the same
 "Submitted test not found".
+
+## No-BIN reports
+
+A full-width table under the metric cards: the submitted tests still waiting for
+a BIN, newest first (the incoming list's own order), at most ten — the
+**No-BIN submissions** card carries the total. It is the purveyor's alert that
+an assembly needs numbering (client, October 2026).
+
+Each row shows the test date, the BFA type, the service address (the asset's,
+else the test's own answer), the certifier, whether a customer is attached to
+the asset, and the result. The action opens the work:
+
+- **Assign BIN** — the [no-BIN asset](/docs/wp-bfa-assets#the-no-bin-asset) the
+  wizard registered at submit. There the WP assigns the BIN (**Assign BIN**,
+  the asset's edit form) and attaches the customer. If the assembly turns out to
+  be one already registered, the test is linked to that asset from
+  [Submitted Tests](/docs/wp-submitted-tests#from-a-no-bin-asset) instead, and the
+  empty asset is deleted.
+- **Open test** — a test filed before `0021`, with no asset at all. The BIN is
+  typed into the test as before.
+
+A row leaves the table, and the card's count drops, the moment its asset has a
+BIN or the test is linked elsewhere. `noBinReports` and the card share one
+predicate, `noBinSubmission` — *no linked asset with a non-null BIN* — so the
+count and the rows cannot disagree. It is served by the partial index
+`bfa_assets_wp_no_bin_idx` (`0021`).
 
 ## Delinquent assets
 
@@ -228,9 +255,10 @@ The definitions, which the [failure notice](/docs/notice-workflow#workflow-3--th
 shares so the list and the email always agree on what "resolved" means:
 
 - Only rows with `status = 'submitted'` **and** a non-null `test_result`,
-  linked to an asset, participate. Drafts, result-less records and unlinked
-  no-BIN submissions decide nothing; a no-BIN fail counts from its own
-  submission time once a WP links it.
+  linked to an asset **with a BIN**, participate. Drafts, result-less records,
+  unlinked submissions and tests on a no-BIN asset decide nothing; a no-BIN
+  fail counts from its own submission time once the WP links it or assigns its
+  asset a BIN.
 - Event order is `(created_at, id)` — when the submission happened, with the id
   as a deterministic tie-breaker — **never `test_date`**, which is nullable and
   certifier-typed. "The next passing test submitted" means submitted next, not

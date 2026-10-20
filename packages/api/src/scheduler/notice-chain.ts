@@ -53,6 +53,7 @@ export const CANCEL_REASONS = {
 	featureDisabled:
 		"Automated notices are switched off for this water purveyor.",
 	assetGone: "The assembly is no longer registered to this water purveyor.",
+	noBin: "The assembly has no BIN yet, so it is not on the notice schedule.",
 } as const;
 
 /** Why a stage is waiting rather than sending. */
@@ -122,17 +123,23 @@ export async function reconcileAssetNoticeChain({
 	trigger:
 		| "asset_created"
 		| "annual_test_date_changed"
-		| "passing_test_submitted";
+		| "passing_test_submitted"
+		| "asset_bin_assigned";
 }): Promise<void> {
 	await lockAssetForChain(executor, assetId);
 
-	if (!annualTestDate) {
+	// Read under the lock, so a BIN assigned in the caller's own transaction is
+	// the one seen. A no-BIN asset has no chain: nobody is reminded about an
+	// assembly the register cannot name.
+	if (!annualTestDate || !(await assetHasBin(executor, assetId))) {
 		await withdrawChain({
 			executor,
 			assetId,
 			waterPurveyorId,
 			actor,
-			reason: CANCEL_REASONS.noAnnualTestDate,
+			reason: annualTestDate
+				? CANCEL_REASONS.noBin
+				: CANCEL_REASONS.noAnnualTestDate,
 			trigger,
 		});
 
@@ -184,6 +191,24 @@ export async function reconcileAssetNoticeChain({
 			replaced_job_ids: live.map((job) => job.id),
 		},
 	});
+}
+
+/**
+ * Whether the asset has a BIN. A no-BIN asset — registered by the wizard from
+ * a test whose BIN was blank or not found (0021) — is off the notice machinery
+ * entirely until the WP assigns one: no reminder chain, no failure notice.
+ */
+export async function assetHasBin(
+	executor: Pick<typeof db, "select">,
+	assetId: string,
+): Promise<boolean> {
+	const [asset] = await executor
+		.select({ bin: bfaAssets.bin })
+		.from(bfaAssets)
+		.where(eq(bfaAssets.id, assetId))
+		.limit(1);
+
+	return Boolean(asset?.bin);
 }
 
 /**

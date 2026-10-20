@@ -161,6 +161,12 @@ export async function runNoticeJob(
 
 	if (!asset) return cancel(job, stage, CANCEL_REASONS.assetGone);
 
+	// Never scheduled for a no-BIN asset (`reconcileAssetNoticeChain`), so this
+	// is a job that outlived its asset's BIN. A notice must name the assembly.
+	if (!asset.bin) return cancel(job, stage, CANCEL_REASONS.noBin);
+
+	const named = { ...asset, bin: asset.bin };
+
 	if (!asset.annualTestDate) {
 		return cancel(job, stage, CANCEL_REASONS.noAnnualTestDate);
 	}
@@ -182,11 +188,11 @@ export async function runNoticeJob(
 		now,
 		driver,
 		render: async () => {
-			const recipient = await resolveRecipient(asset);
+			const recipient = await resolveRecipient(named);
 
 			if ("hold" in recipient) return recipient;
 
-			return renderNotice(asset, recipient.customer, stage, driver);
+			return renderNotice(named, recipient.customer, stage, driver);
 		},
 	});
 

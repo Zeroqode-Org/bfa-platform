@@ -729,10 +729,10 @@ Build in this order — do not start the per-type blocks before the shared shell
 
 **Step 2 — Identification and prefill**
 
-6. `lookupAssetByBin` procedure — resolves a BIN within the active WP only. Returns the asset plus the field values from its most recent submitted test. A typed BIN must be looked up before the first screen's **Next** is enabled (client, October 2026), and typing over a looked-up BIN asks for a new lookup. An empty BIN, for a new assembly that has none yet, needs no lookup and Next is available at once. This keeps a BIN the purveyor already has from being filed as an unlinked test.
+6. `lookupAssetByBin` procedure — resolves a BIN within the active WP only. Returns the asset plus the field values from its most recent submitted test. The first screen is one BIN field and **Next**, under the instruction *"Enter BIN. If unknown or none, leave blank and click Next."* (client, October 2026). **Next** does the lookup; there is no separate lookup button. Suggestions still drop down while typing, and picking one only fills the field. A BIN already found is not looked up again when the certifier comes back to the screen and on, so edits made since are kept.
 7. BIN found: prefill assembly details from the asset and the rest of the questionnaire from the prior submission. Every prefilled field stays editable.
 8. Track overwrites: when a certifier edits a prefilled value, record the field key in `overridden_fields`. The WP must be able to see what changed, not just the final value.
-9. BIN blank or not found: unlock all downstream fields for manual entry, store what was typed in `submitted_bin_text`, leave `bfa_asset_id` null.
+9. BIN blank or not found: Next clears the field and goes on with no BIN, every downstream field entered by hand (the assembly type on the Assembly step, starting on RP). The typed text is never stored — `submitted_bin_text` stays null — so a BIN the register does not have is never recorded. At submit the test registers a fresh **no-BIN asset** (`bfa_assets.bin` null, `0021`) from its own answers, with no customer, and is linked to it. See [the no-BIN asset](/docs/wp-bfa-assets#the-no-bin-asset).
 
 **Step 3 — Assembly information**
 
@@ -770,7 +770,7 @@ A pass/fail answer never ends the wizard early — the remaining fields are stil
 
 20. `submitTest` procedure — validates all required fields and test results, sets `status = 'submitted'`, writes `test_result`. When the same BIN already has a submitted test from this certifier, set `superseded_by_submission_id` on the prior row rather than mutating it.
 21. Immutability: once submitted, the certifier cannot edit, delete, or resubmit that record under any circumstances. Enforce in the RLS policy and again in the procedure. This restricts the certifier only — a WP editing a submitted test is a separate, intentional path with its own audit column.
-22. Results document render — a document-style PDF of the completed wizard, generated with a lightweight PDF library, no headless-Chrome dependency. Store it in the `result-documents` bucket.
+22. Results document render — a document-style PDF of the completed wizard, generated with a lightweight PDF library, no headless-Chrome dependency. Store it in the `result-documents` bucket. The header names the water purveyor and its PWSID; its address is **hidden for now** (client, October 2026) — purveyors' addresses are not filled in yet. One switch, `SHOW_WP_ADDRESS_ON_DOCUMENT` in `packages/api/src/lib/result-document-options.ts`, hides it in both the PDF and the wizard's preview of it.
     - **One layout per BFA type**, not one shared layout. The document must show the test that was actually performed, so an RP report carries relief-valve rows and a PVB report carries air-inlet rows, with no empty or irrelevant sections.
     - Build it as a shared frame plus a swappable test-block section, mirroring the four component families from step 6 — a shared header, assembly block, customer block, and sign-off block, with the per-type test table dropped in between. Eight fully independent templates would triple the maintenance for no benefit.
     - Shared frame: WP information block upper left, certifier block (name, company, ID) — both pulled from the database, never from wizard input.

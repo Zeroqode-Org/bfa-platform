@@ -52,6 +52,15 @@ Status as of **2026-09-18**. Update this table as work progresses — this is th
 | Landing Page | 6.13 | Lina | 09/28 | 10/02 | planned |
 | QA & Testing | 6.17 | — | 08/24 | 10/02 | in-progress |
 
+**Certifier Test Wizard (6.5) — simplified BIN step** (client, October 2026):
+the first screen is one BIN field and **Next**, which does the lookup. Found
+prefills as before; blank or not found clears the field and goes on with no
+BIN, the type chosen on the Assembly step. A typed BIN that was not found is
+never stored. At submit such a test registers a **no-BIN asset** (`0021` makes
+`bfa_assets.bin` nullable) whose results and notices wait until the WP assigns
+its BIN; the WP dashboard gains a No-BIN table. See
+[the no-BIN asset](/docs/wp-bfa-assets#the-no-bin-asset).
+
 **App Shell (6.15)**: the workspace picker on `/` is gone. It was a development
 shortcut from before roles were resolved server-side; `/` now forwards each
 signed-in user to their own dashboard by role, and anonymous visitors to

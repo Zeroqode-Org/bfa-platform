@@ -45,7 +45,7 @@ import { required } from "@bfa-platform/ui/lib/validation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, TriangleAlert, Users } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { trpc } from "@/utils/trpc";
@@ -60,6 +60,11 @@ import {
 	nextAssignAction,
 	SUSPENDED_CUSTOMER_NOTE,
 } from "./asset-types";
+import {
+	CustomerForm,
+	customerFormErrors,
+	emptyCustomerValues,
+} from "./customer-form";
 
 /**
  * One asset, everything known about it, and the two things a WP does to it from
@@ -129,7 +134,7 @@ function LoadedAsset({
 	const saveAsset = useMutation(
 		trpc.assets.updateAsset.mutationOptions({
 			onSuccess: async (row) => {
-				toast.success(`${row.bin} saved`);
+				toast.success(`${row.bin ?? "Asset"} saved`);
 				await onChanged();
 				setIsEditOpen(false);
 			},
@@ -142,7 +147,7 @@ function LoadedAsset({
 
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div className="flex flex-col gap-2">
-					<PageTitle kicker="BFA asset">{asset.bin}</PageTitle>
+					<PageTitle kicker="BFA asset">{asset.bin ?? "No BIN"}</PageTitle>
 					<div className="flex flex-wrap items-center gap-2">
 						<Badge variant={ASSET_STATUS_VARIANTS[asset.assetStatus]}>
 							{ASSET_STATUS_LABELS[asset.assetStatus]}
@@ -161,9 +166,24 @@ function LoadedAsset({
 						setIsEditOpen(true);
 					}}
 				>
-					Edit asset
+					{asset.bin ? "Edit asset" : "Assign BIN"}
 				</Button>
 			</div>
+
+			{/* A no-BIN asset: registered by the certifier wizard from a test whose
+			    BIN was blank or not found. The purveyor numbers it here. */}
+			{asset.bin ? null : (
+				<p className="flex items-start gap-1.5 rounded-md bg-warning-bg px-3 py-2 text-[12px] text-warning">
+					<TriangleAlert
+						className="mt-px size-3.5 shrink-0"
+						aria-hidden="true"
+					/>
+					Registered from a test submitted with no BIN. Assign its BIN and
+					attach the customer — its test result and notices start once it has a
+					BIN. If this assembly is already registered, link the test to that
+					asset from Submitted Tests instead; this empty one is then removed.
+				</p>
+			)}
 
 			<div className="grid gap-4 min-[980px]:grid-cols-[minmax(0,1fr)_340px]">
 				<Card className="flex flex-col gap-4 p-5">
@@ -199,10 +219,11 @@ function LoadedAsset({
 				    its fields, so the popup clips instead of scrolling too. */}
 				<DialogContent className="max-w-[560px] overflow-hidden">
 					<DialogHeader>
-						<DialogTitle>Edit asset</DialogTitle>
+						<DialogTitle>{asset.bin ? "Edit asset" : "Assign BIN"}</DialogTitle>
 						<DialogDescription>
-							Every field can be corrected, the BIN included — a BIN change is
-							recorded with both values.
+							{asset.bin
+								? "Every field can be corrected, the BIN included — a BIN change is recorded with both values."
+								: "Give this assembly its BIN. Every other field can be corrected here too."}
 						</DialogDescription>
 					</DialogHeader>
 					<EditAssetForm
@@ -237,8 +258,12 @@ function CustomerPanel({
 	detail: AssetDetail;
 	onChanged: () => Promise<void>;
 }) {
-	const { asset } = detail;
+	const { asset, testCustomer } = detail;
 	const [isAssignOpen, setIsAssignOpen] = useState(false);
+	// The customer the assign dialog opens on — the test's, when the WP takes
+	// the suggestion below.
+	const [preselected, setPreselected] = useState<string | null>(null);
+	const [isCreateFromTestOpen, setIsCreateFromTestOpen] = useState(false);
 
 	return (
 		<Card className="flex flex-col gap-4 p-5">
@@ -266,8 +291,27 @@ function CustomerPanel({
 				</p>
 			)}
 
+			{testCustomer ? (
+				<TestCustomerSuggestion
+					suggestion={testCustomer}
+					assetHasBin={asset.bin !== null}
+					onAttach={(customerId) => {
+						setPreselected(customerId);
+						setIsAssignOpen(true);
+					}}
+					onCreate={() => setIsCreateFromTestOpen(true)}
+				/>
+			) : null}
+
 			<div className="flex flex-col gap-2">
-				<Button size="sm" onClick={() => setIsAssignOpen(true)}>
+				<Button
+					size="sm"
+					variant={testCustomer ? "secondary" : "default"}
+					onClick={() => {
+						setPreselected(null);
+						setIsAssignOpen(true);
+					}}
+				>
 					{asset.currentCustomerId ? "Change customer" : "Attach customer"}
 				</Button>
 				<p className="text-[12px] text-muted-foreground">
@@ -281,9 +325,142 @@ function CustomerPanel({
 				open={isAssignOpen}
 				onOpenChange={setIsAssignOpen}
 				detail={detail}
+				preselected={preselected}
 				onChanged={onChanged}
 			/>
+
+			{testCustomer ? (
+				<CreateCustomerFromTestDialog
+					open={isCreateFromTestOpen}
+					onOpenChange={setIsCreateFromTestOpen}
+					assetBin={asset.bin}
+					suggestion={testCustomer}
+					onChanged={onChanged}
+				/>
+			) : null}
 		</Card>
+	);
+}
+
+type TestCustomer = NonNullable<AssetDetail["testCustomer"]>;
+
+/**
+ * The customer the certifier recorded on this asset's latest test, offered as
+ * the one to attach while nobody is. Nothing is attached or created until the WP says so
+ * (client, October 2026: the WP links the new asset to its customer by hand).
+ */
+function TestCustomerSuggestion({
+	suggestion,
+	assetHasBin,
+	onAttach,
+	onCreate,
+}: {
+	suggestion: TestCustomer;
+	assetHasBin: boolean;
+	onAttach: (customerId: string) => void;
+	onCreate: () => void;
+}) {
+	const { name, email, match } = suggestion;
+
+	return (
+		<div className="flex flex-col gap-2 rounded-md bg-accent px-3 py-2.5 text-[12px] text-accent-foreground">
+			<p>
+				<span className="font-semibold">From the test:</span>{" "}
+				{[name, email].filter(Boolean).join(" · ")}
+			</p>
+			{match ? (
+				<>
+					<p>
+						{match.name} already has this email
+						{match.status === "suspended" ? " and is suspended" : ""}.
+					</p>
+					<Button size="sm" onClick={() => onAttach(match.id)}>
+						Attach {match.name}
+					</Button>
+				</>
+			) : assetHasBin ? (
+				<>
+					<p>No customer has this email yet.</p>
+					<Button size="sm" onClick={onCreate}>
+						Create customer from test
+					</Button>
+				</>
+			) : (
+				// A new customer is attached through a BIN (`createCustomer`'s
+				// `attachBin`), so this asset needs its BIN first.
+				<p>
+					No customer has this email yet. Assign the BIN first — a new
+					customer is created through it.
+				</p>
+			)}
+		</div>
+	);
+}
+
+/**
+ * A new customer from the test's details, attached to this asset through its
+ * BIN — `createCustomer` attaches the customer to the asset its `attachBin`
+ * names. The customer form opens filled in from the test (standard rate,
+ * active, this asset's BIN) for the WP to check and complete before anything
+ * is saved.
+ */
+function CreateCustomerFromTestDialog({
+	open,
+	onOpenChange,
+	assetBin,
+	suggestion,
+	onChanged,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	assetBin: string | null;
+	suggestion: TestCustomer;
+	onChanged: () => Promise<void>;
+}) {
+	const queryClient = useQueryClient();
+	const createCustomer = useMutation(
+		trpc.customers.createCustomer.mutationOptions({
+			onSuccess: async (customer) => {
+				toast.success(`${customer.name} added and attached`);
+				onOpenChange(false);
+				await queryClient.invalidateQueries({
+					queryKey: trpc.customers.listCustomers.queryKey(),
+				});
+				await onChanged();
+			},
+		}),
+	);
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="max-w-[560px] overflow-hidden">
+				<DialogHeader>
+					<DialogTitle>Create customer from test</DialogTitle>
+					<DialogDescription>
+						Filled in from what the certifier recorded. Check it, complete it,
+						and save — the new customer is attached to this asset.
+					</DialogDescription>
+				</DialogHeader>
+				<CustomerForm
+					initialValues={{
+						...emptyCustomerValues,
+						name: suggestion.name,
+						email: suggestion.email ?? "",
+						attachBin: assetBin ?? "",
+						rateCategory: "standard",
+						status: "active",
+					}}
+					pending={createCustomer.isPending}
+					{...customerFormErrors(
+						createCustomer.isError ? createCustomer.error : null,
+					)}
+					submitLabel="Create and attach"
+					pendingLabel="Saving…"
+					onCancel={() => onOpenChange(false)}
+					onSubmit={(payload) => createCustomer.mutate(payload)}
+				/>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -307,15 +484,22 @@ function AssignCustomerDialog({
 	open,
 	onOpenChange,
 	detail,
+	preselected = null,
 	onChanged,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	detail: AssetDetail;
+	/** The customer the dialog opens on, if any — still confirmed with Attach. */
+	preselected?: string | null;
 	onChanged: () => Promise<void>;
 }) {
 	const { asset } = detail;
 	const [selected, setSelected] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (open) setSelected(preselected);
+	}, [open, preselected]);
 	const [isConfirmingSuspended, setIsConfirmingSuspended] = useState(false);
 
 	const customers = useQuery(trpc.customers.listCustomers.queryOptions());
@@ -333,8 +517,8 @@ function AssignCustomerDialog({
 			onSuccess: async (result) => {
 				toast.success(
 					result.asset.currentCustomerName
-						? `${result.asset.currentCustomerName} is now on ${result.asset.bin}`
-						: `${result.asset.bin} updated`,
+						? `${result.asset.currentCustomerName} is now on ${result.asset.bin ?? "this asset"}`
+						: `${result.asset.bin ?? "Asset"} updated`,
 				);
 				close();
 				await onChanged();
@@ -401,7 +585,7 @@ function AssignCustomerDialog({
 					<DialogDescription>
 						{isConfirmingSuspended
 							? "Their automated email is paused, so this asset's reminders and late notices stop until a different customer is attached to the BIN."
-							: `Automated email for ${asset.bin} goes to whoever is attached here. The current assignment is closed with today's date and kept.`}
+							: `Automated email for ${asset.bin ?? "this asset"} goes to whoever is attached here. The current assignment is closed with today's date and kept.`}
 					</DialogDescription>
 				</DialogHeader>
 

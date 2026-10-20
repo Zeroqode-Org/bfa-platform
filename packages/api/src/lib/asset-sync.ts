@@ -421,7 +421,7 @@ async function syncCustomer({
 	actor,
 }: {
 	executor: JobExecutor;
-	asset: { id: string; bin: string; currentCustomerId: string | null };
+	asset: { id: string; bin: string | null; currentCustomerId: string | null };
 	waterPurveyorId: string;
 	wizardData: Record<string, unknown>;
 	renameAllowed: boolean;

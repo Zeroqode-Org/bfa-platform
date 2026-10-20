@@ -125,7 +125,8 @@ function asUpdate(
 ) {
 	return {
 		id: asset.id,
-		bin: asset.bin,
+		// `createAsset` always numbers the asset; only the wizard makes one without.
+		bin: asset.bin as string,
 		bfaType: asset.bfaType,
 		serviceAddress: asset.serviceAddress,
 		// The columns are nullable, but every asset created here has them.

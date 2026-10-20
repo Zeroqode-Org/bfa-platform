@@ -57,8 +57,8 @@ export function stepMissingKeys(step: number, form: WizardFormState): string[] {
 
 	switch (current.kind) {
 		case "identification": {
-			// The BIN is optional and need not exist in the database: a typed BIN
-			// that is not found is kept as text and the assembly is entered by hand.
+			// The BIN is optional: Next looks it up, and blank or not found goes
+			// on with no BIN and the assembly entered by hand.
 			return [];
 		}
 		case "assembly":

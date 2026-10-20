@@ -35,7 +35,7 @@ export function ReviewStep({
 		<TestDocument
 			wp={{ name: wpName, address: wpAddress, pwsid: wpPwsid }}
 			bfaType={form.bfaType}
-			bin={form.bfaAssetId ? form.bin : form.submittedBinText || "No BIN"}
+			bin={form.bfaAssetId ? form.bin : "No BIN"}
 			wizardData={form.wizardData}
 			customerName={form.customerName}
 			customerEmail={form.customerEmail}

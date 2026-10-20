@@ -15,6 +15,7 @@ import type {
 	DashboardMetrics,
 	DelinquentAsset,
 	IncomingReport,
+	NoBinReport,
 	PassFailBreakdown,
 	TrendMonth,
 } from "./dashboard-types";
@@ -66,6 +67,7 @@ const metricsFn = vi.fn();
 const trendFn = vi.fn();
 const incomingFn = vi.fn();
 const delinquentFn = vi.fn();
+const noBinFn = vi.fn();
 const breakdownFn = vi.fn();
 
 vi.mock("@/utils/trpc", () => ({
@@ -93,6 +95,12 @@ vi.mock("@/utils/trpc", () => ({
 				queryOptions: (input: unknown) => ({
 					queryKey: ["dashboard", "delinquent", input],
 					queryFn: () => delinquentFn(input),
+				}),
+			},
+			noBinReports: {
+				queryOptions: (input: unknown) => ({
+					queryKey: ["dashboard", "no-bin", input],
+					queryFn: () => noBinFn(input),
 				}),
 			},
 			passFailBreakdown: {
@@ -190,6 +198,20 @@ function delinquent(overrides: Partial<DelinquentAsset> = {}): DelinquentAsset {
 	};
 }
 
+function noBinReport(overrides: Partial<NoBinReport> = {}): NoBinReport {
+	return {
+		id: "5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f",
+		bfaAssetId: "9e8d7c6b-5a49-4382-9716-05f4e3d2c1b0",
+		bfaType: "PVB",
+		testDate: "2026-09-04",
+		testResult: "fail",
+		serviceAddress: "7 Orchard Way",
+		hasCustomer: false,
+		certifierName: "Marta Ellison",
+		...overrides,
+	};
+}
+
 function breakdown(
 	overrides: Partial<PassFailBreakdown> = {},
 ): PassFailBreakdown {
@@ -231,6 +253,7 @@ beforeEach(() => {
 		.mockResolvedValue({ months: emptyTrend(), monthCount: 12 });
 	incomingFn.mockReset().mockResolvedValue([report()]);
 	delinquentFn.mockReset().mockResolvedValue([delinquent()]);
+	noBinFn.mockReset().mockResolvedValue([noBinReport()]);
 	breakdownFn.mockReset().mockResolvedValue(breakdown());
 });
 
@@ -384,7 +407,7 @@ describe("WpDashboard incoming reports", () => {
 		renderDashboard();
 
 		expect(await screen.findByText("TYPED-BIN-404")).toBeTruthy();
-		expect(screen.getByText("Not linked to an asset")).toBeTruthy();
+		expect(screen.getByText("Waiting for a BIN")).toBeTruthy();
 	});
 
 	it("says a submission has no result rather than leaving the row blank", async () => {
@@ -415,6 +438,62 @@ describe("WpDashboard incoming reports", () => {
 		// The other panels are independent queries and are unaffected.
 		expect(screen.getByText("4,120")).toBeTruthy();
 		expect(screen.getByText("BIN-20077")).toBeTruthy();
+	});
+});
+
+describe("WpDashboard no-BIN reports", () => {
+	it("sends a test with a no-BIN asset to that asset, to assign its BIN", async () => {
+		renderDashboard();
+
+		const link = await panel("No-BIN reports").findByRole("link", {
+			name: "Assign BIN",
+		});
+
+		expect(link.getAttribute("href")).toBe(
+			"/wp/assets/9e8d7c6b-5a49-4382-9716-05f4e3d2c1b0",
+		);
+	});
+
+	it("sends a test filed before no-BIN assets to the test itself", async () => {
+		noBinFn.mockResolvedValue([noBinReport({ bfaAssetId: null })]);
+
+		renderDashboard();
+
+		const link = await panel("No-BIN reports").findByRole("link", {
+			name: "Open test",
+		});
+
+		expect(link.getAttribute("href")).toBe(
+			"/wp/tests?test=5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f",
+		);
+	});
+
+	it("shows where the valve is, who tested it and whether a customer is attached", async () => {
+		renderDashboard();
+
+		const table = panel("No-BIN reports");
+
+		expect(await table.findByText("7 Orchard Way")).toBeTruthy();
+		expect(table.getByText("Marta Ellison")).toBeTruthy();
+		expect(table.getByText("Not attached")).toBeTruthy();
+	});
+
+	it("says so when every test has a BIN", async () => {
+		noBinFn.mockResolvedValue([]);
+
+		renderDashboard();
+
+		expect(await screen.findByText("Every test has a BIN")).toBeTruthy();
+	});
+
+	it("reports a failed request on its own panel", async () => {
+		noBinFn.mockRejectedValue(new Error("No-BIN exploded"));
+
+		renderDashboard();
+
+		expect(
+			await panel("No-BIN reports").findByText("No-BIN exploded"),
+		).toBeTruthy();
 	});
 });
 

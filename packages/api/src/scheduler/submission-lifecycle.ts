@@ -32,6 +32,11 @@
  *   represents no assembly yet. When a WP later links it, this function runs
  *   again with the link in place and the fail (or pass) takes effect then —
  *   which is exactly the late-link flow.
+ * - A submission linked to a **no-BIN asset** counts as unlinked. The wizard
+ *   registers that asset at submit when the certifier had no BIN (0021), and
+ *   the register cannot name it yet: no notice goes out about it. When the WP
+ *   assigns the BIN, `activateAssetWithBin` runs this again for each of the
+ *   asset's tests — the same late-link flow.
  *
  * Drafts never reach here. The submitted-tests router pins
  * `status = 'submitted'` on every query, and the wizard calls this only at
@@ -44,7 +49,7 @@
 
 import { db } from "@bfa-platform/db";
 import { bfaAssets, testSubmissions } from "@bfa-platform/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import type { AuditActor } from "../lib/audit-actor";
 import { nextAnnualTestDate } from "../lib/notice-schedule";
@@ -55,6 +60,7 @@ import {
 import type { JobExecutor } from "./jobs";
 import { logSchedulerEvent } from "./logging";
 import {
+	assetHasBin,
 	cancelNoticeChainForPassingTest,
 	reconcileAssetNoticeChain,
 } from "./notice-chain";
@@ -63,7 +69,8 @@ import {
 export type SubmissionLifecycleTrigger =
 	| "test_submission_corrected"
 	| "test_submission_asset_linked"
-	| "test_submitted";
+	| "test_submitted"
+	| "asset_bin_assigned";
 
 export async function applySubmittedTestResult({
 	executor = db,
@@ -86,11 +93,14 @@ export async function applySubmittedTestResult({
 	trigger: SubmissionLifecycleTrigger;
 	now?: Date;
 }): Promise<void> {
-	if (bfaAssetId && testResult === "fail") {
+	const assetId =
+		bfaAssetId && (await assetHasBin(executor, bfaAssetId)) ? bfaAssetId : null;
+
+	if (assetId && testResult === "fail") {
 		await scheduleFailureNotice({
 			executor,
 			submissionId,
-			assetId: bfaAssetId,
+			assetId,
 			waterPurveyorId,
 			actor,
 			trigger,
@@ -105,16 +115,16 @@ export async function applySubmittedTestResult({
 	await cancelFailureNoticeForSubmission({
 		executor,
 		submissionId,
-		assetId: bfaAssetId,
+		assetId,
 		waterPurveyorId,
 		actor,
 		trigger,
 	});
 
-	if (bfaAssetId && testResult === "pass") {
+	if (assetId && testResult === "pass") {
 		await cancelNoticeChainForPassingTest({
 			executor,
-			assetId: bfaAssetId,
+			assetId,
 			waterPurveyorId,
 			actor,
 			submissionId,
@@ -123,7 +133,7 @@ export async function applySubmittedTestResult({
 		await advanceAnnualTestDate({
 			executor,
 			submissionId,
-			assetId: bfaAssetId,
+			assetId,
 			waterPurveyorId,
 			actor,
 		});
@@ -235,5 +245,77 @@ async function advanceAnnualTestDate({
 			test_date: testDate,
 			submission_id: submissionId,
 		},
+	});
+}
+
+/**
+ * Puts a no-BIN asset on the notice machinery, the moment the WP assigns its
+ * BIN — the late-link flow, for an asset rather than a test.
+ *
+ * Until now every test on it counted as unlinked (see above), so each one's
+ * result is applied here, oldest first, and then the asset's reminder chain is
+ * scheduled from its annual test date — read back after the results, because
+ * a pass may just have moved it (`advanceAnnualTestDate`). In that order, the
+ * one `createAssetFromSubmission` uses, so a pass that cancels the chain
+ * cannot cancel the reminder this schedules.
+ *
+ * Runs inside the caller's transaction, after the write that set the BIN.
+ */
+export async function activateAssetWithBin({
+	executor,
+	assetId,
+	waterPurveyorId,
+	actor = null,
+}: {
+	executor: JobExecutor;
+	assetId: string;
+	waterPurveyorId: string;
+	actor?: AuditActor | null;
+}): Promise<void> {
+	const tests = await executor
+		.select({
+			id: testSubmissions.id,
+			testResult: testSubmissions.testResult,
+		})
+		.from(testSubmissions)
+		.where(
+			and(
+				eq(testSubmissions.bfaAssetId, assetId),
+				eq(testSubmissions.waterPurveyorId, waterPurveyorId),
+				eq(testSubmissions.status, "submitted"),
+			),
+		)
+		.orderBy(asc(testSubmissions.createdAt), asc(testSubmissions.id));
+
+	for (const test of tests) {
+		await applySubmittedTestResult({
+			executor,
+			submissionId: test.id,
+			bfaAssetId: assetId,
+			testResult: test.testResult,
+			waterPurveyorId,
+			actor,
+			trigger: "asset_bin_assigned",
+		});
+	}
+
+	const [asset] = await executor
+		.select({ annualTestDate: bfaAssets.annualTestDate })
+		.from(bfaAssets)
+		.where(
+			and(
+				eq(bfaAssets.id, assetId),
+				eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+			),
+		)
+		.limit(1);
+
+	await reconcileAssetNoticeChain({
+		executor,
+		assetId,
+		waterPurveyorId,
+		annualTestDate: asset?.annualTestDate ?? null,
+		actor,
+		trigger: "asset_bin_assigned",
 	});
 }

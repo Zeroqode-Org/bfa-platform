@@ -9,7 +9,7 @@ import type { BfaType } from "./wizard-types";
  * Test result on a screen of its own, then closing, and finally the review —
  * a preview of the finished form to submit or save, not a step of its own:
  * it has no label on the progress bar and no way back to the screens before
- * it. The count depends on the type, which is settled on the first screen.
+ * it. The count depends on the type, which is settled on the assembly screen.
  */
 export type StepKind =
 	| { kind: "identification" }

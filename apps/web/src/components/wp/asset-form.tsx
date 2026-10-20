@@ -105,7 +105,8 @@ export const newAssetValues: AssetFormValues = {
 /** An existing row as form values. Nullable columns become empty strings. */
 export function assetToFormValues(asset: Asset): CompletedAssetFormValues {
 	return {
-		bin: asset.bin,
+		// Blank on a no-BIN asset: saving the form is how its BIN is assigned.
+		bin: asset.bin ?? "",
 		bfaType: asset.bfaType,
 		serviceAddress: asset.serviceAddress,
 		assemblyLocation: asset.assemblyLocation ?? "",

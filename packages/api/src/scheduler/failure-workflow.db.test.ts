@@ -105,6 +105,11 @@ let pool: pg.Pool;
 let binCounter = 0;
 
 let callerFor: (profileId: string) => {
+	assets: {
+		updateAsset: (
+			input: inferProcedureInput<AppRouter["assets"]["updateAsset"]>,
+		) => Promise<unknown>;
+	};
 	submittedTests: {
 		updateSubmittedTest: (input: UpdateInput) => Promise<unknown>;
 		linkSubmissionAsset: (
@@ -155,10 +160,15 @@ function eventsNamed(lines: Record<string, unknown>[], event: string) {
 async function seedAsset({
 	waterPurveyorId = wpA,
 	currentCustomerId = null as string | null,
+	// `null` for a no-BIN asset, as the wizard registers one at submit.
+	bin: binOverride = undefined as string | null | undefined,
 } = {}) {
 	binCounter += 1;
 	const id = randomUUID();
-	const bin = `WF3-${binCounter}-${randomUUID().slice(0, 6)}`;
+	const bin =
+		binOverride === undefined
+			? `WF3-${binCounter}-${randomUUID().slice(0, 6)}`
+			: binOverride;
 
 	await pool.query(
 		`insert into bfa_assets (id, water_purveyor_id, bin, current_customer_id, bfa_type, service_address)
@@ -611,6 +621,37 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			await callerFor(ids.adminA).submittedTests.linkSubmissionAsset({
 				submissionId,
 				assetId: asset.id,
+			});
+
+			const jobs = await jobsForSubmission(submissionId);
+			expect(jobs).toHaveLength(1);
+			expect(jobs[0]?.status).toBe("pending");
+		});
+
+		it("waits on a no-BIN asset, and queues the notice once the WP assigns its BIN", async () => {
+			const asset = await seedAsset({
+				currentCustomerId: customerIds.primary,
+				bin: null,
+			});
+			const submissionId = await submitTest({
+				assetId: asset.id,
+				result: "fail",
+			});
+
+			// Linked, but to an assembly the register cannot name yet.
+			expect(await jobsForSubmission(submissionId)).toHaveLength(0);
+
+			await callerFor(ids.adminA).assets.updateAsset({
+				id: asset.id,
+				bin: `WF3-ASSIGNED-${randomUUID().slice(0, 6)}`,
+				bfaType: "RP",
+				serviceAddress: "12 Kalani Street",
+				make: "Watts",
+				model: "LF909",
+				serialNumber: "SN-WF3",
+				size: "1",
+				assemblyLocation: "Front yard",
+				annualTestDate: "2027-09-01",
 			});
 
 			const jobs = await jobsForSubmission(submissionId);
