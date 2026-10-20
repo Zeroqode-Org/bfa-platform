@@ -472,8 +472,13 @@ The block is **appended below** the purveyor's text rather than being a seventh
 template variable. `NOTICE_VARIABLES` is a closed registry whose final contents
 are still a client decision, and a list that depended on the purveyor having typed
 a placeholder would be missing from every template that predates it. Each line is
-name — company — licence number, skipping whatever is absent; `certifiers` has no
+company — name — licence number, skipping whatever is absent; `certifiers` has no
 phone or email column, so no contact field is invented.
+
+The list is ordered by company, case-insensitive with digits before letters —
+"1A1A Backflow Testing", "808 Plumbing", "A-1 Plumbing", "Commercial Plumbing",
+"Zen Backflow Testers" — the same order as the repair companies on the failure
+notice. Testers with no company come last, then by name.
 
 When nobody qualifies the block is omitted entirely rather than rendered as an
 empty heading, and the notice still goes out. The notice is the obligation, the

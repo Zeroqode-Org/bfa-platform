@@ -1208,6 +1208,82 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			}
 		});
 
+		it("lists testers by company, digits first and ignoring case, those without one last", async () => {
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+
+			// The client's own example, shuffled, plus a lower-case name and two
+			// testers with no company (one blank) that must not jump the queue.
+			const extra: [string | null, string][] = [
+				["Zen Backflow Testers", "Zoe Zen"],
+				["commercial Plumbing", "Cal Commercial"],
+				[null, "Nadia Nocompany"],
+				["808 Plumbing", "Eight Oh Eight"],
+				["  ", "Bianca Blank"],
+				["A-1 Plumbing", "Andy Aone"],
+				["1A1A Backflow Testing", "Owen Onea"],
+			];
+			const profileIds: string[] = [];
+			const certifierIdsAdded: string[] = [];
+
+			try {
+				for (const [index, [company, name]] of extra.entries()) {
+					const profileId = randomUUID();
+					const certifierId = randomUUID();
+					profileIds.push(profileId);
+					certifierIdsAdded.push(certifierId);
+
+					await pool.query(
+						`insert into profiles (id, water_purveyor_id, full_name, global_role, status)
+						 values ($1, null, $2, 'certifier', 'active')`,
+						[profileId, name],
+					);
+					await pool.query(
+						`insert into certifiers (id, profile_id, company, id_number, status)
+						 values ($1, $2, $3, $4, 'active')`,
+						[certifierId, profileId, company, `HI-ORDER-${index}`],
+					);
+					await pool.query(
+						`insert into wp_certifier_authorizations (certifier_id, water_purveyor_id, authorization_status)
+						 values ($1, $2, 'active')`,
+						[certifierId, wpA],
+					);
+				}
+
+				const lines = captureLogs();
+				await runStage(asset.id);
+
+				const html = String(deliveries(lines)[0]?.html);
+				const expected = [
+					"1A1A Backflow Testing",
+					"808 Plumbing",
+					"A-1 Plumbing",
+					"commercial Plumbing",
+					"Island Backflow",
+					"Zen Backflow Testers",
+					// No company: last, by name.
+					"Bianca Blank",
+					"Nadia Nocompany",
+				];
+				const positions = expected.map((text) => html.indexOf(text));
+
+				expect(positions.every((position) => position >= 0)).toBe(true);
+				expect(positions).toEqual([...positions].sort((a, b) => a - b));
+			} finally {
+				await pool.query(
+					"delete from wp_certifier_authorizations where certifier_id = any($1::uuid[])",
+					[certifierIdsAdded],
+				);
+				await pool.query("delete from certifiers where id = any($1::uuid[])", [
+					certifierIdsAdded,
+				]);
+				await pool.query("delete from profiles where id = any($1::uuid[])", [
+					profileIds,
+				]);
+			}
+		});
+
 		it("does not put the list on a late notice", async () => {
 			const asset = await callerFor(ids.adminA).assets.createAsset(
 				newAsset({ currentCustomerId: customerIds.primary }),
