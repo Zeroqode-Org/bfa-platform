@@ -294,6 +294,11 @@ describeDb("submitted-test procedures", () => {
 		vi.restoreAllMocks();
 
 		if (created.length > 0) {
+			// A linked fail queues a failure notice that references its submission.
+			await pool.query(
+				"delete from scheduled_jobs where test_submission_id = any($1::uuid[])",
+				[created],
+			);
 			await pool.query(
 				"delete from test_submissions where id = any($1::uuid[])",
 				[created],
@@ -1178,8 +1183,10 @@ describeDb("submitted-test procedures", () => {
 		}
 
 		async function assetsWithBin(bin: string) {
+			// The date as text: the driver would otherwise hand back a JS Date in
+			// the local zone, which no longer compares equal to the calendar day.
 			const { rows } = await pool.query(
-				"select * from bfa_assets where water_purveyor_id = $1 and bin = $2",
+				"select *, annual_test_date::text as annual_test_date from bfa_assets where water_purveyor_id = $1 and bin = $2",
 				[wpA, bin],
 			);
 

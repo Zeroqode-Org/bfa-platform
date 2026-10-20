@@ -32,6 +32,9 @@ import {
  *   rather than registering an asset no reminder can ever be scheduled against.
  * - A service address is required on every asset, so a test without one is
  *   refused with a message pointing at the answer to fill in.
+ * - So are the assembly's make, model, serial number, size and location
+ *   (WP/Admin feedback made them required on every asset). A test missing any
+ *   of them is refused the same way, naming the answers to fill in.
  * - The customer is the one the wizard recorded. Matched to an existing
  *   customer by email, created when there is none — see `customer` below.
  */
@@ -59,6 +62,20 @@ export const MISSING_TEST_DATE_MESSAGE =
 export const MISSING_SERVICE_ADDRESS_MESSAGE =
 	"Add the assembly's service address in the test answers before assigning a BIN — a new asset needs one.";
 
+/** The assembly answers every asset needs, in the order a WP reads them. */
+const REQUIRED_ASSEMBLY_ANSWERS = [
+	["make", ASSEMBLY_FIELD_KEYS.make],
+	["model", ASSEMBLY_FIELD_KEYS.model],
+	["serial number", ASSEMBLY_FIELD_KEYS.serialNumber],
+	["size", ASSEMBLY_FIELD_KEYS.size],
+	["assembly location", ASSEMBLY_FIELD_KEYS.location],
+] as const;
+
+/** The refusal for a test missing assembly details, naming each one. */
+export function missingAssemblyDetailsMessage(labels: string[]) {
+	return `Add the assembly's ${labels.join(", ")} in the test answers before assigning a BIN — a new asset needs them.`;
+}
+
 /**
  * The asset and customer a corrected no-BIN submission describes.
  *
@@ -82,6 +99,14 @@ export function newAssetFromSubmission(
 
 	if (!serviceAddress) {
 		return { ok: false, message: MISSING_SERVICE_ADDRESS_MESSAGE };
+	}
+
+	const missing = REQUIRED_ASSEMBLY_ANSWERS.filter(
+		([, key]) => !answerText(answers[key]),
+	).map(([label]) => label);
+
+	if (missing.length > 0) {
+		return { ok: false, message: missingAssemblyDetailsMessage(missing) };
 	}
 
 	// Through the asset form's own shape, so an asset registered from a test is

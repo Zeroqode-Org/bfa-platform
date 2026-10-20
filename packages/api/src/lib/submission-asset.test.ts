@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	MISSING_SERVICE_ADDRESS_MESSAGE,
 	MISSING_TEST_DATE_MESSAGE,
+	missingAssemblyDetailsMessage,
 	newAssetFromSubmission,
 } from "./submission-asset";
 
@@ -86,18 +87,23 @@ describe("newAssetFromSubmission", () => {
 		}
 	});
 
-	it("leaves optional assembly answers empty rather than inventing them", () => {
-		const { asset } = planOf({
-			...correction,
-			wizardData: { assemblyServiceAddress: "1 Main St" },
-		});
-
-		expect(asset).toMatchObject({
-			make: null,
-			model: null,
-			serialNumber: null,
-			size: null,
-			assemblyLocation: null,
+	it("refuses a test missing assembly details, naming each one rather than inventing them", () => {
+		// Every asset needs its make, model, serial number, size and location
+		// (WP/Admin feedback), so a test without them cannot register one.
+		expect(
+			newAssetFromSubmission({
+				...correction,
+				wizardData: { assemblyServiceAddress: "1 Main St" },
+			}),
+		).toEqual({
+			ok: false,
+			message: missingAssemblyDetailsMessage([
+				"make",
+				"model",
+				"serial number",
+				"size",
+				"assembly location",
+			]),
 		});
 	});
 
