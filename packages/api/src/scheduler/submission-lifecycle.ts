@@ -143,8 +143,10 @@ export async function applySubmittedTestResult({
  *
  * Idempotent, and never backwards. Running it again for the same pass — a WP
  * correcting the record, a re-link — computes a date no later than the one
- * now stored and changes nothing. A pass with no test date, or an asset with
- * no annual test date, has nothing to anchor a next date to and is left alone.
+ * now stored and leaves the date alone. Whenever the date stays, the chain the
+ * pass cancelled is reconciled back for the stored date, so the reminder still
+ * goes out. A pass with no test date, or an asset with no annual test date,
+ * has nothing to anchor a next date to and is left alone.
  *
  * A pass later corrected to a fail does not move the date back: the date is
  * the purveyor's to correct on the asset, where changing it reschedules the
@@ -184,7 +186,23 @@ async function advanceAnnualTestDate({
 	if (!testDate || !current) return;
 
 	const next = nextAnnualTestDate(current, testDate);
-	if (!next) return;
+
+	// The date stays — an early pass that is not this cycle's, or a pass
+	// already counted (a correction, a re-link). The cancel above still
+	// withdrew the chain, so it is put back for the date as it stands;
+	// otherwise the assembly would never be reminded about again.
+	if (!next) {
+		await reconcileAssetNoticeChain({
+			executor,
+			assetId,
+			waterPurveyorId,
+			annualTestDate: current,
+			actor,
+			trigger: "passing_test_submitted",
+		});
+
+		return;
+	}
 
 	await executor
 		.update(bfaAssets)

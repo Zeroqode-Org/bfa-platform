@@ -31,7 +31,7 @@ import {
 import { TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 
-import type { Asset, AssetPayload } from "./asset-types";
+import type { Asset, AssetPayload, EditAssetPayload } from "./asset-types";
 import { BFA_TYPE_LABELS } from "./asset-types";
 
 /**
@@ -485,7 +485,7 @@ export function EditAssetForm({
 	...props
 }: BoundFormProps & {
 	asset: Asset;
-	onSubmit: (payload: AssetPayload) => void;
+	onSubmit: (payload: EditAssetPayload) => void;
 }) {
 	return (
 		<AssetForm
@@ -493,7 +493,12 @@ export function EditAssetForm({
 			initialValues={assetToFormValues(asset)}
 			submitLabel="Save changes"
 			pendingLabel="Saving…"
-			onSubmit={(values) => onSubmit(buildAssetPayload(values))}
+			onSubmit={(values) =>
+				onSubmit({
+					...buildAssetPayload(values),
+					expectedAnnualTestDate: asset.annualTestDate,
+				})
+			}
 		/>
 	);
 }

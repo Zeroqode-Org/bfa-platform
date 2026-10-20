@@ -15,6 +15,10 @@ import {
 	listAssetsInput,
 	updateAssetInput,
 } from "../lib/asset-input";
+import {
+	ASSET_STALE_DATE_MESSAGE,
+	resolveAnnualTestDate,
+} from "../lib/asset-stale";
 import { effectiveAssetStatus } from "../lib/asset-status-sql";
 import {
 	type AuditActor,
@@ -284,7 +288,11 @@ export const assetsRouter = router({
 				throw new TRPCError({ code: "NOT_FOUND", message: "Asset not found" });
 			}
 
-			const next = assetColumns(input);
+			const next = withResolvedDate(
+				assetColumns(input),
+				existing.annualTestDate,
+				input.expectedAnnualTestDate,
+			);
 
 			// Opening the edit dialog and pressing save without touching a field is
 			// not an update, and writing one anyway would make two records lie.
@@ -301,7 +309,28 @@ export const assetsRouter = router({
 			// chain computed from the old one is the one failure this feature must
 			// not have: a late notice sent against a deadline that moved.
 			const row = await db.transaction(async (tx) => {
-				const [updated] = await updateAssetRow(tx, next, tenantScopedRow);
+				// Re-read under a lock: a passing test can move the date between the
+				// read above and this write, and the check has to see that move.
+				const [locked] = await tx
+					.select({ annualTestDate: bfaAssets.annualTestDate })
+					.from(bfaAssets)
+					.where(tenantScopedRow)
+					.limit(1)
+					.for("update");
+
+				if (!locked) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Asset not found",
+					});
+				}
+
+				const values = withResolvedDate(
+					assetColumns(input),
+					locked.annualTestDate,
+					input.expectedAnnualTestDate,
+				);
+				const [updated] = await updateAssetRow(tx, values, tenantScopedRow);
 
 				if (!updated) {
 					throw new TRPCError({
@@ -314,7 +343,7 @@ export const assetsRouter = router({
 				// does not touch the schedule, and reconciling anyway would rewrite
 				// a job row — and emit a scheduling line — for a schedule nobody
 				// changed.
-				if (existing.annualTestDate !== updated.annualTestDate) {
+				if (locked.annualTestDate !== updated.annualTestDate) {
 					await reconcileAssetNoticeChain({
 						executor: tx,
 						assetId: updated.id,
@@ -669,6 +698,33 @@ async function updateAssetRow(
 	} catch (error) {
 		throw duplicateBinError(error, values.bin);
 	}
+}
+
+/**
+ * The write set with the annual test date a save may write — see
+ * `asset-stale.ts`. A date left untouched on a form opened before a passing
+ * test moved it keeps the moved date; a date changed on such a form is
+ * refused rather than guessed between.
+ */
+function withResolvedDate(
+	values: ReturnType<typeof assetColumns>,
+	stored: string | null,
+	opened: string | null | undefined,
+): ReturnType<typeof assetColumns> {
+	const resolved = resolveAnnualTestDate({
+		stored,
+		opened,
+		submitted: values.annualTestDate,
+	});
+
+	if (!resolved.ok) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: ASSET_STALE_DATE_MESSAGE,
+		});
+	}
+
+	return { ...values, annualTestDate: resolved.date };
 }
 
 /** Postgres' `unique_violation`. */

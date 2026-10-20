@@ -130,8 +130,17 @@ export const createAssetInput = assetFieldsInput.extend({
  * moving the pointer has to close the outgoing occupancy row in the same
  * transaction — a field on this form would be the one way to change an occupant
  * without recording it. `assignCustomer` owns that.
+ *
+ * `expectedAnnualTestDate` is the date the form was opened with — not a
+ * column. A passing test can move the stored date while the form is open, and
+ * this is how the save tells "left as it was" from "changed"; see
+ * `asset-stale.ts`. Optional so a caller with no form behind it (the suites)
+ * writes the date it sends.
  */
-export const updateAssetInput = assetFieldsInput.extend({ id: z.uuid() });
+export const updateAssetInput = assetFieldsInput.extend({
+	id: z.uuid(),
+	expectedAnnualTestDate: z.iso.date().nullable().optional(),
+});
 
 /**
  * The asset list. Page-based rather than cursor-based: the screen shows a

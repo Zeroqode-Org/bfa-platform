@@ -17,6 +17,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { ASSET_STALE_DATE_MESSAGE } from "../lib/asset-stale";
 import type { EmailDriver } from "../lib/email";
 import {
 	addCalendarDays,
@@ -1467,6 +1468,131 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 				submission_id: submissionId,
 				asset_id: asset.id,
 			});
+		});
+
+		it("keeps next year's reminder when the same pass is corrected again", async () => {
+			const caller = callerFor(ids.adminA);
+			const asset = await caller.assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			const submissionId = await seedSubmission(asset.id, {
+				status: "submitted",
+				result: "pass",
+			});
+			const correction = {
+				id: submissionId,
+				bfaType: "RP" as const,
+				testDate: honoluluToday(),
+				testResult: "pass" as const,
+				signatureMethod: "signed" as const,
+				signatureData: null,
+				wizardData: {},
+			};
+
+			await caller.submittedTests.updateSubmittedTest({
+				...correction,
+				submittedBinText: "first-correction",
+			});
+			await expectNextCycle(asset.id);
+
+			// The date has already moved, so the second pass moves nothing — and
+			// must not leave the assembly with no reminder at all.
+			await caller.submittedTests.updateSubmittedTest({
+				...correction,
+				submittedBinText: "second-correction",
+			});
+			await expectNextCycle(asset.id);
+		});
+
+		it("does not let an edit form opened before the pass put the old date back", async () => {
+			const caller = callerFor(ids.adminA);
+			const asset = await caller.assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+			// The form is opened now, on the overdue date.
+			const openedForm = asUpdate(asset, {
+				expectedAnnualTestDate: asset.annualTestDate,
+			});
+
+			const submissionId = await seedSubmission(asset.id, {
+				status: "submitted",
+				result: "pass",
+			});
+			await caller.submittedTests.updateSubmittedTest({
+				id: submissionId,
+				bfaType: "RP",
+				submittedBinText: "pass-while-form-open",
+				testDate: honoluluToday(),
+				testResult: "pass",
+				signatureMethod: "signed",
+				signatureData: null,
+				wizardData: {},
+			});
+			await expectNextCycle(asset.id);
+
+			// Date untouched on the form: the rest of the edit lands, the moved
+			// date stays, and so does next year's reminder.
+			await caller.assets.updateAsset({
+				...openedForm,
+				serialNumber: "FIXED-123",
+			});
+			const { rows: saved } = await pool.query<{ serial_number: string }>(
+				"select serial_number from bfa_assets where id = $1",
+				[asset.id],
+			);
+			expect(saved[0]?.serial_number).toBe("FIXED-123");
+			await expectNextCycle(asset.id);
+
+			// Date changed on the stale form: refused rather than guessed between.
+			await expect(
+				caller.assets.updateAsset({
+					...openedForm,
+					annualTestDate: addCalendarDays(longOverdueDate, 5),
+				}),
+			).rejects.toMatchObject({
+				code: "CONFLICT",
+				message: ASSET_STALE_DATE_MESSAGE,
+			});
+			await expectNextCycle(asset.id);
+		});
+
+		it("puts the reminder back for a pass too early to count for this cycle", async () => {
+			const caller = callerFor(ids.adminA);
+			// Due a year out; a test today is well before the reminder window.
+			const asset = await caller.assets.createAsset(
+				newAsset({
+					currentCustomerId: customerIds.primary,
+					annualTestDate: futureDate,
+				}),
+			);
+			const submissionId = await seedSubmission(asset.id, {
+				status: "submitted",
+				result: "pass",
+			});
+
+			await caller.submittedTests.updateSubmittedTest({
+				id: submissionId,
+				bfaType: "RP",
+				submittedBinText: "early-pass",
+				testDate: honoluluToday(),
+				testResult: "pass",
+				signatureMethod: "signed",
+				signatureData: null,
+				wizardData: {},
+			});
+
+			const { rows } = await pool.query<{ annual_test_date: string }>(
+				"select annual_test_date::text from bfa_assets where id = $1",
+				[asset.id],
+			);
+			expect(rows[0]?.annual_test_date).toBe(futureDate);
+
+			const live = await liveJobFor(asset.id);
+			expect(live.job_type).toBe("reminder");
+			expect(live.status).toBe("pending");
+			expect(live.run_at.getTime()).toBe(
+				noticeRunAt(futureDate, "reminder").getTime(),
+			);
 		});
 
 		it("leaves the chain alone for a failed test", async () => {
