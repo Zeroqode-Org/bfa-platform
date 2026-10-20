@@ -25,14 +25,14 @@ export type NavVariant = "certifier" | "wp" | "admin";
 
 /**
  * Certifier dashboard navigation. Build-plan §"Certifier dashboard" lists four
- * entries — Wizard, Drafts, Submitted PDFs, Log Out. "Log Out" is an action in
+ * entries — Wizard, Drafts, Submitted Tests, Log Out. "Log Out" is an action in
  * the shell footer, not a route; Profile rounds out the tab set (sidebar on
  * desktop, bottom tab bar on mobile).
  */
 export const certifierNav: NavItem[] = [
 	{ href: "/certifier/wizard", label: "Wizard", icon: FilePlus2 },
 	{ href: "/certifier/drafts", label: "Drafts", icon: FileText },
-	{ href: "/certifier/submitted", label: "Submitted PDFs", icon: FileClock },
+	{ href: "/certifier/submitted", label: "Submitted Tests", icon: FileClock },
 	{ href: "/certifier/profile", label: "Profile", icon: User },
 ];
 

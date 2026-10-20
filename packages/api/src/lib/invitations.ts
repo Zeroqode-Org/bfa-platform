@@ -230,7 +230,7 @@ export type InvitationEmailInput = {
 };
 
 export const INVITATION_EMAIL_SUBJECT =
-	"You have been invited to the Backflow Assembly platform";
+	"You have been invited to Backflow Reporter.io";
 
 /**
  * The expiry as a reader would say it, pinned to UTC so every recipient and
@@ -264,7 +264,7 @@ export function renderInvitationEmail(input: {
 }): { subject: string; html: string } {
 	const purveyor = input.waterPurveyorName
 		? `<strong>${escapeHtml(input.waterPurveyorName)}</strong>`
-		: "the Backflow Assembly platform";
+		: "Backflow Reporter.io";
 
 	const bodyHtml = [
 		renderEmailParagraph(

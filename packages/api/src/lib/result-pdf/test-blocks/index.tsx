@@ -1,5 +1,5 @@
 import { Text, View } from "@react-pdf/renderer";
-
+import { formatPsid } from "../../wizard-answer-layout";
 import {
 	ADP_KEY,
 	LINE_PRESSURE_KEY,
@@ -75,8 +75,13 @@ function AnswerRow({
 				<Check checked={answer === false} label="No" />
 				{entry.valueKey && answer === true ? (
 					<Text style={{ fontSize: 8.5, marginLeft: 10 }}>
-						Reading{" "}
-						{withUnit(wizardData[entry.valueKey], PRESSURE_DIFFERENCE_UNIT)}
+						Reading: {/* The value bold, as on the wizard's review screen. */}
+						<Text style={{ fontFamily: "Helvetica-Bold" }}>
+							{withUnit(
+								formatPsid(wizardData[entry.valueKey]),
+								PRESSURE_DIFFERENCE_UNIT,
+							)}
+						</Text>
 					</Text>
 				) : null}
 			</View>

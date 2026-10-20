@@ -3,7 +3,7 @@ title: Certifier Dashboard
 description: A certifier's own drafts and submitted archive — the read/write policy that mirrors the WP submitted-tests screen with certifier_id in place of water_purveyor_id, the WP scoping § 6.4 added on top, and what this task left for the wizard
 ---
 
-The certifier shell's four tabs — Wizard, Drafts, Submitted PDFs, Profile —
+The certifier shell's four tabs — Wizard, Drafts, Submitted Tests, Profile —
 were built in Week 1 (App Shell, 6.15). This page covers the three that got
 real screens in § 6.3: `/certifier/drafts`, `/certifier/submitted`, and
 `/certifier/profile`. `/certifier/wizard` (§ 6.5) still renders a placeholder;
@@ -108,7 +108,17 @@ narrows it onto `ctx.caller` so downstream code cannot forget the null case.
 - **`listSubmissions`** — one page of the caller's own submitted archive under
   the given `waterPurveyorId` (§ 6.4), reusing `newestSubmittedTestFirst` from
   `submitted-tests.ts` so a certifier and the purveyor who received a test
-  find it in the same relative order.
+  find it in the same relative order. A row opens a read-only document drawn
+  by `TestDocument` (`apps/web/src/components/certifier/test-document.tsx`),
+  the same component as the wizard's review screen. It follows the results PDF
+  section by section, so a test looks the same before submit, in the archive
+  and on paper. The header carries the BIN, test date, result badge and
+  Download PDF, pinned while the document scrolls.
+- **`getSubmission`** — one of the caller's own submitted tests with its
+  sign-off, for that document. The list rows leave the signature image out
+  because it is the one large column. Scoped like `getDraft` but to
+  `status = 'submitted'`; a draft, foreign or other-WP id all get
+  `"Submitted test not found"`.
 - **`getDraft`** — one draft, scoped by certifier, `waterPurveyorId` (§ 6.4)
   *and* `status = 'draft'`, so a foreign draft id and the caller's own
   submitted id both get the same `"Draft not found"` — no information leak

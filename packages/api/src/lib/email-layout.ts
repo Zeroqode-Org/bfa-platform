@@ -3,7 +3,7 @@
  *
  * Feature code builds a *safe* body fragment — the escaped output of
  * `templateToHtml`, or markup assembled here from escaped values — and this
- * module wraps it in one Backflow Assembly Platform layout: a text wordmark header, a
+ * module wraps it in one Backflow Reporter.io layout: a text wordmark header, a
  * white content card, and a one-line footer. The finished document is what goes
  * into `EmailMessage.html`; `email.ts` delivers it and knows nothing about how
  * it was made.
@@ -15,7 +15,7 @@
  *   narrow-screen padding tweak and paragraph spacing for clients that honour
  *   it; nothing depends on it.
  * - No images, remote fonts, stylesheets, tracking pixels or rewritten links.
- *   The brand is the words "Backflow Assembly Platform" in text until the client supplies
+ *   The brand is the words "Backflow Reporter.io" in text until the client supplies
  *   a logo asset, so no information is carried by an image.
  * - A system font stack, a fluid card capped at 600px (fixed at 600 for Outlook
  *   through a conditional table), and colours from the design system.
@@ -25,7 +25,7 @@
 
 import { templateToHtml } from "./notice-variables";
 
-export const EMAIL_BRAND_NAME = "Backflow Assembly Platform";
+export const EMAIL_BRAND_NAME = "Backflow Reporter.io";
 
 const FONT_STACK =
 	"-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
@@ -169,7 +169,7 @@ const HEAD_STYLE = [
 	"@media only screen and (max-width: 620px) { .bfr-pad { padding-left: 20px !important; padding-right: 20px !important; } }",
 ].join(" ");
 
-/** Wraps a safe body fragment in the complete Backflow Assembly Platform email document. */
+/** Wraps a safe body fragment in the complete Backflow Reporter.io email document. */
 export function renderEmailLayout({
 	title,
 	heading,

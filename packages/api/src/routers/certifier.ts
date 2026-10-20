@@ -51,7 +51,13 @@ export const certifierRouter = router({
 	 */
 	listAuthorizedWps: certifierProcedure.query(({ ctx }) => {
 		return db
-			.select({ id: waterPurveyors.id, name: waterPurveyors.companyName })
+			.select({
+				id: waterPurveyors.id,
+				name: waterPurveyors.companyName,
+				// For the wizard's review header, which mirrors the results PDF's.
+				address: waterPurveyors.address,
+				pwsid: waterPurveyors.pwsid,
+			})
 			.from(wpCertifierAuthorizations)
 			.innerJoin(
 				waterPurveyors,
@@ -132,6 +138,46 @@ export const certifierRouter = router({
 				.limit(1);
 
 			if (!row) throw notFound();
+
+			return row;
+		}),
+
+	/**
+	 * One of the certifier's own submitted tests, with the sign-off — for the
+	 * read-only document the submitted list opens. The list rows leave the
+	 * signature image out (it is the one large column), so the document reads
+	 * it here, one row at a time.
+	 *
+	 * Scoped like `getDraft` — certifier, WP and status — so a draft id, a
+	 * foreign id and another WP's id all get the same not-found.
+	 */
+	getSubmission: certifierProcedure
+		.input(draftIdInput)
+		.query(async ({ ctx, input }) => {
+			await assertAuthorizedWp(ctx.caller.certifierId, input.waterPurveyorId);
+
+			const [row] = await db
+				.select(certifierFullSelection)
+				.from(testSubmissions)
+				.leftJoin(bfaAssets, eq(bfaAssets.id, testSubmissions.bfaAssetId))
+				.where(
+					and(
+						eq(testSubmissions.id, input.id),
+						ownRowsOf(
+							ctx.caller.certifierId,
+							input.waterPurveyorId,
+							"submitted",
+						),
+					),
+				)
+				.limit(1);
+
+			if (!row) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Submitted test not found",
+				});
+			}
 
 			return row;
 		}),

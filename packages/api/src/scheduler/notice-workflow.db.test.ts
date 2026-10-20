@@ -1252,7 +1252,7 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			expect(html).toContain("Ampersand &amp; &lt;script&gt;Co&lt;/script&gt;");
 			expect(html).not.toContain("<script>");
 			// The one shared shell, not a second layout.
-			expect(html).toContain("Backflow Assembly Platform");
+			expect(html).toContain("Backflow Reporter.io");
 			expect(html).toContain("<!DOCTYPE html>");
 		});
 	});

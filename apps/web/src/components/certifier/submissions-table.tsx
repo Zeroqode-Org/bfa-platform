@@ -1,5 +1,10 @@
 "use client";
 
+import {
+	CUSTOMER_EMAIL_KEY,
+	CUSTOMER_NAME_KEY,
+	PHOTO_PATH_KEYS,
+} from "@bfa-platform/api/lib/wizard-input";
 import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
@@ -31,18 +36,18 @@ import { useEffect, useState } from "react";
 import { ResultDocumentButton } from "@/components/result-document-button";
 import { useActiveWp } from "@/lib/use-active-wp";
 import { trpc } from "@/utils/trpc";
-
 import type { CertifierSubmissionRow } from "./certifier-types";
 import {
 	binLabel,
 	formatTestDate,
-	humanizeFieldName,
 	TEST_RESULT_LABELS,
 	TEST_RESULT_VARIANTS,
 	WIDE_COLUMN,
 	wizardEntries,
-	wizardValueText,
 } from "./certifier-types";
+import { TestDocument } from "./test-document";
+import { usePhotoUrls } from "./wizard/use-photo-urls";
+import type { WizardValues } from "./wizard/wizard-types";
 
 const COLUMN_COUNT = 5;
 const SKELETON_ROWS = 4;
@@ -262,12 +267,13 @@ export function SubmissionsTable({
 }
 
 /**
- * Read-only document for one of the certifier's own submitted tests.
+ * Read-only document for one of the certifier's own submitted tests, laid out
+ * as the test form itself — the same `TestDocument` the wizard's review screen
+ * draws, which follows the results PDF section by section — so a test looks
+ * the same before submit, in the archive and on paper.
  *
- * Found in the already-loaded page rather than fetched again — every column
- * this dialog shows, `wizardData` included, is already on the list row (see
- * `certifierRowSelection` on the server), and this router has no dedicated
- * single-submission read to fetch it with a second time.
+ * Opens on the list row's own data at once; the sign-off (the one large
+ * column, left off the list rows) arrives with `certifier.getSubmission`.
  */
 function SubmissionDetailDialog({
 	submission,
@@ -278,63 +284,90 @@ function SubmissionDetailDialog({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }) {
-	const entries = submission ? wizardEntries(submission.wizardData) : [];
 	const { active } = useActiveWp();
+	const detail = useQuery({
+		...trpc.certifier.getSubmission.queryOptions({
+			id: submission?.id ?? "",
+			waterPurveyorId: active?.id ?? "",
+		}),
+		enabled: open && Boolean(submission && active),
+	});
+	const profile = useQuery(trpc.certifier.getProfile.queryOptions());
+	const wizardData = Object.fromEntries(
+		wizardEntries(submission?.wizardData),
+	) as WizardValues;
+	const photoPaths = PHOTO_PATH_KEYS.flatMap((key) => {
+		const path = wizardData[key];
+
+		return typeof path === "string" && path ? [path] : [];
+	});
+	const photoUrls = usePhotoUrls(
+		active ? submission?.id : undefined,
+		active?.id ?? "",
+		photoPaths,
+	);
 	const getDocumentUrl = useMutation(
 		trpc.certifierWizard.getResultDocumentUrl.mutationOptions(),
 	);
+	const text = (value: unknown) => (typeof value === "string" ? value : "");
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="w-[min(640px,94vw)] max-w-[640px] overflow-hidden">
-				<DialogHeader>
-					<DialogTitle>Submitted test</DialogTitle>
+			<DialogContent className="w-[min(760px,94vw)] max-w-[760px] overflow-hidden">
+				{/* The download sits in the pinned header, not after the record: a
+				    long test should not need scrolling to the end to get its PDF.
+				    `pr-8` keeps it clear of the close button. */}
+				<DialogHeader className="flex-row flex-wrap items-start justify-between gap-3 pr-8">
+					<div className="flex min-w-0 flex-col gap-1">
+						<DialogTitle>Submitted test</DialogTitle>
+						{submission ? (
+							<div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+								<span className="font-semibold text-foreground">
+									{binLabel(submission).text}
+								</span>
+								<span aria-hidden="true">·</span>
+								<span>Tested {formatTestDate(submission.testDate)}</span>
+								{submission.testResult ? (
+									<Badge variant={TEST_RESULT_VARIANTS[submission.testResult]}>
+										{TEST_RESULT_LABELS[submission.testResult]}
+									</Badge>
+								) : null}
+							</div>
+						) : null}
+					</div>
+					{submission && active ? (
+						<ResultDocumentButton
+							fetchUrl={async () =>
+								(
+									await getDocumentUrl.mutateAsync({
+										id: submission.id,
+										waterPurveyorId: active.id,
+									})
+								).url
+							}
+						/>
+					) : null}
 				</DialogHeader>
 				<DialogBody className="flex flex-col gap-4">
-					{submission ? (
+					{submission && active ? (
 						<>
-							<dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[13px]">
-								<Field label="BIN" value={binLabel(submission).text} />
-								<Field label="Type" value={submission.bfaType} />
-								<Field
-									label="Test date"
-									value={formatTestDate(submission.testDate)}
-								/>
-								<Field
-									label="Result"
-									value={
-										submission.testResult
-											? TEST_RESULT_LABELS[submission.testResult]
-											: "—"
-									}
-								/>
-							</dl>
-
-							{entries.length > 0 ? (
-								<dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-border-soft border-t pt-4 text-[13px]">
-									{entries.map(([key, value]) => (
-										<Field
-											key={key}
-											label={humanizeFieldName(key)}
-											value={wizardValueText(value)}
-										/>
-									))}
-								</dl>
-							) : null}
-
-							{active ? (
-								<ResultDocumentButton
-									className="self-start"
-									fetchUrl={async () =>
-										(
-											await getDocumentUrl.mutateAsync({
-												id: submission.id,
-												waterPurveyorId: active.id,
-											})
-										).url
-									}
-								/>
-							) : null}
+							<TestDocument
+								// The dialog's own header already names the test; only the
+								// form's blocks go under it.
+								variant="sections"
+								bfaType={submission.bfaType}
+								bin={binLabel(submission).text}
+								wizardData={wizardData}
+								customerName={text(wizardData[CUSTOMER_NAME_KEY])}
+								customerEmail={text(wizardData[CUSTOMER_EMAIL_KEY])}
+								testDate={submission.testDate}
+								signatureMethod={detail.data?.signatureMethod ?? null}
+								signatureData={detail.data?.signatureData ?? null}
+								photoPaths={photoPaths}
+								photoUrls={photoUrls}
+								certifier={profile.data ?? null}
+								unsignedLabel={detail.isPending ? "Loading…" : "Not signed."}
+							/>
 
 							<p className="text-[12px] text-muted-foreground">
 								This record is locked. Only the water purveyor it was filed to
@@ -349,19 +382,6 @@ function SubmissionDetailDialog({
 				</DialogBody>
 			</DialogContent>
 		</Dialog>
-	);
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-	return (
-		<div className="flex min-w-0 flex-col gap-0.5">
-			<dt className="text-[11px] text-muted-foreground">{label}</dt>
-			{/* `overflow-wrap:anywhere`: an email or a BIN has no space to break at,
-			    and on a phone's two narrow columns it ran into the next one. */}
-			<dd className="font-medium text-foreground [overflow-wrap:anywhere]">
-				{value}
-			</dd>
-		</div>
 	);
 }
 

@@ -18,7 +18,7 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-	title: "Backflow Assembly",
+	title: "Backflow Reporter.io",
 	description:
 		"Backflow assembly test tracking for water purveyors and certifiers",
 };

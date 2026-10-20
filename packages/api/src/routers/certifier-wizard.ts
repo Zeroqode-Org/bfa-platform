@@ -3,6 +3,12 @@ import { bfaAssets, customers, testSubmissions } from "@bfa-platform/db/schema";
 import { and, asc, desc, eq, ilike, isNull, lte, ne, sql } from "drizzle-orm";
 
 import { certifierProcedure, router, TRPCError } from "../index";
+import {
+	ASSET_ANSWER_KEYS,
+	differingAssetAnswers,
+	logAssetSync,
+	syncAssetFromSubmission,
+} from "../lib/asset-sync";
 import { auditActor } from "../lib/audit-actor";
 import {
 	discardUnusedPhotos,
@@ -16,6 +22,7 @@ import { sendResultDocumentEmails } from "../lib/result-pdf/distribute";
 import { publishResultPdf } from "../lib/result-pdf/document-url";
 import { createStorageAdmin } from "../lib/storage-admin";
 import {
+	allowedWizardKeys,
 	BIN_SUGGESTION_LIMIT,
 	CUSTOMER_EMAIL_KEY,
 	CUSTOMER_NAME_KEY,
@@ -60,16 +67,24 @@ import {
  * connection; a row inserted through PostgREST would be a test nobody
  * performed." `saveDraftStep`'s create branch is that privileged connection.
  */
-/** A draft may only point at an asset of its own purveyor, and of the type it says it is. */
+/**
+ * A draft may only point at an asset of its own purveyor.
+ *
+ * Not at an asset *of the same type*, any more: the certifier may record the
+ * assembly as a different BFA type than the register says (client, October
+ * 2026) — the register can be wrong, and the certifier is the one standing at
+ * the valve. The test keeps the type the certifier chose, the wizard marks
+ * `bfaType` as overwritten, and at submit the new type is carried onto the
+ * asset with the other overwritten details (`lib/asset-sync.ts`).
+ */
 async function assertAssetFits(
 	assetId: string | null,
 	waterPurveyorId: string,
-	bfaType: string,
 ) {
 	if (!assetId) return;
 
 	const [asset] = await db
-		.select({ bfaType: bfaAssets.bfaType })
+		.select({ id: bfaAssets.id })
 		.from(bfaAssets)
 		.where(
 			and(
@@ -79,7 +94,7 @@ async function assertAssetFits(
 		)
 		.limit(1);
 
-	if (!asset || asset.bfaType !== bfaType) throw notFound();
+	if (!asset) throw notFound();
 }
 
 export const certifierWizardRouter = router({
@@ -97,11 +112,7 @@ export const certifierWizardRouter = router({
 		.input(saveDraftStepInput)
 		.mutation(async ({ ctx, input }) => {
 			await assertAuthorizedWp(ctx.caller.certifierId, input.waterPurveyorId);
-			await assertAssetFits(
-				input.bfaAssetId,
-				input.waterPurveyorId,
-				input.bfaType,
-			);
+			await assertAssetFits(input.bfaAssetId, input.waterPurveyorId);
 
 			const wizardData = cleanWizardData(
 				input.bfaType,
@@ -470,11 +481,7 @@ export const certifierWizardRouter = router({
 
 			if (!draft) throw notFound();
 
-			await assertAssetFits(
-				draft.bfaAssetId,
-				input.waterPurveyorId,
-				input.bfaType,
-			);
+			await assertAssetFits(draft.bfaAssetId, input.waterPurveyorId);
 
 			// Only what belongs to this type; photos and the disclaimer are
 			// rebuilt below from checked sources, never taken from the client.
@@ -545,6 +552,29 @@ export const certifierWizardRouter = router({
 			// second time and never trusted from the client — see
 			// `deriveTestResult`'s own comment.
 			const testResult = deriveTestResult(wizardData);
+			// The certifier's own record of what they typed over — kept only where
+			// it can be true. Not trusted as sent: a flag on an asset answer
+			// (details, type, customer) survives only if the value really differs
+			// from the register, because these flags are what is written onto the
+			// asset; any other flag only if the key belongs to this type's form.
+			// See `differingAssetAnswers`.
+			const claimed = (
+				input.overriddenFields ??
+				(Array.isArray(draft.overriddenFields) ? draft.overriddenFields : [])
+			).filter((key): key is string => typeof key === "string");
+			const allowedKeys = allowedWizardKeys(input.bfaType);
+			const differing = draft.bfaAssetId
+				? await differingAssetAnswers({
+						executor: db,
+						assetId: draft.bfaAssetId,
+						waterPurveyorId: input.waterPurveyorId,
+						bfaType: input.bfaType,
+						wizardData,
+					})
+				: new Set<string>();
+			const overriddenFields = [...new Set(claimed)].filter((key) =>
+				ASSET_ANSWER_KEYS.has(key) ? differing.has(key) : allowedKeys.has(key),
+			);
 
 			const row = await db.transaction(async (tx) => {
 				const [updated] = await tx
@@ -557,6 +587,7 @@ export const certifierWizardRouter = router({
 						testResult,
 						signatureMethod: input.signatureMethod,
 						signatureData,
+						overriddenFields,
 						currentStep: null,
 					})
 					.where(
@@ -578,6 +609,21 @@ export const certifierWizardRouter = router({
 					actor: auditActor(ctx),
 					trigger: "test_submitted",
 				});
+
+				// What the certifier overwrote about the assembly goes onto the
+				// asset, when this is its latest test. See `lib/asset-sync.ts`.
+				const assetSync = draft.bfaAssetId
+					? await syncAssetFromSubmission({
+							executor: tx,
+							submissionId: updated.id,
+							assetId: draft.bfaAssetId,
+							waterPurveyorId: input.waterPurveyorId,
+							fields: overriddenFields,
+							bfaType: input.bfaType,
+							wizardData,
+							actor: auditActor(ctx),
+						})
+					: [];
 
 				// Same-BIN supersession (build-plan step 20): this certifier's own
 				// prior submitted test for the same asset points forward to the new
@@ -601,7 +647,7 @@ export const certifierWizardRouter = router({
 						);
 				}
 
-				return updated;
+				return { ...updated, assetSync };
 			});
 
 			// The photo set is final now; anything else in the folder is unused.
@@ -615,6 +661,11 @@ export const certifierWizardRouter = router({
 					water_purveyor_id: input.waterPurveyorId,
 					test_result: testResult,
 				},
+			});
+			logAssetSync(row.assetSync, {
+				actor: auditActor(ctx),
+				submissionId: row.id,
+				waterPurveyorId: input.waterPurveyorId,
 			});
 
 			// Network calls, deliberately outside the transaction above. A missing

@@ -45,5 +45,5 @@ export function resultDocumentTitle({
 	const [year, month, day] = (testDate ?? "").split("-");
 	const date = year && month && day ? `${month}/${day}/${year}` : "undated";
 
-	return `Backflow Assembly Test Form — ${bin ?? "No BIN"} — ${bfaType} — ${date}`;
+	return `Backflow Reporter.io Test Form — ${bin ?? "No BIN"} — ${bfaType} — ${date}`;
 }

@@ -167,7 +167,7 @@ wherever the provider is not switched on, that log line is the only copy of the
 invite link a developer or tester has.
 
 ```json
-{"event":"email_console_delivery","driver":"console","email_id":"console_…","to":"certifier@example.com","subject":"You have been invited to the Backflow Assembly platform","tags":[{"name":"type","value":"invitation"}],"html":"<!DOCTYPE html>…<a href=\"http://localhost:3001/invite/HqA…\" style=\"…\">Set up your account</a>…","timestamp":"2026-09-09T09:35:45.931Z"}
+{"event":"email_console_delivery","driver":"console","email_id":"console_…","to":"certifier@example.com","subject":"You have been invited to Backflow Reporter.io","tags":[{"name":"type","value":"invitation"}],"html":"<!DOCTYPE html>…<a href=\"http://localhost:3001/invite/HqA…\" style=\"…\">Set up your account</a>…","timestamp":"2026-09-09T09:35:45.931Z"}
 ```
 
 **Every send attempt** also emits one `email_send_attempted` line, whichever
@@ -309,9 +309,9 @@ The shell is one layout for every message:
 
 | Part | What it is |
 |---|---|
-| Header | The wordmark **Backflow Assembly Platform**, as text |
+| Header | The wordmark **Backflow Reporter.io**, as text |
 | Body | A white card, 600px wide at most and fluid below that, with a thin blue top bar; the message's `<h1>` when it has one, then the body fragment |
-| Footer | One line: *Sent through Backflow Assembly Platform.* |
+| Footer | One line: *Sent through Backflow Reporter.io.* |
 
 It is written for email clients rather than browsers:
 
@@ -324,7 +324,7 @@ It is written for email clients rather than browsers:
   colours. The layout adds no tracking of its own; open and click tracking must
   also stay **off** in the Resend domain settings, which this code cannot see.
 - **Text-only branding, deliberately.** There is no logo in the message and none
-  was invented: the brand is the words "Backflow Assembly Platform" until the client
+  was invented: the brand is the words "Backflow Reporter.io" until the client
   supplies a logo asset they own. Nothing in any message is carried by an image.
 - **Accessible.** `lang="en"`, the subject as the document title and the
   message's accessible name, at most one `<h1>`, and a CTA whose link text says
