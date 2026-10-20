@@ -60,6 +60,11 @@ export const SCHEDULER_EVENTS = {
 	stopped: "scheduler_stopped",
 	/** `bfa_assets.asset_status` was recomputed from `annual_test_date`. */
 	assetStatusRecomputed: "scheduler_asset_status_recomputed",
+	/**
+	 * A passing test moved the assembly's `annual_test_date` to its next
+	 * cycle. Carries the old date, the new one and the submission.
+	 */
+	annualTestDateAdvanced: "scheduler_annual_test_date_advanced",
 } as const;
 
 export type SchedulerEvent =

@@ -239,12 +239,37 @@ describeDb("repair company procedures", () => {
 			expect(rows.map((row) => row.id)).toContain(created.id);
 		});
 
-		it("sorts by company name", async () => {
+		it("sorts alphabetically: digits first, ignoring case", async () => {
+			// The client's own example (WP/Admin feedback), created out of order and
+			// in mixed case so neither insertion order nor capitals can decide it.
+			const tag = `Sort ${randomUUID().slice(0, 6)}`;
+			for (const name of [
+				"zen Backflow Testers",
+				"Commercial Plumbing",
+				"A-1 Plumbing",
+				"808 Plumbing",
+				"1A1A Backflow Testing",
+			]) {
+				await callerFor(ids.adminB).repairCompanies.createRepairCompany({
+					companyName: `${name} ${tag}`,
+				});
+			}
+
 			const names = (
 				await callerFor(ids.adminB).repairCompanies.listRepairCompanies()
-			).map((row) => row.companyName);
+			)
+				.map((row) => row.companyName)
+				.filter((name) => name.endsWith(tag));
 
-			expect(names).toEqual([...names].sort());
+			expect(names).toEqual(
+				[
+					"1A1A Backflow Testing",
+					"808 Plumbing",
+					"A-1 Plumbing",
+					"Commercial Plumbing",
+					"zen Backflow Testers",
+				].map((name) => `${name} ${tag}`),
+			);
 		});
 	});
 

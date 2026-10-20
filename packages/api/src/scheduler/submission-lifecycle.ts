@@ -43,14 +43,21 @@
  */
 
 import { db } from "@bfa-platform/db";
+import { bfaAssets, testSubmissions } from "@bfa-platform/db/schema";
+import { and, eq } from "drizzle-orm";
 
 import type { AuditActor } from "../lib/audit-actor";
+import { nextAnnualTestDate } from "../lib/notice-schedule";
 import {
 	cancelFailureNoticeForSubmission,
 	scheduleFailureNotice,
 } from "./failure-notice";
 import type { JobExecutor } from "./jobs";
-import { cancelNoticeChainForPassingTest } from "./notice-chain";
+import { logSchedulerEvent } from "./logging";
+import {
+	cancelNoticeChainForPassingTest,
+	reconcileAssetNoticeChain,
+} from "./notice-chain";
 
 /** Which write brought the submission to this state, for the log lines. */
 export type SubmissionLifecycleTrigger =
@@ -112,5 +119,121 @@ export async function applySubmittedTestResult({
 			actor,
 			submissionId,
 		});
+
+		await advanceAnnualTestDate({
+			executor,
+			submissionId,
+			assetId: bfaAssetId,
+			waterPurveyorId,
+			actor,
+		});
 	}
+}
+
+/**
+ * Moves a passed assembly's `annual_test_date` to its next cycle, and puts
+ * next year's reminder on the schedule for it (WP/Admin feedback: "after a test
+ * is submitted, the due date should move to next year so the annual reminder
+ * email can go out").
+ *
+ * The rule is `nextAnnualTestDate`'s: same day and month, the first
+ * anniversary more than the reminder lead after the test. It reads the
+ * submission's own `test_date`, so a test linked late moves the date as of the
+ * day it was performed, not the day it was linked.
+ *
+ * Idempotent, and never backwards. Running it again for the same pass — a WP
+ * correcting the record, a re-link — computes a date no later than the one
+ * now stored and leaves the date alone. Whenever the date stays, the chain the
+ * pass cancelled is reconciled back for the stored date, so the reminder still
+ * goes out. A pass with no test date, or an asset with no annual test date,
+ * has nothing to anchor a next date to and is left alone.
+ *
+ * A pass later corrected to a fail does not move the date back: the date is
+ * the purveyor's to correct on the asset, where changing it reschedules the
+ * chain as any other date change does.
+ */
+async function advanceAnnualTestDate({
+	executor,
+	submissionId,
+	assetId,
+	waterPurveyorId,
+	actor,
+}: {
+	executor: JobExecutor;
+	submissionId: string;
+	assetId: string;
+	waterPurveyorId: string;
+	actor: AuditActor | null;
+}): Promise<void> {
+	const [submission] = await executor
+		.select({ testDate: testSubmissions.testDate })
+		.from(testSubmissions)
+		.where(eq(testSubmissions.id, submissionId))
+		.limit(1);
+	const [asset] = await executor
+		.select({ annualTestDate: bfaAssets.annualTestDate })
+		.from(bfaAssets)
+		.where(
+			and(
+				eq(bfaAssets.id, assetId),
+				eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+			),
+		)
+		.limit(1);
+
+	const testDate = submission?.testDate;
+	const current = asset?.annualTestDate;
+	if (!testDate || !current) return;
+
+	const next = nextAnnualTestDate(current, testDate);
+
+	// The date stays — an early pass that is not this cycle's, or a pass
+	// already counted (a correction, a re-link). The cancel above still
+	// withdrew the chain, so it is put back for the date as it stands;
+	// otherwise the assembly would never be reminded about again.
+	if (!next) {
+		await reconcileAssetNoticeChain({
+			executor,
+			assetId,
+			waterPurveyorId,
+			annualTestDate: current,
+			actor,
+			trigger: "passing_test_submitted",
+		});
+
+		return;
+	}
+
+	await executor
+		.update(bfaAssets)
+		.set({ annualTestDate: next, updatedAt: new Date() })
+		.where(
+			and(
+				eq(bfaAssets.id, assetId),
+				eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+			),
+		);
+
+	// The pass above cancelled whatever was live; this queues next year's
+	// reminder for the new date, exactly as a WP changing the date would.
+	await reconcileAssetNoticeChain({
+		executor,
+		assetId,
+		waterPurveyorId,
+		annualTestDate: next,
+		actor,
+		trigger: "passing_test_submitted",
+	});
+
+	logSchedulerEvent("scheduler_annual_test_date_advanced", {
+		assetId,
+		waterPurveyorId,
+		actor,
+		extra: {
+			from: current,
+			to: next,
+			test_date: testDate,
+			submission_id: submissionId,
+		},
+	});
 }

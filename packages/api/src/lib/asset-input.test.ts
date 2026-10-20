@@ -24,24 +24,52 @@ const asset = {
 	bin: "BIN-10041",
 	bfaType: "RP" as const,
 	serviceAddress: "18 Canal Road",
+	assemblyLocation: "After meter prior to any tees or branches",
+	make: "Watts",
+	model: "LF909",
+	serialNumber: "AB12345",
+	size: '3/4"',
 	annualTestDate: "2027-04-01",
 };
 
+/** The five descriptive fields the WP/Admin feedback made mandatory. */
+const DESCRIPTIVE_FIELDS = [
+	"assemblyLocation",
+	"make",
+	"model",
+	"serialNumber",
+	"size",
+] as const;
+
 describe("createAssetInput", () => {
-	it("accepts a minimal asset and nulls every optional field", () => {
+	it("accepts a complete asset", () => {
 		const parsed = createAssetInput.parse(asset);
 
-		expect(parsed).toMatchObject({
-			bin: "BIN-10041",
-			bfaType: "RP",
-			serviceAddress: "18 Canal Road",
-			annualTestDate: "2027-04-01",
-			make: null,
-			model: null,
-			serialNumber: null,
-			size: null,
-			assemblyLocation: null,
+		expect(parsed).toMatchObject(asset);
+	});
+
+	it("requires every descriptive field, and refuses one left blank", () => {
+		for (const field of DESCRIPTIVE_FIELDS) {
+			const { [field]: _omitted, ...without } = asset;
+
+			expect(createAssetInput.safeParse(without).success).toBe(false);
+			for (const blank of ["", "   ", null]) {
+				expect(
+					createAssetInput.safeParse({ ...asset, [field]: blank }).success,
+				).toBe(false);
+			}
+		}
+	});
+
+	it("trims the descriptive fields it keeps", () => {
+		const parsed = createAssetInput.parse({
+			...asset,
+			make: "  Watts ",
+			size: ' 3/4" ',
 		});
+
+		expect(parsed.make).toBe("Watts");
+		expect(parsed.size).toBe('3/4"');
 	});
 
 	it("rejects a BIN that is only whitespace", () => {
@@ -95,13 +123,6 @@ describe("createAssetInput", () => {
 		expect(
 			createAssetInput.safeParse({ ...asset, bfaType: "RPZ" }).success,
 		).toBe(false);
-	});
-
-	it("collapses a cleared optional field to null rather than an empty string", () => {
-		const parsed = createAssetInput.parse({ ...asset, make: "  ", model: "" });
-
-		expect(parsed.make).toBeNull();
-		expect(parsed.model).toBeNull();
 	});
 
 	it("treats the first occupant as optional, defaulting to nobody", () => {
@@ -225,6 +246,17 @@ describe("updateAssetInput", () => {
 		expect(updateAssetInput.safeParse({ ...asset, id: "42" }).success).toBe(
 			false,
 		);
+	});
+
+	it("requires the same descriptive fields as create", () => {
+		// Editing an older asset saved without them means filling them in.
+		expect(
+			updateAssetInput.safeParse({
+				...asset,
+				make: null,
+				id: "1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9",
+			}).success,
+		).toBe(false);
 	});
 
 	it("does not carry a customer, even when one is sent", () => {

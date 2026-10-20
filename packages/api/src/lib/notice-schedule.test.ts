@@ -6,6 +6,7 @@ import {
 	FINAL_NOTICE_OFFSET_DAYS,
 	LATE_NOTICE_1_OFFSET_DAYS,
 	LATE_NOTICE_2_OFFSET_DAYS,
+	nextAnnualTestDate,
 	nextNoticeStage,
 	noticeDueDay,
 	noticeRunAt,
@@ -125,5 +126,43 @@ describe("assetStatusFor", () => {
 	it("uses the clamped reminder day as the due_soon boundary", () => {
 		expect(assetStatusFor("2026-04-30", "2026-02-27")).toBe("active");
 		expect(assetStatusFor("2026-04-30", "2026-02-28")).toBe("due_soon");
+	});
+});
+
+describe("nextAnnualTestDate", () => {
+	it("moves a long-overdue date to the next cycle after the test — the client's example", () => {
+		// Due 1 Sep 2023, passed 7 Oct 2026: next due 1 Sep 2027.
+		expect(nextAnnualTestDate("2023-09-01", "2026-10-07")).toBe("2027-09-01");
+	});
+
+	it("counts a test inside the reminder window for this year's cycle", () => {
+		expect(nextAnnualTestDate("2027-09-01", "2027-08-01")).toBe("2028-09-01");
+		// On the due date itself.
+		expect(nextAnnualTestDate("2027-09-01", "2027-09-01")).toBe("2028-09-01");
+	});
+
+	it("moves a test passed shortly after its due date to the following year", () => {
+		expect(nextAnnualTestDate("2026-10-01", "2026-10-08")).toBe("2027-10-01");
+	});
+
+	it("leaves the date alone for a test passed well before the reminder window", () => {
+		expect(nextAnnualTestDate("2027-09-01", "2027-06-01")).toBeNull();
+	});
+
+	it("never moves a date backwards", () => {
+		// A pass from years ago, linked late, against an asset already due next year.
+		expect(nextAnnualTestDate("2027-09-01", "2024-09-15")).toBeNull();
+	});
+
+	it("is idempotent: the date it produces is not moved again by the same test", () => {
+		const next = nextAnnualTestDate("2023-09-01", "2026-10-07");
+
+		expect(next).not.toBeNull();
+		expect(nextAnnualTestDate(next as string, "2026-10-07")).toBeNull();
+	});
+
+	it("keeps the day and month, clamping 29 February in a year without one", () => {
+		expect(nextAnnualTestDate("2024-02-29", "2026-03-10")).toBe("2027-02-28");
+		expect(nextAnnualTestDate("2024-02-29", "2027-03-10")).toBe("2028-02-29");
 	});
 });

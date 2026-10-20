@@ -46,5 +46,5 @@ export const BROADCAST_FILTER_DESCRIPTIONS: Record<
 	agricultural_only:
 		"Active customers on the agricultural rate category only. Suspended customers are not included.",
 	past_due_only:
-		"Active customers who own at least one assembly the scheduler has marked past due. Each customer is written to once, however many past-due assemblies they own.",
+		"Active customers who own at least one assembly whose annual test date has passed. Each customer is written to once, however many past-due assemblies they own.",
 };

@@ -1,3 +1,4 @@
+import { isStaleAssetDateError } from "@bfa-platform/api/lib/asset-stale";
 import type { AppRouter } from "@bfa-platform/api/routers/index";
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 
@@ -18,21 +19,20 @@ export type AssetAssignment = AssetDetail["assignments"][number];
  * from the router rather than retyped, so the eight assembly types the server
  * accepts are the same union the form has to satisfy.
  */
-export type AssetPayload = Omit<RouterInputs["assets"]["updateAsset"], "id">;
+export type AssetPayload = Omit<
+	RouterInputs["assets"]["updateAsset"],
+	"id" | "expectedAnnualTestDate"
+>;
 
 /**
- * What registering an asset sends: the shared fields plus an optional first
- * occupant. Only the create path carries a customer — on an existing asset the
- * pointer moves through `assignCustomer`, which has occupancy to close.
+ * What the edit form sends: the fields plus the annual test date it was opened
+ * with, so a date a passing test moved meanwhile is not put back — see
+ * `asset-stale.ts`.
  */
-export type CreateAssetPayload = RouterInputs["assets"]["createAsset"];
-
-/** One choice in the optional customer picker on the add-asset form. */
-export type AssetCustomerOption = {
-	id: string;
-	name: string;
-	status: "active" | "suspended";
-};
+export type EditAssetPayload = Omit<
+	RouterInputs["assets"]["updateAsset"],
+	"id"
+>;
 
 /** The status the scheduler computes; never a value the form offers. */
 export type AssetStatus = Asset["assetStatus"];
@@ -116,7 +116,7 @@ export function assetFormErrors(
 ) {
 	if (!error) return {};
 
-	return error.data?.code === "CONFLICT"
+	return error.data?.code === "CONFLICT" && !isStaleAssetDateError(error)
 		? { binErrorMessage: error.message }
 		: { errorMessage: error.message };
 }

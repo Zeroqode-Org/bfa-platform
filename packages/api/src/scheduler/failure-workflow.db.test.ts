@@ -798,6 +798,57 @@ describeDb("Workflow 3 — failure notice and fail list", () => {
 			});
 		});
 
+		it("holds a blocked purveyor's notice but still mails the same address for another purveyor", async () => {
+			// One person, a customer of both purveyors under one email. Blocking
+			// wpA silences wpA's mail to them, and only wpA's.
+			const sharedInB = randomUUID();
+			await pool.query(
+				`insert into customers (id, water_purveyor_id, name, email, rate_category, status)
+				 values ($1, $2, 'Shared Address', 'wf3-primary@example.com', 'standard', 'active')`,
+				[sharedInB, wpB],
+			);
+			const assetA = await seedAsset({
+				currentCustomerId: customerIds.primary,
+			});
+			const assetB = await seedAsset({
+				waterPurveyorId: wpB,
+				currentCustomerId: sharedInB,
+			});
+			const failA = await submitTest({ assetId: assetA.id, result: "fail" });
+			await submitTest({
+				assetId: assetB.id,
+				result: "fail",
+				waterPurveyorId: wpB,
+			});
+
+			await pool.query(
+				"update water_purveyors set status = 'blocked' where id = $1",
+				[wpA],
+			);
+			try {
+				const lines = captureLogs();
+				const result = await runSchedulerTick();
+
+				expect(result.sent).toBe(1);
+				expect(result.held).toBe(1);
+
+				const [delivery] = deliveries(lines, "wf3-primary@example.com");
+				expect(delivery).toBeDefined();
+				expect(deliveries(lines, "wf3-primary@example.com")).toHaveLength(1);
+				expect(String(delivery?.html)).toContain(assetB.bin);
+				expect(String(delivery?.html)).not.toContain(assetA.bin);
+
+				const [heldJob] = await jobsForSubmission(failA);
+				expect(heldJob).toMatchObject({ status: "pending", attempts: 0 });
+				expect(heldJob?.last_error).toMatch(/purveyor is blocked/i);
+			} finally {
+				await pool.query(
+					"update water_purveyors set status = 'active' where id = $1",
+					[wpA],
+				);
+			}
+		});
+
 		it("resolves the recipient at send time, not at fail time", async () => {
 			const asset = await seedAsset({ currentCustomerId: customerIds.primary });
 			await submitTest({ assetId: asset.id, result: "fail" });

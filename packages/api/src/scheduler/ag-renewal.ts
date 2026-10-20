@@ -82,6 +82,7 @@ import {
 	scheduleAgRenewalJob,
 } from "./jobs";
 import { logSchedulerEvent } from "./logging";
+import { isPurveyorBlocked } from "./purveyor-status";
 
 /** Why a renewal notice was withdrawn. Read by people in `last_error`. */
 export const AG_RENEWAL_CANCEL_REASONS = {
@@ -106,6 +107,8 @@ export const AG_RENEWAL_HOLD_REASONS = {
 	suspendedCustomer:
 		"The customer is suspended, which holds their AG renewal notice.",
 	noEmail: "The customer has no email address.",
+	blockedPurveyor:
+		"The water purveyor is blocked, which holds every automated email to its customers.",
 } as const;
 
 /**
@@ -379,6 +382,10 @@ export async function runAgRenewalJob(
 		now,
 		driver,
 		render: async () => {
+			// A blocked purveyor holds this email too — see `isPurveyorBlocked`.
+			if (await isPurveyorBlocked(customer.waterPurveyorId)) {
+				return { hold: AG_RENEWAL_HOLD_REASONS.blockedPurveyor };
+			}
 			if (customer.status === "suspended") {
 				return { hold: AG_RENEWAL_HOLD_REASONS.suspendedCustomer };
 			}

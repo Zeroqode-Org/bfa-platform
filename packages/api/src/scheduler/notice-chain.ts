@@ -63,6 +63,8 @@ export const HOLD_REASONS = {
 		"The customer currently attached to this assembly is suspended, which holds the assembly's notices.",
 	noEmail:
 		"The customer currently attached to this assembly has no email address.",
+	blockedPurveyor:
+		"The water purveyor is blocked, which holds every automated email to its customers.",
 } as const;
 
 type ChainContext = {
@@ -117,7 +119,10 @@ export async function reconcileAssetNoticeChain({
 }: ChainContext & {
 	annualTestDate: CalendarDay | null;
 	/** What caused the reconciliation, for the log line. */
-	trigger: "asset_created" | "annual_test_date_changed";
+	trigger:
+		| "asset_created"
+		| "annual_test_date_changed"
+		| "passing_test_submitted";
 }): Promise<void> {
 	await lockAssetForChain(executor, assetId);
 

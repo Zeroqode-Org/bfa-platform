@@ -34,17 +34,11 @@ export const BFA_TYPES = [
 export const ASSET_STATUSES = ["active", "due_soon", "past_due"] as const;
 
 /**
- * Optional free text. A form that has been typed into and cleared sends `""`,
- * not `undefined`, and storing that would give the column two spellings of
- * "empty" — so blank collapses to NULL here rather than in each caller.
+ * Required free text. Trimmed before the length check, so a value of nothing
+ * but spaces is empty rather than valid.
  */
-function optionalText(max: number) {
-	return z
-		.string()
-		.trim()
-		.max(max)
-		.nullish()
-		.transform((value) => value || null);
+function requiredText(message: string, max: number) {
+	return z.string().trim().min(1, message).max(max);
 }
 
 const assetFields = {
@@ -65,11 +59,22 @@ const assetFields = {
 		.trim()
 		.min(1, "A service address is required")
 		.max(ASSET_FIELD_LIMITS.serviceAddress),
-	make: optionalText(ASSET_FIELD_LIMITS.make),
-	model: optionalText(ASSET_FIELD_LIMITS.model),
-	serialNumber: optionalText(ASSET_FIELD_LIMITS.serialNumber),
-	size: optionalText(ASSET_FIELD_LIMITS.size),
-	assemblyLocation: optionalText(ASSET_FIELD_LIMITS.assemblyLocation),
+	// The assembly's description is required (WP/Admin feedback): these are the
+	// details a certifier checks the valve against in the field. The columns
+	// stay nullable — certifier-built and older rows keep reading — but no WP
+	// save through here can leave one blank, so editing such a row means
+	// filling it in.
+	make: requiredText("A make is required", ASSET_FIELD_LIMITS.make),
+	model: requiredText("A model is required", ASSET_FIELD_LIMITS.model),
+	serialNumber: requiredText(
+		"A serial number is required",
+		ASSET_FIELD_LIMITS.serialNumber,
+	),
+	size: requiredText("A size is required", ASSET_FIELD_LIMITS.size),
+	assemblyLocation: requiredText(
+		"An assembly location is required",
+		ASSET_FIELD_LIMITS.assemblyLocation,
+	),
 	/**
 	 * Required, not optional, even though the column is nullable.
 	 *
@@ -99,6 +104,11 @@ const assetFieldsInput = z.object(assetFields);
  * Optional, and `null` is a real answer: an asset registered before its
  * occupant is known is normal, and the customer can be attached later from the
  * asset's own page.
+ *
+ * The add-asset form no longer offers this (WP/Admin feedback): a customer now
+ * reaches an asset from the customer form, by BIN. The procedure keeps the
+ * parameter because registering an asset with its occupant in one transaction
+ * is still a sound operation — the notice-workflow suites build on it.
  */
 export const createAssetInput = assetFieldsInput.extend({
 	currentCustomerId: z
@@ -120,8 +130,17 @@ export const createAssetInput = assetFieldsInput.extend({
  * moving the pointer has to close the outgoing occupancy row in the same
  * transaction — a field on this form would be the one way to change an occupant
  * without recording it. `assignCustomer` owns that.
+ *
+ * `expectedAnnualTestDate` is the date the form was opened with — not a
+ * column. A passing test can move the stored date while the form is open, and
+ * this is how the save tells "left as it was" from "changed"; see
+ * `asset-stale.ts`. Optional so a caller with no form behind it (the suites)
+ * writes the date it sends.
  */
-export const updateAssetInput = assetFieldsInput.extend({ id: z.uuid() });
+export const updateAssetInput = assetFieldsInput.extend({
+	id: z.uuid(),
+	expectedAnnualTestDate: z.iso.date().nullable().optional(),
+});
 
 /**
  * The asset list. Page-based rather than cursor-based: the screen shows a

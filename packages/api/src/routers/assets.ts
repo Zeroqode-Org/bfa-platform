@@ -4,7 +4,7 @@ import {
 	customerAssignments,
 	customers,
 } from "@bfa-platform/db/schema";
-import { and, asc, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
 import {
@@ -16,14 +16,17 @@ import {
 	updateAssetInput,
 } from "../lib/asset-input";
 import {
+	ASSET_STALE_DATE_MESSAGE,
+	resolveAnnualTestDate,
+} from "../lib/asset-stale";
+import { effectiveAssetStatus } from "../lib/asset-status-sql";
+import {
 	type AuditActor,
 	auditActor,
 	auditActorFields,
 } from "../lib/audit-actor";
-import {
-	reconcileAssetNoticeChain,
-	resumeHeldNoticeChain,
-} from "../scheduler/notice-chain";
+import { attachCustomerToAsset } from "../lib/customer-assignment";
+import { reconcileAssetNoticeChain } from "../scheduler/notice-chain";
 
 /**
  * The columns every asset procedure returns. Declared once so the table, the
@@ -66,6 +69,16 @@ const assetSelection = {
 };
 
 /**
+ * `assetSelection` with the status worked out from the annual test date as of
+ * now, rather than read from the scheduler-written column — see
+ * `effectiveAssetStatus`. A function, not a constant, because "today" has to
+ * be the request's today.
+ */
+function assetReadSelection(now = new Date()) {
+	return { ...assetSelection, assetStatus: effectiveAssetStatus(now) };
+}
+
+/**
  * BFA assets are the WP's own record of the physical valves it is responsible
  * for. A WP registers one directly from this screen — no certifier submission
  * needed (PRD § 7, flow 3) — and the annual test date it is given here is what
@@ -89,9 +102,14 @@ export const assetsRouter = router({
 	listAssets: wpProcedure
 		.input(listAssetsInput)
 		.query(async ({ ctx, input }) => {
+			const now = new Date();
 			const where = and(
 				eq(bfaAssets.waterPurveyorId, ctx.caller.waterPurveyorId),
-				input.status ? eq(bfaAssets.assetStatus, input.status) : undefined,
+				// Filtered on the status as of today, not the stored column — the
+				// Past due filter once came back empty while assets were years late.
+				input.status
+					? sql`${effectiveAssetStatus(now)} = ${input.status}::asset_status`
+					: undefined,
 				searchPredicate(input.search),
 			);
 
@@ -105,7 +123,7 @@ export const assetsRouter = router({
 			const total = totalRow?.value ?? 0;
 
 			const rows = await db
-				.select(assetSelection)
+				.select(assetReadSelection(now))
 				.from(bfaAssets)
 				.leftJoin(customers, tenantOccupant(ctx.caller.waterPurveyorId))
 				.where(where)
@@ -270,7 +288,11 @@ export const assetsRouter = router({
 				throw new TRPCError({ code: "NOT_FOUND", message: "Asset not found" });
 			}
 
-			const next = assetColumns(input);
+			const next = withResolvedDate(
+				assetColumns(input),
+				existing.annualTestDate,
+				input.expectedAnnualTestDate,
+			);
 
 			// Opening the edit dialog and pressing save without touching a field is
 			// not an update, and writing one anyway would make two records lie.
@@ -287,7 +309,28 @@ export const assetsRouter = router({
 			// chain computed from the old one is the one failure this feature must
 			// not have: a late notice sent against a deadline that moved.
 			const row = await db.transaction(async (tx) => {
-				const [updated] = await updateAssetRow(tx, next, tenantScopedRow);
+				// Re-read under a lock: a passing test can move the date between the
+				// read above and this write, and the check has to see that move.
+				const [locked] = await tx
+					.select({ annualTestDate: bfaAssets.annualTestDate })
+					.from(bfaAssets)
+					.where(tenantScopedRow)
+					.limit(1)
+					.for("update");
+
+				if (!locked) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Asset not found",
+					});
+				}
+
+				const values = withResolvedDate(
+					assetColumns(input),
+					locked.annualTestDate,
+					input.expectedAnnualTestDate,
+				);
+				const [updated] = await updateAssetRow(tx, values, tenantScopedRow);
 
 				if (!updated) {
 					throw new TRPCError({
@@ -300,7 +343,7 @@ export const assetsRouter = router({
 				// does not touch the schedule, and reconciling anyway would rewrite
 				// a job row — and emit a scheduling line — for a schedule nobody
 				// changed.
-				if (existing.annualTestDate !== updated.annualTestDate) {
+				if (locked.annualTestDate !== updated.annualTestDate) {
 					await reconcileAssetNoticeChain({
 						executor: tx,
 						assetId: updated.id,
@@ -341,15 +384,10 @@ export const assetsRouter = router({
 	/**
 	 * Attaches a customer to an asset, preserving whoever was there before.
 	 *
-	 * Three writes, one transaction: close the open occupancy row with today's
-	 * `end_date`, open a new one starting today, and move the asset's live
-	 * pointer. Doing only the third — the update a "current customer" field
-	 * invites — would answer "who gets the email" while quietly erasing "who had
-	 * this valve last year", which is the question a disputed test needs.
-	 *
-	 * Both dates come from `current_date` in Postgres rather than from the Node
-	 * process, so the closing and the opening row cannot disagree about what day
-	 * it is.
+	 * The writes themselves — close the open occupancy row, open a new one, move
+	 * the live pointer, resume a held chain — are `attachCustomerToAsset`'s, in
+	 * one transaction, shared with the customer form's BIN so both sides write
+	 * the same history.
 	 */
 	assignCustomer: wpProcedure
 		.input(assignCustomerInput)
@@ -408,51 +446,16 @@ export const assetsRouter = router({
 				});
 			}
 
-			await db.transaction(async (tx) => {
-				await tx
-					.update(customerAssignments)
-					.set({ endDate: sql`current_date` })
-					.where(
-						and(
-							eq(customerAssignments.bfaAssetId, asset.id),
-							isNull(customerAssignments.endDate),
-						),
-					);
-
-				await tx.insert(customerAssignments).values({
-					bfaAssetId: asset.id,
+			await db.transaction((tx) =>
+				attachCustomerToAsset({
+					executor: tx,
+					assetId: asset.id,
 					customerId: customer.id,
-					startDate: sql`current_date`,
-				});
-
-				await tx
-					.update(bfaAssets)
-					.set({ currentCustomerId: customer.id })
-					.where(
-						and(
-							eq(bfaAssets.id, asset.id),
-							eq(bfaAssets.waterPurveyorId, waterPurveyorId),
-						),
-					);
-
-				// Attaching an *active* customer is what ends a hold. A suspended
-				// one continues it, which is the confirmed rule (PRD § 9): the
-				// asset's notices stop entirely until somebody who can be written
-				// to is attached to the BIN.
-				//
-				// What resumes is the single stage that was waiting, and nothing
-				// already sent is replayed — see `resumeHeldNoticeChain` for why
-				// that reading was chosen over restarting the chain or skipping to
-				// whichever stage the calendar now says is due.
-				if (customer.status === "active") {
-					await resumeHeldNoticeChain({
-						executor: tx,
-						assetId: asset.id,
-						waterPurveyorId,
-						actor: auditActor(ctx),
-					});
-				}
-			});
+					customerStatus: customer.status,
+					waterPurveyorId,
+					actor: auditActor(ctx),
+				}),
+			);
 
 			logAssetEvent("bfa_asset_customer_assigned", {
 				actor: auditActor(ctx),
@@ -541,7 +544,7 @@ function tenantAssignmentCustomer(waterPurveyorId: string) {
 /** One asset with its occupancy history, or a not-found. */
 async function readAssetDetail(waterPurveyorId: string, assetId: string) {
 	const [asset] = await db
-		.select(assetSelection)
+		.select(assetReadSelection())
 		.from(bfaAssets)
 		.leftJoin(customers, tenantOccupant(waterPurveyorId))
 		.where(
@@ -695,6 +698,33 @@ async function updateAssetRow(
 	} catch (error) {
 		throw duplicateBinError(error, values.bin);
 	}
+}
+
+/**
+ * The write set with the annual test date a save may write — see
+ * `asset-stale.ts`. A date left untouched on a form opened before a passing
+ * test moved it keeps the moved date; a date changed on such a form is
+ * refused rather than guessed between.
+ */
+function withResolvedDate(
+	values: ReturnType<typeof assetColumns>,
+	stored: string | null,
+	opened: string | null | undefined,
+): ReturnType<typeof assetColumns> {
+	const resolved = resolveAnnualTestDate({
+		stored,
+		opened,
+		submitted: values.annualTestDate,
+	});
+
+	if (!resolved.ok) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: ASSET_STALE_DATE_MESSAGE,
+		});
+	}
+
+	return { ...values, annualTestDate: resolved.date };
 }
 
 /** Postgres' `unique_violation`. */

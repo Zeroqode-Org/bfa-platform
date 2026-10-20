@@ -9,6 +9,13 @@ import {
 import { and, asc, eq, exists, sql } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
+import { isPastDue } from "../lib/asset-status-sql";
+import { isPurveyorBlocked } from "../scheduler/purveyor-status";
+
+/** Shown when a blocked purveyor tries to email its customers. */
+export const BLOCKED_PURVEYOR_BROADCAST_MESSAGE =
+	"Your water purveyor account is blocked, so email to your customers is paused. Contact the platform administrator.";
+
 import {
 	type AuditActor,
 	auditActor,
@@ -284,6 +291,15 @@ export const noticesRouter = router({
 	sendGeneralInfoBroadcast: wpNoticeAuthorProcedure
 		.input(sendGeneralInfoBroadcastInput)
 		.mutation(async ({ ctx, input }) => {
+			// A blocked purveyor keeps its dashboard but sends nothing to its
+			// customers — the same rule the scheduler holds automated email to.
+			if (await isPurveyorBlocked(ctx.caller.waterPurveyorId)) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: BLOCKED_PURVEYOR_BROADCAST_MESSAGE,
+				});
+			}
+
 			const recipients = await recipientsFor(
 				ctx.caller.waterPurveyorId,
 				input.recipientFilter,
@@ -494,7 +510,9 @@ async function recipientsFor(
 										// mispointed asset in another tenant could decide that
 										// this customer is past due.
 										eq(bfaAssets.waterPurveyorId, waterPurveyorId),
-										eq(bfaAssets.assetStatus, "past_due"),
+										// As of today, from the date — not the stored column,
+										// which only a scheduler tick moves.
+										isPastDue(),
 									),
 								),
 						),

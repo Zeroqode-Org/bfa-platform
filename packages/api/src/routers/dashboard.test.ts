@@ -16,6 +16,7 @@ import {
 } from "vitest";
 
 import { monthRangeOf, trailingMonthsRange } from "../lib/dashboard-calendar";
+import { addCalendarMonths, honoluluToday } from "../lib/honolulu-dates";
 import type { AppRouter } from "./index";
 
 /**
@@ -536,11 +537,13 @@ describeDb("dashboard procedures", () => {
 		it("reconciles every card against the rows underneath it", async () => {
 			const metrics = await callerFor(ids.adminA).dashboard.dashboardMetrics();
 
+			// Past due by the annual test date as of today in Hawaii — what the
+			// card reads, rather than the scheduler-written column.
 			const { rows: assetRows } = await pool.query(
 				`select count(*)::int as total,
-				        (count(*) filter (where asset_status = 'past_due'))::int as past_due
+				        (count(*) filter (where annual_test_date < $2::date))::int as past_due
 				 from bfa_assets where water_purveyor_id = $1`,
-				[wpA],
+				[wpA, honoluluToday()],
 			);
 			const { rows: submissionRows } = await pool.query(
 				`select count(*)::int as submitted,
@@ -1081,21 +1084,50 @@ describeDb("dashboard procedures", () => {
 		});
 
 		it("excludes a due-soon asset — the card is past due, not nearly due", async () => {
+			// Due in a month: inside the reminder window, not yet late.
 			await pool.query(
-				"update bfa_assets set asset_status = 'due_soon' where id = $1",
-				[activeA],
+				"update bfa_assets set annual_test_date = $2 where id = $1",
+				[activeA, addCalendarMonths(honoluluToday(), 1)],
 			);
 
-			const rows = await callerFor(ids.adminA).dashboard.delinquentAssets({
-				limit: 20,
-			});
+			try {
+				const rows = await callerFor(ids.adminA).dashboard.delinquentAssets({
+					limit: 20,
+				});
 
-			expect(rows.map((row) => row.id)).not.toContain(activeA);
+				expect(rows.map((row) => row.id)).not.toContain(activeA);
+			} finally {
+				await pool.query(
+					"update bfa_assets set annual_test_date = '2027-01-15' where id = $1",
+					[activeA],
+				);
+			}
+		});
 
+		it("lists an overdue asset whatever its stored status says", async () => {
+			// The WP/Admin feedback's bug: a deployment whose scheduler rarely ran
+			// left years-late assets marked active, and the list came back empty.
 			await pool.query(
 				"update bfa_assets set asset_status = 'active' where id = $1",
-				[activeA],
+				[pastDueA],
 			);
+
+			try {
+				const rows = await callerFor(ids.adminA).dashboard.delinquentAssets({
+					limit: 20,
+				});
+				const metrics = await callerFor(
+					ids.adminA,
+				).dashboard.dashboardMetrics();
+
+				expect(rows.map((row) => row.id)).toContain(pastDueA);
+				expect(metrics.pastDue).toBe(rows.length);
+			} finally {
+				await pool.query(
+					"update bfa_assets set asset_status = 'past_due' where id = $1",
+					[pastDueA],
+				);
+			}
 		});
 
 		it("puts the worst first — oldest annual test date at the top", async () => {
@@ -1106,22 +1138,24 @@ describeDb("dashboard procedures", () => {
 			expect(rows.map((row) => row.id)).toEqual([pastDueA, pastDueA2]);
 		});
 
-		it("sorts a past-due asset with no test date last, not first", async () => {
+		it("leaves out an asset with no annual test date — without a date nothing is overdue", async () => {
 			await pool.query(
 				"update bfa_assets set annual_test_date = null where id = $1",
 				[pastDueA],
 			);
 
-			const rows = await callerFor(ids.adminA).dashboard.delinquentAssets({
-				limit: 20,
-			});
+			try {
+				const rows = await callerFor(ids.adminA).dashboard.delinquentAssets({
+					limit: 20,
+				});
 
-			expect(rows[rows.length - 1]?.id).toBe(pastDueA);
-
-			await pool.query(
-				"update bfa_assets set annual_test_date = '2025-03-01' where id = $1",
-				[pastDueA],
-			);
+				expect(rows.map((row) => row.id)).not.toContain(pastDueA);
+			} finally {
+				await pool.query(
+					"update bfa_assets set annual_test_date = '2025-03-01' where id = $1",
+					[pastDueA],
+				);
+			}
 		});
 
 		it("identifies the asset well enough to act on", async () => {
@@ -1147,8 +1181,8 @@ describeDb("dashboard procedures", () => {
 				limit: 20,
 			});
 			const { rows: counted } = await pool.query(
-				"select count(*)::int as value from bfa_assets where water_purveyor_id = $1 and asset_status = 'past_due'",
-				[wpA],
+				"select count(*)::int as value from bfa_assets where water_purveyor_id = $1 and annual_test_date < $2::date",
+				[wpA, honoluluToday()],
 			);
 			const metrics = await callerFor(ids.adminA).dashboard.dashboardMetrics();
 

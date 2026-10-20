@@ -17,8 +17,9 @@ the [build plan](/docs/build-plan) and PRD § 6.6.4.
 |---|---|---|
 | `name` | yes | Trimmed; a name of only spaces is empty, not valid |
 | `email` | yes | Lowercased and trimmed, so one address has one spelling. Unique **within the purveyor** — see below |
+| BIN (`attachBin`) | yes, while the customer holds no asset | Not a column — the BIN of an asset to attach the customer to on save. See [The BIN](#the-bin) |
 | `account_number` | no | Blank is stored as NULL, never as `''` |
-| `address` | no | Blank is stored as NULL |
+| `address` | yes | Trimmed; required on every save (WP/Admin feedback). The column stays nullable, so a row saved before the rule still reads — editing it means filling it in |
 | `rate_category` | yes | `standard` or `agricultural`; agricultural gets the purple badge |
 | `ag_renewal_date` | agricultural only | Required on the agricultural rate, refused on the standard one |
 | `status` | yes | `active` or `suspended` — see below |
@@ -28,7 +29,53 @@ the [build plan](/docs/build-plan) and PRD § 6.6.4.
 The record attaches to the *customer*, not to an asset. Which assets a customer
 currently holds lives in `customer_assignments`, with `bfa_assets.current_customer_id`
 as the live pointer — occupants change over time, and that history is not this
-screen's to rewrite. Nothing here creates, closes or moves an assignment.
+screen's to rewrite. The one thing this screen does to it is **attach**: the BIN
+field opens a new occupancy exactly as the asset page's *Attach customer* does.
+It never closes one on its own or detaches an asset; that stays on the asset's
+page, next to the history.
+
+### The BIN
+
+Every automated notice is addressed through an asset's current customer
+([PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log)), so a customer who
+occupies no asset is a record no notice can reach. The client asked for the BIN
+on this form for exactly that reason, and the rule is: **after a save, the
+customer holds at least one asset.**
+
+- **Add customer** asks for a BIN, required. The customer is inserted and
+  attached in one transaction, so a BIN that cannot be honoured leaves no
+  customer behind.
+- **Edit customer** lists the BINs the customer already holds (*Attached
+  BINs*, read from `bfa_assets.current_customer_id` within the purveyor) and
+  offers *Attach another BIN*, optional. A customer who holds none — a row saved
+  before the rule — sees a required *BIN* field instead.
+- The table has a **BIN** column; a customer holding nothing shows a *No BIN*
+  warning badge rather than a dash.
+
+Saving a BIN runs `attachCustomerToAsset` (`packages/api/src/lib/customer-assignment.ts`),
+the same three writes `assets.assignCustomer` makes — close the open occupancy
+row, open one from today, move the live pointer — and, for an active customer,
+resumes a held notice chain. The match is exact on the trimmed BIN, inside the
+caller's purveyor, under a row lock on the asset. Attaching does not change the
+customer row, so it neither needs nor bumps `revision`.
+
+What a BIN can be refused for, and where the form shows it:
+
+| Case | Code | Shown |
+|---|---|---|
+| No BIN, and the customer holds none | `BAD_REQUEST` | Under the BIN field |
+| No asset in this purveyor has the BIN (another purveyor's included) | `NOT_FOUND` | Under the BIN field |
+| The asset is held by **another** customer | `PRECONDITION_FAILED` | Under the BIN field, naming the occupant, with **Move it to this customer** |
+
+Moving an asset away from another occupant redirects its automated email, so it
+waits for that button, which resends the save with `acknowledgeReassign`. The
+previous occupancy is closed with today's date, not erased. A BIN the customer
+already holds is a no-op. A *suspended* customer is not asked again — the form
+states what suspension does as soon as it is chosen.
+
+The messages live in `packages/api/src/lib/customer-bin.ts`, import-free, so the
+form can route them without pulling the router into the bundle. Every attachment
+writes the same `bfa_asset_customer_assigned` audit line as the asset page.
 
 ### Why the AG renewal date is conditional
 
@@ -78,7 +125,7 @@ Nothing is resent automatically, the dialog stays open with what was typed, and
 the list behind it is refetched so reopening the customer starts from what is
 actually stored.
 
-Name and email are required inline, the email must look like an address
+Name, email and address are required inline, the email must look like an address
 (*Please enter a valid email address.*), and every text field reports the
 server's length limit at the field — see the shared
 [inline validation](/docs/design-system#form-validation) pattern. A server
@@ -269,7 +316,7 @@ it is the field whose effect leaves this table.
 
 ## The screen
 
-`/wp/customers`, in the standard WP shell. The table shows name, account number,
+`/wp/customers`, in the standard WP shell. The table shows name, BIN(s), account number,
 email, rate category, status, and per-row **Edit** and **Suspend** /
 **Reactivate** actions. Create and edit are the same dialog form — the only
 differences are the starting values and the button label.

@@ -23,9 +23,11 @@
 import {
 	addCalendarDays,
 	addCalendarMonths,
+	addCalendarYears,
 	type CalendarDay,
 	compareCalendarDays,
 	honoluluDayStart,
+	parseCalendarDay,
 } from "./honolulu-dates";
 import { NOTICE_TYPES, type NoticeType } from "./notice-defaults";
 
@@ -163,4 +165,40 @@ export function assetStatusFor(
 		0
 		? "due_soon"
 		: "active";
+}
+
+/**
+ * The annual test date a passing test moves an assembly to, or `null` when it
+ * should not move (WP/Admin feedback: "after a test is submitted, the due date
+ * should move to next year so the annual reminder email can go out").
+ *
+ * The day and month stay the assembly's own — only the year changes. The new
+ * date is the first anniversary that falls more than
+ * {@link REMINDER_LEAD_MONTHS} after the test:
+ *
+ * - due 1 Sep 2023, passed 7 Oct 2026 (three years late) → 1 Sep **2027** — the
+ *   client's own example;
+ * - due 1 Sep 2027, passed early on 1 Aug 2027 → 1 Sep **2028**: a test inside
+ *   the reminder window counts for this year's cycle, so next year's is due;
+ * - due 1 Sep 2027, passed on 1 Jun 2027 → no move: a test that early is not
+ *   this cycle's, and the reminder still goes out as scheduled.
+ *
+ * Never backwards: a late-linked pass from years ago computes a date no later
+ * than the one stored, and that is `null` too. 29 February becomes 28 February
+ * in a year without one, the same clamp `addCalendarYears` applies everywhere.
+ */
+export function nextAnnualTestDate(
+	annualTestDate: CalendarDay,
+	testDate: CalendarDay,
+): CalendarDay | null {
+	const threshold = addCalendarMonths(testDate, REMINDER_LEAD_MONTHS);
+	const baseYear = parseCalendarDay(annualTestDate).year;
+	const thresholdYear = parseCalendarDay(threshold).year;
+
+	let next = addCalendarYears(annualTestDate, thresholdYear - baseYear);
+	if (compareCalendarDays(next, threshold) <= 0) {
+		next = addCalendarYears(annualTestDate, thresholdYear + 1 - baseYear);
+	}
+
+	return compareCalendarDays(next, annualTestDate) > 0 ? next : null;
 }

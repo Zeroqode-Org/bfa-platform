@@ -3,9 +3,11 @@
  *
  * The column is scheduler-owned. No mutation accepts one — `assetColumns` in
  * `lib/asset-input.ts` has no status field and the asset form shows it
- * read-only — and this is the only thing that writes it. That is why the
- * dashboard can say "the assets the scheduler has marked past due" and mean it:
- * the value is derived, so it cannot disagree with the date it is derived from.
+ * read-only — and this is the only thing that writes it. The screens no longer
+ * read it: they derive the status from the date at read time through
+ * `effectiveAssetStatus` (`lib/asset-status-sql.ts`), because a deployment
+ * whose tick runs rarely left this column weeks stale. This keeps it in step,
+ * through that same expression, for anything reading the table directly.
  *
  * One statement for the whole table rather than a job row per asset. The rule
  * is `assetStatusFor`'s, restated in SQL because pulling every asset into Node
@@ -24,8 +26,8 @@
 import { db } from "@bfa-platform/db";
 import { sql } from "drizzle-orm";
 
+import { effectiveAssetStatus } from "../lib/asset-status-sql";
 import { honoluluToday } from "../lib/honolulu-dates";
-import { REMINDER_LEAD_MONTHS } from "../lib/notice-schedule";
 import { logSchedulerEvent } from "./logging";
 
 /**
@@ -45,21 +47,9 @@ export async function recomputeAssetStatuses({
 } = {}): Promise<number> {
 	const today = honoluluToday(now);
 
-	// Both values are bound parameters rather than built into the string:
-	// `today` is always `YYYY-MM-DD` because `honoluluToday` produces it, and a
-	// parameter is what keeps that true if the source ever changes.
-	//
-	// `make_interval(months => 2)` rather than a literal interval, so the lead
-	// time has exactly one definition — {@link REMINDER_LEAD_MONTHS} — in SQL as
-	// well as in TypeScript. Subtracting whole months from a `date` clamps to the
-	// end of the target month in Postgres exactly as `addCalendarMonths` does in
-	// `honolulu-dates.ts`, so 30 April less two months is 28 February in both.
-	const computed = sql`case
-			when "annual_test_date" is null then 'active'
-			when "annual_test_date" < ${today}::date then 'past_due'
-			when ${today}::date >= ("annual_test_date" - make_interval(months => ${REMINDER_LEAD_MONTHS}))::date then 'due_soon'
-			else 'active'
-		end::asset_status`;
+	// The same expression every screen reads the status through, so the column
+	// this writes and the status those screens show cannot disagree.
+	const computed = effectiveAssetStatus(now);
 
 	const result = await db.execute(
 		sql`update "bfa_assets"

@@ -127,6 +127,39 @@ the claim is atomic.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `SCHEDULER_ENABLED` | no | `false` | `true` makes this process run the tick loop. Validated in `packages/env/src/server.ts` |
+| `SCHEDULER_TICK_SECRET` | no | unset | At least 32 characters. Turns on `POST /api/scheduler/tick` — see below |
+
+### On a host that does not keep a process alive
+
+The loop is a timer inside a Node process. On Vercel a process lives only while
+requests keep an instance warm, so with no traffic nothing ticks — statuses go
+stale and no notice is sent. That is what the WP/Admin feedback ran into.
+
+For such a host there is **`POST /api/scheduler/tick`**
+(`apps/web/src/app/api/scheduler/tick/route.ts`): one pass on request, for an
+external timer — cron-job.org, a scheduled GitHub Action, an uptime pinger —
+to call every few minutes. It stays within the no-vendor-cron rule: the endpoint
+is plain HTTP, and on a container the in-process loop works as before.
+
+- Locked by `SCHEDULER_TICK_SECRET`, sent as `Authorization: Bearer <secret>`
+  and compared in constant time. Unset, the route answers **404**; a wrong or
+  missing token, **401**. POST only — a tick sends email, and GETs are what
+  crawlers and link previews make.
+- Each call first runs startup recovery (below): a function cut off mid-job has
+  no startup of its own to reclaim its `running` rows in. Only rows stale past
+  `STALE_RUNNING_AFTER_MS` are touched, so a pass still running elsewhere is
+  never taken from.
+- Safe beside the in-process loop and beside itself, for the reason two
+  instances are: the claim is atomic and each email carries its job's
+  idempotency key.
+- Answers `{ recovery, tick }` and logs `scheduler_tick` with `source: "http"`
+  when the pass did something.
+
+Example call for the external timer:
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $SCHEDULER_TICK_SECRET"   https://<your-domain>/api/scheduler/tick
+```
 
 Two other things have to be true before a customer receives a *reminder-chain*
 notice, and neither is configuration this feature owns:
@@ -458,7 +491,20 @@ purveyor attaches a new customer to the BIN. That is a confirmed decision
 
 The handler holds — sends nothing, advances nothing — when the asset has no
 current customer, when that customer is suspended, or when they have no email
-address. The job stays `pending`, keeps its full retry budget (a hold is not a
+address. It also holds when the **water purveyor is blocked** (WP/Admin
+feedback): a Super-Admin block stops the platform writing to that purveyor's
+customers, for the reminder chain, the failure notice and the AG renewal notice
+alike (`isPurveyorBlocked` in `scheduler/purveyor-status.ts`). It is a hold, not
+a cancel, because a block is reversible — once unblocked, the waiting stage goes
+out on its next recheck.
+
+The block is about the purveyor, never the address. Customers belong to one
+purveyor, and the same person can be a customer of two under one email; blocking
+one leaves the other's mail to that address untouched. Outside the scheduler the
+same rule applies to the two other ways mail reaches a customer: the result PDF
+skips the customer copy (the certifier's and the purveyor's copies still go), and
+the General info broadcast is refused. A blocked purveyor's staff can still sign
+in. The job stays `pending`, keeps its full retry budget (a hold is not a
 failure), is re-queued a day out, and carries the reason in `last_error` for
 whoever asks why no notice arrived.
 
@@ -565,6 +611,27 @@ Cancellation reaches `running` rows as well as `pending` ones, and the handler's
 completion refuses a row that has been taken. That closes the race where a
 passing test arrives while the reminder is mid-send: the cancellation wins, and no
 late notice is queued behind it.
+
+### A passing test moves the date to the next cycle
+
+A linked pass also moves `annual_test_date` on (WP/Admin feedback: "after a test
+is submitted, the due date should move to next year so the annual reminder email
+can go out"), and next year's reminder is queued for the new date in the same
+transaction — `advanceAnnualTestDate` in `submission-lifecycle.ts`, rule in
+`nextAnnualTestDate` (`lib/notice-schedule.ts`):
+
+- the day and month stay the assembly's own; only the year changes;
+- the new date is the first anniversary more than the reminder lead (two months)
+  after the submission's `test_date`. Due 1 Sep 2023 and passed 7 Oct 2026 → 1 Sep
+  2027 (the client's example); due 1 Sep 2027 and passed 1 Aug 2027 → 1 Sep 2028;
+- never backwards, and idempotent — a correction or re-link of the same pass
+  changes nothing; a pass with no test date, or an asset with no date, is left
+  alone; 29 February clamps to 28 February;
+- a pass later corrected to a fail does not move the date back — the purveyor
+  corrects the date on the asset, which reschedules like any date change.
+
+Logged as `scheduler_annual_test_date_advanced` with `from`, `to`, `test_date`
+and `submission_id`.
 
 The certifier wizard (PRD § 6.5) does not exist yet, so the only paths that turn a
 submission into a passing test today are the two WP corrections above. Both now
@@ -842,12 +909,19 @@ before a production tenant sends it. No `notice_templates` row and no editor —
 a configurable renewal template is not a specified feature. Provider tags:
 `type=ag_renewal`, `wp_id`, `customer_id`.
 
-## `asset_status` is scheduler-owned
+## `asset_status` is scheduler-owned — and screens read the date
 
 `bfa_assets.asset_status` is recomputed from `annual_test_date` on every tick and
 is written by nothing else. No mutation accepts one, the asset form shows it
-read-only, and `0004`'s column grants never handed the privilege over. That is why
-the dashboard can say "the assets the scheduler has marked past due" and mean it.
+read-only, and `0004`'s column grants never handed the privilege over.
+
+The screens no longer read the column, though. A deployment whose tick rarely ran
+showed years-late assets as on time — Home's *Past due* at 0, an empty *Past due*
+filter (WP/Admin feedback). Every status a WP sees is now worked out from the date
+at read time by `effectiveAssetStatus` / `isPastDue` (`lib/asset-status-sql.ts`):
+the asset list's status and filter, the Home card and *Delinquent assets*, and the
+general-info broadcast's past-due audience. The tick writes the column through
+that same expression, so the two cannot disagree once it has run.
 
 | Value | Rule |
 |---|---|
@@ -972,10 +1046,6 @@ recomputes `asset_status` table-wide while suites run. See
 - **The full dynamic-variable list.** Six variables ship, unchanged by this
   workflow. A seventh is an entry in `NOTICE_VARIABLES` plus a value in the
   handler's `values` object (PRD § 10).
-- **Whether a blocked water purveyor should send automated mail.** The gate today
-  is the feature flag alone; `water_purveyors.status` is not consulted, because
-  no requirement asks for it and what blocking a purveyor means for their
-  customers' compliance deadlines has not been decided.
 - **The failure notice's customer-facing copy.** Provisional in
   `lib/failure-notice-copy.ts`, same register and same caveat as the notice
   defaults: plain statements, no compliance claim, awaiting client wording.

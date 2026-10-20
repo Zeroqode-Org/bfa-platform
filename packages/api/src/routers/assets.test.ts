@@ -15,6 +15,7 @@ import {
 	vi,
 } from "vitest";
 
+import { addCalendarMonths, honoluluToday } from "../lib/honolulu-dates";
 import type { AppRouter } from "./index";
 
 /**
@@ -106,6 +107,12 @@ function newAsset(bin: string, overrides: Partial<Inputs["createAsset"]> = {}) {
 		bin,
 		bfaType: "RP" as const,
 		serviceAddress: "18 Canal Road",
+		// Required since the WP/Admin feedback.
+		assemblyLocation: "Meter pit, north side",
+		make: "Watts",
+		model: "909",
+		serialNumber: "SN-88120",
+		size: "2 in",
 		annualTestDate: "2027-04-01",
 		...overrides,
 	};
@@ -121,11 +128,12 @@ function asUpdate(
 		bin: asset.bin,
 		bfaType: asset.bfaType,
 		serviceAddress: asset.serviceAddress,
-		make: asset.make,
-		model: asset.model,
-		serialNumber: asset.serialNumber,
-		size: asset.size,
-		assemblyLocation: asset.assemblyLocation,
+		// The columns are nullable, but every asset created here has them.
+		make: asset.make ?? "",
+		model: asset.model ?? "",
+		serialNumber: asset.serialNumber ?? "",
+		size: asset.size ?? "",
+		assemblyLocation: asset.assemblyLocation ?? "",
 		annualTestDate: asset.annualTestDate as string,
 		...overrides,
 	};
@@ -293,25 +301,44 @@ describeDb("asset procedures", () => {
 			expect(total).toBe(rows[0]?.value);
 		});
 
-		it("filters by status", async () => {
-			const created = await callerFor(ids.adminA).assets.createAsset(
-				newAsset("STATUS-FILTER"),
+		it("filters by the status the annual test date gives today", async () => {
+			const today = honoluluToday();
+			// Due in a month: inside the two-month reminder window.
+			const dueSoon = await callerFor(ids.adminA).assets.createAsset(
+				newAsset("STATUS-FILTER", {
+					annualTestDate: addCalendarMonths(today, 1),
+				}),
 			);
-
-			// The status is the scheduler's, so the fixture sets it the way the
-			// scheduler will — directly, not through a procedure.
+			// A month overdue — but the scheduler has not been round, so the
+			// stored column still says active. The filter must not believe it
+			// (WP/Admin feedback: "Past due" returned nothing for overdue assets).
+			const overdue = await callerFor(ids.adminA).assets.createAsset(
+				newAsset("STATUS-FILTER-OVERDUE", {
+					annualTestDate: addCalendarMonths(today, -1),
+				}),
+			);
 			await pool.query(
-				"update bfa_assets set asset_status = 'due_soon' where id = $1",
-				[created.id],
+				"update bfa_assets set asset_status = 'active' where id = $1",
+				[overdue.id],
 			);
 
-			const dueSoon = await callerFor(ids.adminA).assets.listAssets({
+			const dueSoonRows = await callerFor(ids.adminA).assets.listAssets({
 				page: 1,
 				pageSize: 100,
 				status: "due_soon",
+				search: "STATUS-FILTER",
+			});
+			const pastDueRows = await callerFor(ids.adminA).assets.listAssets({
+				page: 1,
+				pageSize: 100,
+				status: "past_due",
+				search: "STATUS-FILTER",
 			});
 
-			expect(dueSoon.rows.map((row) => row.id)).toEqual([created.id]);
+			expect(dueSoonRows.rows.map((row) => row.id)).toEqual([dueSoon.id]);
+			expect(pastDueRows.rows.map((row) => row.id)).toEqual([overdue.id]);
+			// And the row reports the status it was filtered on.
+			expect(pastDueRows.rows[0]?.assetStatus).toBe("past_due");
 		});
 
 		it("searches by BIN", async () => {
@@ -621,11 +648,11 @@ describeDb("asset procedures", () => {
 					bin: "TAKEN-OVER",
 					bfaType: "PVB",
 					serviceAddress: "Taken Over",
-					make: null,
-					model: null,
-					serialNumber: null,
-					size: null,
-					assemblyLocation: null,
+					make: "Watts",
+					model: "909",
+					serialNumber: "SN-1",
+					size: "2 in",
+					assemblyLocation: "Meter pit",
 					annualTestDate: "2029-01-01",
 				}),
 			).rejects.toThrow(/not found/i);
@@ -743,16 +770,22 @@ describeDb("asset procedures", () => {
 			expect(updated.updatedAt.getTime()).not.toBe(created.updatedAt.getTime());
 		});
 
-		it("treats clearing an optional field as a real change", async () => {
+		it("refuses to clear a descriptive field", async () => {
 			const created = await callerFor(ids.adminA).assets.createAsset(
 				newAsset("CLEARS-A-MODEL", { model: "909" }),
 			);
 
-			const updated = await callerFor(ids.adminA).assets.updateAsset(
-				asUpdate(created, { model: null }),
-			);
+			await expect(
+				callerFor(ids.adminA).assets.updateAsset(
+					asUpdate(created, { model: "  " }),
+				),
+			).rejects.toThrow(/model is required/i);
 
-			expect(updated.model).toBeNull();
+			const { rows } = await pool.query(
+				"select model from bfa_assets where id = $1",
+				[created.id],
+			);
+			expect(rows[0]?.model).toBe("909");
 		});
 	});
 

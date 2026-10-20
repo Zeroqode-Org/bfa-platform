@@ -75,6 +75,16 @@ export const env = createEnv({
 			.enum(["true", "false"])
 			.default("false")
 			.transform((value) => value === "true"),
+		// The bearer token an external timer presents to `POST /api/scheduler/tick`
+		// to run one scheduler pass. For hosts that do not keep a process alive
+		// between requests — Vercel among them — where the in-process loop above
+		// only ticks while requests happen to keep an instance warm. Unset, the
+		// endpoint does not exist. Long, because it is the whole lock on a route
+		// that sends email.
+		SCHEDULER_TICK_SECRET: z
+			.string()
+			.min(32, { message: "must be at least 32 characters" })
+			.optional(),
 		// HMAC-SHA-256 key for the Super-Admin impersonation cookie. Optional so CI
 		// and checkouts that never impersonate need nothing; unset, impersonation
 		// is refused and any cookie is ignored. Set but short fails here. Kept in

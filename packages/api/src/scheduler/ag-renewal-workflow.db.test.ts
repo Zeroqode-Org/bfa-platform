@@ -115,12 +115,16 @@ type CustomerInput = {
 	accountNumber?: string | null;
 	address?: string | null;
 	status?: "active" | "suspended";
+	attachBin?: string | null;
 } & (
 	| { rateCategory: "standard"; agRenewalDate?: null }
 	| { rateCategory: "agricultural"; agRenewalDate: string }
 );
 
-let callerFor: (profileId: string) => {
+/** What every fixture customer is saved with — the address is required. */
+const FIXTURE_ADDRESS = "1 Kahale Farm Road";
+
+let rawCallerFor: (profileId: string) => {
 	customers: {
 		createCustomer: (input: CustomerInput) => Promise<CustomerRow>;
 		updateCustomer: (
@@ -161,6 +165,47 @@ function eventsNamed(lines: Record<string, unknown>[], event: string) {
 	return lines.filter((line) => line.event === event);
 }
 
+/**
+ * The customer procedures as this suite uses them. A new customer must occupy
+ * an asset, so each one gets a fresh asset of its own, attached by BIN —
+ * nothing this workflow reads, since the AG renewal notice is addressed to the
+ * customer and never through an asset.
+ */
+function callerFor(profileId: string): ReturnType<typeof rawCallerFor> {
+	const caller = rawCallerFor(profileId);
+
+	return {
+		customers: {
+			createCustomer: async (input) =>
+				caller.customers.createCustomer({
+					address: FIXTURE_ADDRESS,
+					...input,
+					attachBin: await fixtureBinFor(profileId),
+				}),
+			updateCustomer: (input) => caller.customers.updateCustomer(input),
+		},
+	};
+}
+
+/** A fresh, unoccupied asset in the profile's own purveyor, by BIN. */
+async function fixtureBinFor(profileId: string) {
+	const { rows } = await pool.query<{ water_purveyor_id: string | null }>(
+		"select water_purveyor_id from profiles where id = $1",
+		[profileId],
+	);
+	const wp = rows[0]?.water_purveyor_id;
+	if (!wp) return null;
+
+	const bin = `WF2-FX-${randomUUID().slice(0, 8)}`;
+	await pool.query(
+		`insert into bfa_assets (water_purveyor_id, bin, bfa_type, service_address)
+		 values ($1, $2, 'RP', '1 Kahale Farm Road')`,
+		[wp, bin],
+	);
+
+	return bin;
+}
+
 /** A well-formed agricultural customer with a unique address. */
 function agCustomer(
 	agRenewalDate: string,
@@ -172,7 +217,7 @@ function agCustomer(
 		name: `Kahale Farms ${emailCounter}`,
 		email: `wf2-${emailCounter}-${randomUUID().slice(0, 6)}@example.com`,
 		accountNumber: null,
-		address: null,
+		address: FIXTURE_ADDRESS,
 		status: "active",
 		rateCategory: "agricultural",
 		agRenewalDate,
@@ -196,7 +241,7 @@ function edit(
 		name: row.name,
 		email: row.email,
 		accountNumber: null,
-		address: null,
+		address: FIXTURE_ADDRESS,
 		status: row.status,
 		rateCategory: row.rateCategory,
 		agRenewalDate: row.agRenewalDate,
@@ -362,12 +407,12 @@ describeDb("Workflow 2 — AG rate renewal notice", () => {
 		const { appRouter } = await import("../routers/index");
 		const createCaller = t.createCallerFactory(appRouter);
 
-		callerFor = (profileId: string) =>
+		rawCallerFor = (profileId: string) =>
 			createCaller({
 				supabase: {} as never,
 				user: { id: profileId } as never,
 				resHeaders: new Headers(),
-			}) as unknown as ReturnType<typeof callerFor>;
+			}) as unknown as ReturnType<typeof rawCallerFor>;
 
 		await pool.query(
 			`insert into water_purveyors (id, company_name, pwsid, status)
@@ -1366,6 +1411,36 @@ describeDb("Workflow 2 — AG rate renewal notice", () => {
 				{ status: "pending", attempts: 0, provider_message_id: null },
 			]);
 			expect((await customerRow(customer.id))?.ag_renewal_date).toBe(PAST_DAY);
+		});
+
+		it("holds, without spending an attempt, while the water purveyor is blocked", async () => {
+			const customer = await callerFor(ids.adminA).customers.createCustomer(
+				agCustomer(PAST_DAY),
+			);
+			const job = await claimRenewalJob(customer.id);
+			const provider = fakeProvider();
+
+			await pool.query(
+				"update water_purveyors set status = 'blocked' where id = $1",
+				[wpA],
+			);
+			try {
+				const outcome = await runAgRenewalJob(job, { driver: provider.driver });
+
+				expect(outcome).toEqual({
+					kind: "held",
+					reason: AG_RENEWAL_HOLD_REASONS.blockedPurveyor,
+				});
+				expect(provider.calls).toHaveLength(0);
+				expect(await jobsFor(customer.id)).toMatchObject([
+					{ status: "pending", attempts: 0, provider_message_id: null },
+				]);
+			} finally {
+				await pool.query(
+					"update water_purveyors set status = 'active' where id = $1",
+					[wpA],
+				);
+			}
 		});
 
 		it("cancels at run time if the customer left the agricultural rate outside the procedures", async () => {

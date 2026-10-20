@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
 
+import {
+	CUSTOMER_BIN_NOT_FOUND_MESSAGE,
+	CUSTOMER_BIN_REQUIRED_MESSAGE,
+	customerBinReassignMessage,
+} from "@bfa-platform/api/lib/customer-bin";
 import { CUSTOMER_STALE_MESSAGE } from "@bfa-platform/api/lib/customer-revision";
 import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { DATE_MESSAGE, EMAIL_MESSAGE } from "@bfa-platform/ui/lib/validation";
@@ -24,7 +29,13 @@ import type { Customer } from "./customer-types";
  * The payload builder is exercised directly rather than only through the DOM —
  * it is where the rule that a standard customer carries no renewal date lives
  * on the client, and that rule has to hold whichever control set it.
+ *
+ * The BIN is the field that ties a customer to an asset — and so to every
+ * notice — so a customer holding none must name one, and one who holds some
+ * sees them listed and may attach another.
  */
+
+const BIN_REQUIRED = "Enter the BIN of the assembly this customer occupies.";
 
 function customer(overrides: Partial<Customer> = {}): Customer {
 	return {
@@ -36,6 +47,8 @@ function customer(overrides: Partial<Customer> = {}): Customer {
 		rateCategory: "standard",
 		agRenewalDate: null,
 		status: "active",
+		revision: 1,
+		bins: ["1201"],
 		createdAt: "2026-09-01T00:00:00.000Z",
 		updatedAt: "2026-09-01T00:00:00.000Z",
 		...overrides,
@@ -71,17 +84,25 @@ function choose(label: string, option: string) {
 }
 
 function fillNewCustomer({
+	bin = "1201",
 	name = "Marta Ellison",
 	email = "marta@example.com",
+	address = "12 Canal Road",
 	rate = "Standard",
 	status = "Active",
 }: {
+	bin?: string;
 	name?: string;
 	email?: string;
+	address?: string;
 	rate?: string | null;
 	status?: string | null;
 } = {}) {
+	fireEvent.change(screen.getByLabelText("BIN"), { target: { value: bin } });
 	fireEvent.change(screen.getByLabelText("Name"), { target: { value: name } });
+	fireEvent.change(screen.getByLabelText("Address"), {
+		target: { value: address },
+	});
 	fireEvent.change(screen.getByLabelText("Email"), {
 		target: { value: email },
 	});
@@ -133,19 +154,30 @@ describe("buildCustomerPayload", () => {
 		expect(
 			buildCustomerPayload({
 				...emptyCustomerValues,
+				attachBin: "   ",
 				name: "  Marta Ellison  ",
 				email: "  marta@example.com ",
 				accountNumber: "   ",
-				address: "",
+				address: "  12 Canal Road ",
 				rateCategory: "standard",
 				status: "active",
 			}),
 		).toMatchObject({
+			attachBin: null,
 			name: "Marta Ellison",
 			email: "marta@example.com",
 			accountNumber: null,
-			address: null,
+			address: "12 Canal Road",
 		});
+	});
+
+	it("sends the BIN to attach, trimmed", () => {
+		expect(
+			buildCustomerPayload({
+				...customerToFormValues(customer()),
+				attachBin: "  1202 ",
+			}).attachBin,
+		).toBe("1202");
 	});
 
 	it("never names a water purveyor", () => {
@@ -173,6 +205,12 @@ describe("isCompletedCustomer", () => {
 });
 
 describe("customerToFormValues", () => {
+	it("opens the BIN to attach empty, whatever the customer already holds", () => {
+		expect(
+			customerToFormValues(customer({ bins: ["1201", "1202"] })).attachBin,
+		).toBe("");
+	});
+
 	it("turns null columns into empty fields", () => {
 		expect(
 			customerToFormValues(
@@ -210,6 +248,25 @@ describe("customerFormErrors", () => {
 				data: { code: "CONFLICT" },
 			}),
 		).toEqual({ errorMessage: CUSTOMER_STALE_MESSAGE });
+	});
+
+	it("routes a missing or unknown BIN to the BIN field", () => {
+		for (const message of [
+			CUSTOMER_BIN_REQUIRED_MESSAGE,
+			CUSTOMER_BIN_NOT_FOUND_MESSAGE,
+		]) {
+			expect(
+				customerFormErrors({ message, data: { code: "NOT_FOUND" } }),
+			).toEqual({ binErrorMessage: message });
+		}
+	});
+
+	it("routes a BIN held by somebody else to the reassignment question", () => {
+		const message = customerBinReassignMessage("1201", "Kanoa Akana");
+
+		expect(
+			customerFormErrors({ message, data: { code: "PRECONDITION_FAILED" } }),
+		).toEqual({ binReassignMessage: message });
 	});
 
 	it("routes everything else to the form-wide message", () => {
@@ -266,10 +323,11 @@ describe("CustomerForm", () => {
 		submit();
 
 		expect(onSubmit).toHaveBeenCalledWith({
+			attachBin: "1201",
 			name: "Marta Ellison",
 			email: "marta@example.com",
 			accountNumber: "AC-4471",
-			address: null,
+			address: "12 Canal Road",
 			rateCategory: "standard",
 			agRenewalDate: null,
 			status: "active",
@@ -287,17 +345,19 @@ describe("CustomerForm", () => {
 		expect(
 			screen.getAllByRole("alert").map((node) => node.textContent),
 		).toEqual([
+			BIN_REQUIRED,
 			"Name is required.",
 			"Email is required.",
+			"Address is required.",
 			"Select a rate category.",
 			"Select a status.",
 		]);
 
-		const name = screen.getByLabelText("Name");
-		expect(document.activeElement).toBe(name);
-		expect(name.getAttribute("aria-invalid")).toBe("true");
-		expect(name.getAttribute("aria-describedby")).toBe(
-			screen.getByText("Name is required.").id,
+		const bin = screen.getByLabelText("BIN");
+		expect(document.activeElement).toBe(bin);
+		expect(bin.getAttribute("aria-invalid")).toBe("true");
+		expect(bin.getAttribute("aria-describedby")).toBe(
+			screen.getByText(BIN_REQUIRED).id,
 		);
 	});
 
@@ -357,6 +417,7 @@ describe("CustomerForm", () => {
 			initialValues: customerToFormValues(
 				customer({ rateCategory: "agricultural", agRenewalDate: "2027-03-01" }),
 			),
+			heldBins: ["1201"],
 			submitLabel: "Save changes",
 		});
 
@@ -417,6 +478,7 @@ describe("CustomerForm", () => {
 					agRenewalDate: "2027-03-01",
 				}),
 			),
+			heldBins: ["1201"],
 			submitLabel: "Save changes",
 		});
 
@@ -475,6 +537,7 @@ describe("CustomerForm — duplicate email refusal", () => {
 	it("shows the refusal under the Email field with the shared inline error, not the form banner", () => {
 		const { onSubmit } = renderForm({
 			initialValues: customerToFormValues(customer()),
+			heldBins: ["1201"],
 			submitLabel: "Save changes",
 			emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE,
 		});
@@ -498,6 +561,7 @@ describe("CustomerForm — duplicate email refusal", () => {
 	it("clears when the address changes, and returns for the same address in another spelling", () => {
 		renderForm({
 			initialValues: customerToFormValues(customer()),
+			heldBins: ["1201"],
 			submitLabel: "Save changes",
 			emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE,
 		});
@@ -512,5 +576,123 @@ describe("CustomerForm — duplicate email refusal", () => {
 		// The server compares trimmed, lowercased addresses — so does the form.
 		fireEvent.change(email, { target: { value: "  MARTA@Example.com " } });
 		expect(screen.getByText(CUSTOMER_EMAIL_TAKEN_MESSAGE)).toBeTruthy();
+	});
+});
+
+describe("CustomerForm — the BIN", () => {
+	it("asks a new customer for a BIN, and marks it required", () => {
+		renderForm();
+
+		const bin = screen.getByLabelText("BIN");
+		expect(bin.getAttribute("aria-required")).toBe("true");
+		expect(screen.queryByText("Attached BINs")).toBeNull();
+	});
+
+	it("refuses an address left blank", () => {
+		const { onSubmit } = renderForm();
+
+		fillNewCustomer({ address: "   " });
+		submit();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText("Address is required.")).toBeTruthy();
+		expect(document.activeElement).toBe(screen.getByLabelText("Address"));
+	});
+
+	it("lists the BINs an existing customer holds and lets another be attached", () => {
+		const { onSubmit } = renderForm({
+			initialValues: customerToFormValues(customer()),
+			heldBins: ["1201", "1202"],
+			submitLabel: "Save changes",
+		});
+
+		expect(screen.getByText("Attached BINs")).toBeTruthy();
+		expect(screen.getByText("1201")).toBeTruthy();
+		expect(screen.getByText("1202")).toBeTruthy();
+
+		const another = screen.getByLabelText("Attach another BIN");
+		expect(another.getAttribute("aria-required")).toBeNull();
+
+		// Optional now: saving without one sends no BIN at all.
+		submit("Save changes");
+		expect(onSubmit).toHaveBeenLastCalledWith(
+			expect.objectContaining({ attachBin: null }),
+		);
+
+		fireEvent.change(another, { target: { value: "1220" } });
+		submit("Save changes");
+		expect(onSubmit).toHaveBeenLastCalledWith(
+			expect.objectContaining({ attachBin: "1220" }),
+		);
+	});
+
+	it("requires a BIN from an existing customer who holds none", () => {
+		const { onSubmit } = renderForm({
+			initialValues: customerToFormValues(customer({ bins: [] })),
+			heldBins: [],
+			submitLabel: "Save changes",
+		});
+
+		submit("Save changes");
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText(BIN_REQUIRED)).toBeTruthy();
+	});
+
+	it("shows an unknown BIN under the BIN field until the BIN changes", () => {
+		renderForm({ binErrorMessage: CUSTOMER_BIN_NOT_FOUND_MESSAGE });
+
+		fillNewCustomer({ bin: "9999" });
+		expect(screen.queryByText(CUSTOMER_BIN_NOT_FOUND_MESSAGE)).toBeNull();
+
+		submit();
+
+		const bin = screen.getByLabelText("BIN");
+		const message = screen.getByText(CUSTOMER_BIN_NOT_FOUND_MESSAGE);
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(bin.getAttribute("aria-describedby")).toBe(message.id);
+		expect(document.querySelector('[data-slot="form-error"]')).toBeNull();
+
+		fireEvent.change(bin, { target: { value: "1201" } });
+		expect(screen.queryByText(CUSTOMER_BIN_NOT_FOUND_MESSAGE)).toBeNull();
+	});
+
+	it("asks before moving a BIN from another customer, and resends with the answer", () => {
+		const question = customerBinReassignMessage("1201", "Kanoa Akana");
+		const { onSubmit } = renderForm({ binReassignMessage: question });
+
+		fillNewCustomer();
+		submit();
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit.mock.calls[0]?.[0]).not.toHaveProperty(
+			"acknowledgeReassign",
+		);
+
+		expect(screen.getByText(question)).toBeTruthy();
+		fireEvent.click(
+			screen.getByRole("button", { name: "Move it to this customer" }),
+		);
+
+		expect(onSubmit).toHaveBeenCalledTimes(2);
+		expect(onSubmit).toHaveBeenLastCalledWith(
+			expect.objectContaining({ attachBin: "1201", acknowledgeReassign: true }),
+		);
+	});
+
+	it("drops the question once a different BIN is typed", () => {
+		const question = customerBinReassignMessage("1201", "Kanoa Akana");
+		renderForm({ binReassignMessage: question });
+
+		fillNewCustomer();
+		submit();
+		expect(screen.getByText(question)).toBeTruthy();
+
+		fireEvent.change(screen.getByLabelText("BIN"), {
+			target: { value: "1202" },
+		});
+		expect(screen.queryByText(question)).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Move it to this customer" }),
+		).toBeNull();
 	});
 });

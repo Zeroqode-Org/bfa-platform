@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
 
+import {
+	CUSTOMER_BIN_NOT_FOUND_MESSAGE,
+	customerBinReassignMessage,
+} from "@bfa-platform/api/lib/customer-bin";
 import { CUSTOMER_STALE_MESSAGE } from "@bfa-platform/api/lib/customer-revision";
 import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -31,6 +35,9 @@ const createFn = vi.fn();
 
 vi.mock("@/utils/trpc", () => ({
 	trpc: {
+		// Attaching a BIN moves an asset's customer, so a save refreshes the
+		// assets screens' cache as well.
+		assets: { pathKey: () => ["assets"] },
 		customers: {
 			listCustomers: {
 				queryOptions: () => ({
@@ -73,6 +80,7 @@ const active: Customer = {
 	agRenewalDate: null,
 	status: "active",
 	revision: 4,
+	bins: ["1201", "1202"],
 	createdAt: "2026-09-01T00:00:00.000Z",
 	updatedAt: "2026-09-01T00:00:00.000Z",
 };
@@ -88,7 +96,44 @@ const suspendedAgricultural: Customer = {
 	agRenewalDate: "2027-03-01",
 	status: "suspended",
 	revision: 7,
+	bins: [],
 };
+
+/** Types the add form's required text fields. */
+function fillRequiredText({
+	bin = "1201",
+	name = "Kanoa Akana",
+	email = "kanoa@example.com",
+	address = "45-560 Kam Hwy",
+}: {
+	bin?: string;
+	name?: string;
+	email?: string;
+	address?: string;
+} = {}) {
+	for (const [label, value] of [
+		["BIN", bin],
+		["Name", name],
+		["Email", email],
+		["Address", address],
+	] as const) {
+		fireEvent.change(screen.getByLabelText(label), { target: { value } });
+	}
+}
+
+/** Answers the add form's two selects. */
+function chooseStandardActive() {
+	for (const [label, option] of [
+		["Rate category", "Standard"],
+		["Status", "Active"],
+	] as const) {
+		fireEvent.click(screen.getByLabelText(label));
+		const item = screen.getByRole("option", { name: option });
+		fireEvent.pointerDown(item);
+		fireEvent.pointerUp(item);
+		fireEvent.click(item);
+	}
+}
 
 function renderTable() {
 	const queryClient = new QueryClient({
@@ -160,6 +205,8 @@ describe("CustomersTable", () => {
 			rateCategory: "standard",
 			agRenewalDate: null,
 			status: "suspended",
+			// A status flip attaches nothing.
+			attachBin: null,
 		});
 	});
 
@@ -384,12 +431,8 @@ describe("CustomersTable", () => {
 		renderTable();
 
 		fireEvent.click(screen.getAllByRole("button", { name: "Add customer" })[0]);
-		fireEvent.change(await screen.findByLabelText("Name"), {
-			target: { value: "Marta Ellison Two" },
-		});
-		fireEvent.change(screen.getByLabelText("Email"), {
-			target: { value: "MARTA@example.com" },
-		});
+		await screen.findByLabelText("BIN");
+		fillRequiredText({ name: "Marta Ellison Two", email: "MARTA@example.com" });
 		for (const [label, option] of [
 			["Rate category", "Standard"],
 			["Status", "Active"],
@@ -414,6 +457,88 @@ describe("CustomersTable", () => {
 		// Still open, still correctable, and nothing popped up somewhere else.
 		expect(screen.getByRole("dialog")).toBeTruthy();
 		expect(toast.error).not.toHaveBeenCalled();
+	});
+
+	it("lists each customer's BINs, and flags one who holds none", async () => {
+		renderTable();
+
+		expect(await screen.findByText("1201, 1202")).toBeTruthy();
+		// The suspended agricultural customer is attached to nothing — a record
+		// no notice can reach, so it says so rather than showing a dash.
+		expect(screen.getByText("No BIN")).toBeTruthy();
+	});
+
+	it("shows the BINs an edited customer already holds", async () => {
+		renderTable();
+
+		fireEvent.click(
+			(await screen.findAllByRole("button", { name: "Edit" }))[0],
+		);
+
+		const dialog = await screen.findByRole("dialog");
+		expect(dialog.textContent).toContain("Attached BINs");
+		expect(screen.getByLabelText("Attach another BIN")).toBeTruthy();
+	});
+
+	it("shows an unknown BIN under the BIN field, not as a banner or a toast", async () => {
+		const { toast } = await import("sonner");
+		vi.mocked(toast.error).mockClear();
+		createFn.mockRejectedValue(
+			Object.assign(new Error(CUSTOMER_BIN_NOT_FOUND_MESSAGE), {
+				data: { code: "NOT_FOUND" },
+			}),
+		);
+		renderTable();
+
+		fireEvent.click(screen.getAllByRole("button", { name: "Add customer" })[0]);
+		await screen.findByLabelText("BIN");
+		fillRequiredText({ bin: "9999" });
+		chooseStandardActive();
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+
+		const message = await screen.findByText(CUSTOMER_BIN_NOT_FOUND_MESSAGE);
+		expect(message.getAttribute("data-slot")).toBe("field-error");
+		expect(screen.getByLabelText("BIN").getAttribute("aria-invalid")).toBe(
+			"true",
+		);
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		expect(toast.error).not.toHaveBeenCalled();
+	});
+
+	it("moves a BIN from another customer only once that is confirmed", async () => {
+		const question = customerBinReassignMessage("1201", "Marta Ellison");
+		createFn.mockRejectedValueOnce(
+			Object.assign(new Error(question), {
+				data: { code: "PRECONDITION_FAILED" },
+			}),
+		);
+		createFn.mockResolvedValueOnce({ ...active, id: "new", name: "Kanoa" });
+		renderTable();
+
+		fireEvent.click(screen.getAllByRole("button", { name: "Add customer" })[0]);
+		await screen.findByLabelText("BIN");
+		fillRequiredText({
+			bin: "1201",
+			name: "Kanoa",
+			email: "kanoa@example.com",
+		});
+		chooseStandardActive();
+		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
+
+		await screen.findByText(question);
+		expect(createFn).toHaveBeenCalledTimes(1);
+		expect(createFn.mock.calls[0]?.[0]).not.toHaveProperty(
+			"acknowledgeReassign",
+		);
+
+		fireEvent.click(
+			screen.getByRole("button", { name: "Move it to this customer" }),
+		);
+
+		await waitFor(() => expect(createFn).toHaveBeenCalledTimes(2));
+		expect(createFn).toHaveBeenLastCalledWith(
+			expect.objectContaining({ attachBin: "1201", acknowledgeReassign: true }),
+		);
 	});
 
 	it("offers a way to add the first customer when there are none", async () => {
