@@ -15,14 +15,14 @@ import {
  * having typed a placeholder.
  */
 describe("certifierListLine", () => {
-	it("joins name, company and licence number", () => {
+	it("joins company, name and licence number", () => {
 		expect(
 			certifierListLine({
 				fullName: "Alana Kealoha",
 				company: "Island Backflow",
 				idNumber: "HI-4471",
 			}),
-		).toBe("Alana Kealoha — Island Backflow — HI-4471");
+		).toBe("Island Backflow — Alana Kealoha — HI-4471");
 	});
 
 	it("skips whatever is missing rather than leaving empty separators", () => {
@@ -56,7 +56,7 @@ describe("certifierListText", () => {
 		expect(text).toBe(
 			[
 				CERTIFIER_LIST_HEADING,
-				"- Alana Kealoha — Island Backflow",
+				"- Island Backflow — Alana Kealoha",
 				"- Kenji Watanabe — HI-8802",
 			].join("\n"),
 		);
