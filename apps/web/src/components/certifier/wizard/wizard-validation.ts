@@ -59,13 +59,7 @@ export function stepMissingKeys(step: number, form: WizardFormState): string[] {
 		case "identification": {
 			// The BIN is optional and need not exist in the database: a typed BIN
 			// that is not found is kept as text and the assembly is entered by hand.
-			// What it may not be is unchecked. A BIN typed and never looked up would
-			// be filed as text even when it names a real assembly — the test lands
-			// unlinked and its notices wait for a WP to link it by hand. So a typed
-			// BIN must be the one last looked up, found or not, or be cleared.
-			const typed = form.bin.trim();
-
-			return typed !== "" && typed !== form.resolvedBin ? [FIELD_KEYS.bin] : [];
+			return [];
 		}
 		case "assembly":
 			return missingAssemblyFields(form.wizardData);
