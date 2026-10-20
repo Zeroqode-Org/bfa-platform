@@ -60,8 +60,9 @@ import {
 	wpCertifierAuthorizations,
 	wpFeatureFlags,
 } from "@bfa-platform/db/schema";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 
+import { alphabetically } from "../lib/alphabetical-order";
 import { type EmailDriver, resolveSenderIdentity } from "../lib/email";
 import { renderTextEmail } from "../lib/email-layout";
 import {
@@ -517,9 +518,17 @@ async function activeCertifiersFor(waterPurveyorId: string) {
 					eq(certifiers.status, "active"),
 				),
 			)
-			// `id` breaks the tie so two testers with the same name keep a stable
-			// order between one customer's email and the next.
-			.orderBy(asc(profiles.fullName), asc(certifiers.id))
+			// By company, digits first and ignoring case — the order the client
+			// asked for (WP/Admin feedback: "1A1A Backflow Testing, 808 Plumbing,
+			// A-1 Plumbing…"), the same as the failure notice's repair companies.
+			// A tester with no company goes last rather than ahead of everyone, a
+			// blank one included. Then by name, and `id` breaks the tie so two
+			// testers keep a stable order between one customer's email and the next.
+			.orderBy(
+				sql`lower(nullif(trim(${certifiers.company}), '')) collate "C" nulls last`,
+				alphabetically(profiles.fullName),
+				asc(certifiers.id),
+			)
 	);
 }
 

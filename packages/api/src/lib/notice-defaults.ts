@@ -147,7 +147,7 @@ export const CERTIFIER_LIST_HEADING =
 /**
  * One tester's line in that list.
  *
- * Name, company and licence number, joined with an em dash and skipping
+ * Company, name and licence number, joined with an em dash and skipping
  * whatever is missing — `certifiers` has no phone or email column, and the
  * customer's next step is to look the tester up or ask the purveyor, so
  * inventing a contact field here would be inventing data. A certifier with no
@@ -161,7 +161,9 @@ export type CertifierListEntry = {
 };
 
 export function certifierListLine(entry: CertifierListEntry): string {
-	const parts = [entry.fullName, entry.company, entry.idNumber]
+	// Company first: the list is ordered by company, and a customer reads it
+	// as a list of companies to call.
+	const parts = [entry.company, entry.fullName, entry.idNumber]
 		.map((part) => part?.trim())
 		.filter((part): part is string => Boolean(part));
 
