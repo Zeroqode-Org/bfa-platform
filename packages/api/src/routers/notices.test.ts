@@ -17,6 +17,7 @@ import {
 
 import { EMAIL_BRAND_NAME } from "../lib/email-layout";
 import { PLATFORM_DEFAULT_NOTICE_TEMPLATES } from "../lib/notice-defaults";
+import { BLOCKED_PURVEYOR_BROADCAST_MESSAGE } from "./notices";
 
 /**
  * The notices procedures against real Postgres: who may read the templates, who
@@ -745,6 +746,47 @@ describeDb("notices procedures", () => {
 	});
 
 	describe("sendGeneralInfoBroadcast", () => {
+		it("refuses a blocked purveyor, and leaves the same address in another purveyor alone", async () => {
+			// One person can be a customer of two purveyors under one email. A
+			// block silences the blocked purveyor only, never the address.
+			const shared = randomUUID();
+			await pool.query(
+				`insert into customers (id, water_purveyor_id, name, email, address, rate_category, status)
+				 values ($1, $2, 'Shared Address Customer', 'standard.a@example.com', '1 Shared Way', 'standard', 'active')`,
+				[shared, wpB],
+			);
+			await pool.query(
+				"update water_purveyors set status = 'blocked' where id = $1",
+				[wpA],
+			);
+
+			try {
+				const lines = captureLogs();
+
+				await expect(
+					callerFor(ids.adminA).notices.sendGeneralInfoBroadcast({
+						subject: "From a blocked purveyor",
+						body: "Should not arrive.",
+						recipientFilter: "all_customers",
+					}),
+				).rejects.toThrow(BLOCKED_PURVEYOR_BROADCAST_MESSAGE);
+				expect(deliveredTo(lines)).toEqual([]);
+
+				await callerFor(ids.adminB).notices.sendGeneralInfoBroadcast({
+					subject: "From an active purveyor",
+					body: "Should arrive.",
+					recipientFilter: "all_customers",
+				});
+				expect(deliveredTo(lines)).toContain("standard.a@example.com");
+			} finally {
+				await pool.query(
+					"update water_purveyors set status = 'active' where id = $1",
+					[wpA],
+				);
+				await pool.query("delete from customers where id = $1", [shared]);
+			}
+		});
+
 		it("writes to every active customer in the tenant and to nobody else", async () => {
 			const lines = captureLogs();
 

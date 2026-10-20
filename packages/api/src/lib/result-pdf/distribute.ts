@@ -1,7 +1,7 @@
 import { db } from "@bfa-platform/db";
 import { certifiers, profiles, testSubmissions } from "@bfa-platform/db/schema";
 import { and, eq } from "drizzle-orm";
-
+import { isPurveyorBlocked } from "../../scheduler/purveyor-status";
 import type { AuditActor } from "../audit-actor";
 import { sendEmail } from "../email";
 import {
@@ -70,8 +70,15 @@ export async function sendResultDocumentEmails({
 		)
 		.limit(1);
 
+	// A blocked purveyor's customers get nothing on its behalf — see
+	// `isPurveyorBlocked`. The certifier's and the purveyor's own copies still
+	// go: they are the platform's record of the test, not mail to a customer.
+	// Keyed on this submission's purveyor, never on the address, so the same
+	// person as a customer of another purveyor is unaffected.
+	const customerBlocked = await isPurveyorBlocked(waterPurveyorId);
+
 	const recipients: { to: string | null; label: string }[] = [
-		{ to: customerEmail || null, label: "customer" },
+		{ to: customerBlocked ? null : customerEmail || null, label: "customer" },
 		{
 			to: certifierRow
 				? await resolveProfileEmail(certifierRow.profileId)

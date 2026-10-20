@@ -496,7 +496,15 @@ feedback): a Super-Admin block stops the platform writing to that purveyor's
 customers, for the reminder chain, the failure notice and the AG renewal notice
 alike (`isPurveyorBlocked` in `scheduler/purveyor-status.ts`). It is a hold, not
 a cancel, because a block is reversible — once unblocked, the waiting stage goes
-out on its next recheck. The job stays `pending`, keeps its full retry budget (a hold is not a
+out on its next recheck.
+
+The block is about the purveyor, never the address. Customers belong to one
+purveyor, and the same person can be a customer of two under one email; blocking
+one leaves the other's mail to that address untouched. Outside the scheduler the
+same rule applies to the two other ways mail reaches a customer: the result PDF
+skips the customer copy (the certifier's and the purveyor's copies still go), and
+the General info broadcast is refused. A blocked purveyor's staff can still sign
+in. The job stays `pending`, keeps its full retry budget (a hold is not a
 failure), is re-queued a day out, and carries the reason in `last_error` for
 whoever asks why no notice arrived.
 
