@@ -169,7 +169,8 @@ function sortValue(row: FailListRow, key: SortKey): string {
 	if (key === "customer") return row.currentCustomerName ?? "";
 	if (key === "failingSince") return row.failingSince;
 
-	return row[key];
+	// The server leaves no-BIN assets off the fail list; `??` is for the type.
+	return row[key] ?? "";
 }
 
 /**
@@ -194,8 +195,9 @@ function sortRows(
 		if (primary !== 0) return primary * direction;
 
 		return (
-			a.bin.localeCompare(b.bin, "en", { numeric: true }) ||
-			a.id.localeCompare(b.id)
+			sortValue(a, "bin").localeCompare(sortValue(b, "bin"), "en", {
+				numeric: true,
+			}) || a.id.localeCompare(b.id)
 		);
 	});
 }

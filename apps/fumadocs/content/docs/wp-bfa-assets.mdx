@@ -204,6 +204,55 @@ panel naming the value being left behind appears as soon as the field differs
 from the record, and disappears if it is typed back. The warning is the point at
 which the decision can still be taken back.
 
+## The no-BIN asset
+
+A certifier who has no BIN, or types one the register does not have, goes on
+with no BIN (the wizard clears the field). At submit the test registers a fresh
+asset from its own answers — type, service address, make, model, serial number,
+size, location, and an annual test date one year after the test — **with
+`bin` null** and **no customer**, and is linked to it (client, October 2026).
+`0021` made the column nullable; a `CHECK` keeps a blank BIN `NULL`, never
+`''`, and the existing per-purveyor unique constraint still applies to every
+real BIN (Postgres treats NULLs as distinct).
+
+Until it has a BIN the asset is **off the notice machinery**: no reminder chain
+is scheduled for it, its tests' results are held — a fail queues no failure
+notice and does not count toward the fail list — and the handlers cancel any
+job that somehow reaches one. One rule enforces this in two places:
+`applySubmittedTestResult` treats a test on a no-BIN asset as unlinked, and
+`reconcileAssetNoticeChain` withdraws rather than schedules.
+
+The asset page shows *No BIN*, a warning explaining the state, and **Assign
+BIN** in place of *Edit asset*. Saving a BIN there — `updateAsset`, with the BIN
+going from null to a value — **activates** the asset in the same transaction
+(`activateAssetWithBin`): every submitted test on it has its result applied,
+oldest first (a fail queues its notice now), and the reminder chain is
+scheduled from the annual test date.
+
+The customer is attached by hand (client: the WP *"manually link[s] the new
+asset to a customer, keeping our master database clean"*), so the customer the
+certifier typed is **never created or attached automatically**. It stays in the
+test's answers, and while nobody is attached — before or after the BIN is
+assigned — the page offers it as a suggestion (`getAsset` → `testCustomer`, from the latest
+submitted test):
+
+- **An existing customer has that email** — *Attach {name}* opens the usual
+  attach dialog with them selected; the WP confirms, and a suspended customer
+  still goes through its confirmation.
+- **Nobody has it** — *Create customer from test* opens the customer form
+  filled in from the test (standard rate, active, and this asset's BIN as the
+  BIN to attach) for the WP to check and complete; saving creates the customer
+  and `createCustomer` attaches them through that BIN. A new customer is always
+  created through a BIN, so on an asset that has none yet the page says to
+  assign the BIN first.
+
+Ignoring the suggestion and attaching someone else works as for any asset. The [dashboard's No-BIN table](/docs/wp-dashboard#no-bin-reports)
+lists every one still waiting.
+
+If the assembly turns out to be registered already, the test is linked to that
+asset from [Submitted Tests](/docs/wp-submitted-tests#from-a-no-bin-asset) and
+the empty no-BIN asset is deleted.
+
 ## Assigning a customer
 
 `assignCustomer` is three writes in one transaction:

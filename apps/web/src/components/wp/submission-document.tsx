@@ -66,6 +66,7 @@ import {
 } from "@bfa-platform/ui/lib/validation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link2, PenLine, Search, TriangleAlert } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 
@@ -526,7 +527,7 @@ export function SubmissionDocument({
 					</p>
 				)}
 
-				{submission.bfaAssetId ? null : (
+				{submission.bin ? null : (
 					<LinkAssetPanel
 						submission={submission}
 						canEdit={canEdit}
@@ -640,11 +641,13 @@ export function SubmissionDocument({
 							readOnly={!canEdit}
 							readOnlyValue={form.submittedBinText || "—"}
 							hint={
-								submission.bfaAssetId
-									? `Linked to ${bin.text}. This records what was written on the day.`
-									: canEdit
-										? "For a new assembly, enter the BIN you are giving it. Saving creates the asset from this test and links them."
-										: undefined
+								submission.bfaAssetId && !submission.bin
+									? "Linked to a new asset with no BIN yet — assign its BIN on the asset's page."
+									: submission.bfaAssetId
+										? `Linked to ${bin.text}. This records what was written on the day.`
+										: canEdit
+											? "For a new assembly, enter the BIN you are giving it. Saving creates the asset from this test and links them."
+											: undefined
 							}
 						>
 							{() => (
@@ -1094,23 +1097,50 @@ function LinkAssetPanel({
 		}),
 	);
 
-	const rows = assets.data?.rows ?? [];
+	// Only numbered assets: linking to another no-BIN one would number nothing.
+	const rows = (assets.data?.rows ?? []).filter((asset) => asset.bin);
+	// Submitted since the wizard registers a no-BIN asset for a test with no
+	// BIN; before that, the test was left unlinked.
+	const noBinAssetId = submission.bfaAssetId;
 
 	return (
 		<Card className="flex flex-col gap-3 border-warning/30 bg-warning-bg/40 p-4">
 			<div className="flex flex-col gap-1">
 				<h3 className="flex items-center gap-1.5 font-bold text-[14.5px]">
 					<Link2 className="size-4" aria-hidden="true" />
-					This test is not linked to an asset
+					{noBinAssetId
+						? "This test has no BIN"
+						: "This test is not linked to an asset"}
 				</h3>
-				<p className="text-[12px] text-muted-foreground">
-					{submission.submittedBinText
-						? `The certifier typed “${submission.submittedBinText}”, which matched no assembly.`
-						: "The certifier left the BIN blank."}{" "}
-					{canEdit
-						? "Find the assembly it belongs to and attach it — or, for a new assembly, enter its BIN under Test record and save."
-						: READ_ONLY_NOTE}
-				</p>
+				{noBinAssetId ? (
+					<p className="text-[12px] text-muted-foreground">
+						The certifier had no BIN, so a new asset was registered without one.{" "}
+						{canEdit ? (
+							<>
+								If the assembly is already registered, link the test to it below
+								— the empty asset is removed. Otherwise{" "}
+								<Link
+									href={`/wp/assets/${noBinAssetId}`}
+									className="text-primary hover:underline"
+								>
+									assign the new asset its BIN
+								</Link>
+								.
+							</>
+						) : (
+							READ_ONLY_NOTE
+						)}
+					</p>
+				) : (
+					<p className="text-[12px] text-muted-foreground">
+						{submission.submittedBinText
+							? `The certifier typed “${submission.submittedBinText}”, which matched no assembly.`
+							: "The certifier left the BIN blank."}{" "}
+						{canEdit
+							? "Find the assembly it belongs to and attach it — or, for a new assembly, enter its BIN under Test record and save."
+							: READ_ONLY_NOTE}
+					</p>
+				)}
 			</div>
 
 			{canEdit ? (

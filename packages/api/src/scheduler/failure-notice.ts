@@ -83,6 +83,8 @@ export const FAILURE_CANCEL_REASONS = {
 		"The submitted test this notice answers is no longer a submitted failing test.",
 	notLinkedToAsset:
 		"The submitted test this notice answers is not linked to an assembly.",
+	assetHasNoBin:
+		"The assembly this notice is about has no BIN yet, so it cannot be named.",
 	assetGone: "The assembly is no longer registered to this water purveyor.",
 	resolvedByLaterPass:
 		"A passing test was submitted for this assembly after the failure, which resolves it.",
@@ -287,6 +289,14 @@ export async function runFailureNoticeJob(
 
 	if (!asset) return cancel(job, null, FAILURE_CANCEL_REASONS.assetGone);
 
+	// Never queued for a no-BIN asset (`applySubmittedTestResult`); a job that
+	// outlived its asset's BIN is withdrawn rather than sent without a name.
+	if (!asset.bin) {
+		return cancel(job, asset.id, FAILURE_CANCEL_REASONS.assetHasNoBin);
+	}
+
+	const named = { ...asset, bin: asset.bin };
+
 	if (
 		await passSubmittedAfter({
 			assetId: asset.id,
@@ -307,12 +317,12 @@ export async function runFailureNoticeJob(
 		now,
 		driver,
 		render: async () => {
-			const recipient = await resolveRecipient(asset);
+			const recipient = await resolveRecipient(named);
 
 			if ("hold" in recipient) return recipient;
 
 			return renderFailureNotice(
-				asset,
+				named,
 				recipient.customer,
 				submission.testDate,
 				driver,

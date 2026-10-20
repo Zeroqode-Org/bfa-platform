@@ -222,17 +222,40 @@ Three further rules on that mutation:
   two-sided tenancy question. `test_submissions_update_own_wp` asks the same
   question again for anything arriving through PostgREST — see
   [the asset-tenancy clause](#the-asset-tenancy-clause) below.
-- It refuses a submission that already has an asset. Changing an existing link
-  is a different act from making a missing one, and the BIN is the single most
-  protected value in a submission.
-- The update carries `bfa_asset_id IS NULL` in its predicate as well as checking
-  it first, so two clerks racing on the same row produce a conflict rather than
-  one silently overwriting the other's answer.
+- It refuses a submission that already has a **numbered** asset. Changing an
+  existing link is a different act from making a missing one, and the BIN is
+  the single most protected value in a submission. A test on a
+  [no-BIN asset](#from-a-no-bin-asset) is still the purveyor's to place.
+- The update carries the link as it was read (`bfa_asset_id IS NULL`, or the
+  no-BIN asset's id) in its predicate as well as checking it first, so two
+  clerks racing on the same row produce a conflict rather than one silently
+  overwriting the other's answer.
 
 What the certifier typed is kept, not overwritten by the BIN it resolved to.
 `submitted_bin_text` records what was written on the day.
 
+### From a no-BIN asset
+
+Since `0021` a test submitted with no BIN is not left unlinked: the wizard
+registers a [no-BIN asset](/docs/wp-bfa-assets#the-no-bin-asset) for it. The
+document still opens on the link panel — *"This test has no BIN"* — because the
+assembly may well be one the purveyor already has. Two answers:
+
+- **It is already registered.** Link the test to that asset here. The test
+  moves, and the no-BIN asset it leaves is **deleted** in the same transaction
+  (with any occupancy rows the WP had attached to it), so the master register
+  keeps one record per valve. It is kept instead if another test still points at
+  it or it has job history. The deletion logs `bfa_asset_deleted` with
+  `reason: "no_bin_asset_linked_to_existing"`, and the link line carries
+  `from_no_bin_asset_id`. Only numbered assets are offered, and the procedure
+  refuses another no-BIN asset as the target.
+- **It is a new assembly.** Assign the no-BIN asset its BIN on its own page —
+  the panel links there. The BIN field on the test is not where that happens for
+  these tests.
+
 ### A new assembly: assigning its BIN creates the asset
+
+This is the path for a test filed **before `0021`**, which has no asset at all.
 
 Linking answers "which existing assembly is this?". The other answer, and the
 usual one for a no-BIN test, is "none yet": a new BFA has no BIN until the

@@ -5,6 +5,7 @@ import {
 	customerAssignments,
 	customers,
 	profiles,
+	scheduledJobs,
 	testSubmissions,
 } from "@bfa-platform/db/schema";
 import { and, asc, count, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
@@ -531,7 +532,24 @@ export const submittedTestsRouter = router({
 
 			if (!submission) throw notFound();
 
-			if (submission.bfaAssetId) {
+			// A test linked to a no-BIN asset is still the purveyor's to place:
+			// the wizard registered that asset because the certifier had no BIN,
+			// and the assembly may well be one already numbered. A test linked to
+			// a numbered asset is not — re-pointing that is a different act.
+			const [currentAsset] = submission.bfaAssetId
+				? await db
+						.select({ id: bfaAssets.id, bin: bfaAssets.bin })
+						.from(bfaAssets)
+						.where(
+							and(
+								eq(bfaAssets.id, submission.bfaAssetId),
+								eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+							),
+						)
+						.limit(1)
+				: [];
+
+			if (submission.bfaAssetId && currentAsset?.bin !== null) {
 				throw new TRPCError({
 					code: "PRECONDITION_FAILED",
 					message: "This test is already linked to an asset",
@@ -553,17 +571,19 @@ export const submittedTestsRouter = router({
 				)
 				.limit(1);
 
-			if (!asset) {
+			// Never to another no-BIN asset: that would number nothing.
+			if (!asset?.bin) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
 					message: "No asset with that id in this water purveyor",
 				});
 			}
 
-			// `is null` in the predicate as well as in the check above: between the
-			// read and the write, another clerk may have linked the same submission.
-			// Without it the second request would quietly overwrite the first
-			// answer; with it, it matches no row and is reported as a conflict.
+			// The link as read, in the predicate as well as in the checks above:
+			// between the read and the write, another clerk may have linked the
+			// same submission. Without it the second request would quietly
+			// overwrite the first answer; with it, it matches no row and is
+			// reported as a conflict.
 			const row = await db.transaction(async (tx) => {
 				const [linked] = await tx
 					.update(testSubmissions)
@@ -574,7 +594,9 @@ export const submittedTestsRouter = router({
 					.where(
 						and(
 							eq(testSubmissions.id, submission.id),
-							isNull(testSubmissions.bfaAssetId),
+							submission.bfaAssetId
+								? eq(testSubmissions.bfaAssetId, submission.bfaAssetId)
+								: isNull(testSubmissions.bfaAssetId),
 							submittedRowsOf(waterPurveyorId),
 						),
 					)
@@ -604,7 +626,11 @@ export const submittedTestsRouter = router({
 					trigger: "test_submission_asset_linked",
 				});
 
-				return linked;
+				const deletedAssetId = currentAsset
+					? await deleteEmptyNoBinAsset(tx, currentAsset.id, waterPurveyorId)
+					: null;
+
+				return { ...linked, deletedAssetId };
 			});
 
 			// The sensitive one. This is the write that decides which physical valve
@@ -620,8 +646,22 @@ export const submittedTestsRouter = router({
 					bfa_asset_id: asset.id,
 					bin: asset.bin,
 					submitted_bin_text: submission.submittedBinText,
+					from_no_bin_asset_id: currentAsset?.id ?? null,
 				},
 			});
+
+			if (row.deletedAssetId) {
+				logSubmissionEvent("bfa_asset_deleted", {
+					actor: auditActor(ctx),
+					submissionId: row.id,
+					waterPurveyorId,
+					extra: {
+						asset_id: row.deletedAssetId,
+						bin: null,
+						reason: "no_bin_asset_linked_to_existing",
+					},
+				});
+			}
 
 			return readSubmission(waterPurveyorId, row.id);
 		}),
@@ -663,6 +703,51 @@ function withConsistentSignOff(
 	}
 
 	return { ...next, wizardData: answers };
+}
+
+/**
+ * Deletes the no-BIN asset a test has just been moved off, when nothing else
+ * is on it — the client's "keep the master database clean". Its occupancy rows
+ * go with it (an occupant the WP attached before realising the assembly was
+ * already registered). Kept when another test still points at it, or when it
+ * has job history, so nothing on record loses its asset. Returns the deleted
+ * id, or null when it stayed.
+ */
+async function deleteEmptyNoBinAsset(
+	tx: Pick<typeof db, "select" | "delete">,
+	assetId: string,
+	waterPurveyorId: string,
+): Promise<string | null> {
+	const [inUse] = await tx
+		.select({ id: sql`1` })
+		.from(bfaAssets)
+		.where(
+			and(
+				eq(bfaAssets.id, assetId),
+				sql`(exists (select 1 from ${testSubmissions} where ${testSubmissions.bfaAssetId} = ${assetId})
+					or exists (select 1 from ${scheduledJobs} where ${scheduledJobs.bfaAssetId} = ${assetId}))`,
+			),
+		)
+		.limit(1);
+
+	if (inUse) return null;
+
+	await tx
+		.delete(customerAssignments)
+		.where(eq(customerAssignments.bfaAssetId, assetId));
+
+	const [deleted] = await tx
+		.delete(bfaAssets)
+		.where(
+			and(
+				eq(bfaAssets.id, assetId),
+				eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+				isNull(bfaAssets.bin),
+			),
+		)
+		.returning({ id: bfaAssets.id });
+
+	return deleted?.id ?? null;
 }
 
 /** The constraint that makes a BIN unique inside one purveyor. */

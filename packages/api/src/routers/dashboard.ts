@@ -19,6 +19,7 @@ import {
 } from "../lib/dashboard-calendar";
 import { homeListInput, passFailBreakdownInput } from "../lib/dashboard-input";
 import { failListEntryCutoff } from "../lib/fail-list-rule";
+import { ASSEMBLY_FIELD_KEYS } from "../lib/wizard-input";
 import { newestSubmittedTestFirst } from "./submitted-tests";
 
 /**
@@ -76,7 +77,9 @@ export const dashboardRouter = router({
 	 *   * **Past due** — assets whose annual test date has passed, as of today
 	 *     in Hawaii (`isPastDue`), not the scheduler-written column.
 	 *   * **Submitted reports** — every submitted row in the tenant.
-	 *   * **No-BIN submissions** — submitted rows with a null `bfa_asset_id`.
+	 *   * **No-BIN submissions** — submitted rows with no BIN: linked to a
+	 *     no-BIN asset the wizard registered at submit, or (filed before that)
+	 *     not linked at all. See {@link noBinSubmission}.
 	 *
 	 * `submittedReports` is the build plan's "submissions awaiting review"
 	 * (§ 6.4.1), renamed to what the schema can actually support. There is no
@@ -122,9 +125,7 @@ export const dashboardRouter = router({
 					testsThisMonth: countWhere(
 						sql`${testSubmissions.testDate} between ${thisMonth.start} and ${thisMonth.end}`,
 					),
-					noBinSubmissions: countWhere(
-						sql`${testSubmissions.bfaAssetId} is null`,
-					),
+					noBinSubmissions: countWhere(noBinSubmission(waterPurveyorId)),
 				})
 				.from(testSubmissions)
 				.where(submittedRowsOf(waterPurveyorId)),
@@ -355,6 +356,58 @@ export const dashboardRouter = router({
 	}),
 
 	/**
+	 * The No-BIN table: submitted tests the purveyor still has to number, newest
+	 * first — the same order, and so the same head, as the incoming list.
+	 *
+	 * Each row is a work item. One linked to a no-BIN asset is opened on that
+	 * asset, where the WP assigns the BIN and attaches the customer, or the test
+	 * is linked to an assembly already registered (which deletes the empty
+	 * asset). One filed before no-BIN assets existed has no asset at all and is
+	 * opened on the test, where the BIN is typed as before.
+	 *
+	 * The service address is the asset's when there is one, else the test's own
+	 * answer — the WP needs to know where the valve is either way.
+	 */
+	noBinReports: wpProcedure.input(homeListInput).query(({ ctx, input }) => {
+		const waterPurveyorId = ctx.caller.waterPurveyorId;
+
+		return (
+			db
+				.select({
+					id: testSubmissions.id,
+					bfaAssetId: bfaAssets.id,
+					bfaType: testSubmissions.bfaType,
+					testDate: testSubmissions.testDate,
+					testResult: testSubmissions.testResult,
+					serviceAddress: sql<
+						string | null
+					>`coalesce(${bfaAssets.serviceAddress}, ${testSubmissions.wizardData} ->> ${ASSEMBLY_FIELD_KEYS.serviceAddress})`,
+					hasCustomer: sql<boolean>`${bfaAssets.currentCustomerId} is not null`,
+					certifierName: profiles.fullName,
+				})
+				.from(testSubmissions)
+				// Tenant-scoped on the join, as in `incomingReports`.
+				.leftJoin(
+					bfaAssets,
+					and(
+						eq(bfaAssets.id, testSubmissions.bfaAssetId),
+						eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+					),
+				)
+				.innerJoin(certifiers, eq(certifiers.id, testSubmissions.certifierId))
+				.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
+				.where(
+					and(
+						submittedRowsOf(waterPurveyorId),
+						noBinSubmission(waterPurveyorId),
+					),
+				)
+				.orderBy(...newestSubmittedTestFirst)
+				.limit(input.limit)
+		);
+	}),
+
+	/**
 	 * The assets whose annual test date has passed (`isPastDue`), oldest test
 	 * date first.
 	 *
@@ -446,6 +499,21 @@ export const dashboardRouter = router({
  */
 function countWhere(predicate: ReturnType<typeof sql>) {
 	return sql<number>`(count(*) filter (where ${predicate}))::int`;
+}
+
+/**
+ * A submitted test with no BIN: not linked to an asset (filed before the
+ * wizard registered no-BIN assets), or linked to one whose BIN is still null.
+ * One `not exists` covers both, and it is the card's and the table's single
+ * definition, so the count and the rows cannot disagree.
+ */
+function noBinSubmission(waterPurveyorId: string) {
+	return sql`not exists (
+		select 1 from ${bfaAssets}
+		where ${bfaAssets.id} = ${testSubmissions.bfaAssetId}
+			and ${bfaAssets.waterPurveyorId} = ${waterPurveyorId}
+			and ${bfaAssets.bin} is not null
+	)`;
 }
 
 /**
@@ -597,11 +665,14 @@ export function listFailingAssets({
 			// Inner, unlike the two home lists' left joins: a failing submission
 			// whose asset is missing or belongs to another purveyor represents no
 			// assembly this caller may see, so there is no safe row to render.
+			// A no-BIN asset is left out too: its result waits for the BIN, the
+			// same as its failure notice does (`applySubmittedTestResult`).
 			.innerJoin(
 				bfaAssets,
 				and(
 					eq(bfaAssets.id, failing.assetId),
 					eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+					isNotNull(bfaAssets.bin),
 				),
 			)
 			.leftJoin(

@@ -18,6 +18,9 @@ export type PassFailBreakdown = RouterOutputs["dashboard"]["passFailBreakdown"];
 export type IncomingReport =
 	RouterOutputs["dashboard"]["incomingReports"][number];
 
+/** One row of the No-BIN table — a submitted test still waiting for a BIN. */
+export type NoBinReport = RouterOutputs["dashboard"]["noBinReports"][number];
+
 /** One past-due asset. */
 export type DelinquentAsset =
 	RouterOutputs["dashboard"]["delinquentAssets"][number];

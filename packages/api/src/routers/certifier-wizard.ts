@@ -21,6 +21,7 @@ import {
 import { sendResultDocumentEmails } from "../lib/result-pdf/distribute";
 import { publishResultPdf } from "../lib/result-pdf/document-url";
 import { createStorageAdmin } from "../lib/storage-admin";
+import { noBinAssetFromSubmission } from "../lib/submission-asset";
 import {
 	allowedWizardKeys,
 	BIN_SUGGESTION_LIMIT,
@@ -257,7 +258,8 @@ export const certifierWizardRouter = router({
 				found: true as const,
 				asset: {
 					id: asset.id,
-					bin: asset.bin,
+					// The row matched `bin = input.bin`, so it is never a no-BIN asset.
+					bin: input.bin,
 					bfaType: asset.bfaType,
 					make: asset.make,
 					model: asset.model,
@@ -290,7 +292,7 @@ export const certifierWizardRouter = router({
 			// `%`, `_` and `\` are LIKE wildcards — a typed BIN is literal text.
 			const needle = input.query.replace(/[\\%_]/g, "\\$&");
 
-			return db
+			const rows = await db
 				.select({
 					id: bfaAssets.id,
 					bin: bfaAssets.bin,
@@ -309,6 +311,9 @@ export const certifierWizardRouter = router({
 					asc(bfaAssets.bin),
 				)
 				.limit(BIN_SUGGESTION_LIMIT);
+
+			// `ilike` never matches a no-BIN asset; this only tells the types so.
+			return rows.flatMap((row) => (row.bin ? [{ ...row, bin: row.bin }] : []));
 		}),
 
 	/**
@@ -576,7 +581,39 @@ export const certifierWizardRouter = router({
 				ASSET_ANSWER_KEYS.has(key) ? differing.has(key) : allowedKeys.has(key),
 			);
 
+			// A test with no asset — the BIN was blank or not found — registers a
+			// fresh no-BIN asset from its own answers, so the assembly is on the
+			// register from the start; the WP assigns the BIN from the dashboard's
+			// No-BIN table. Planned before the transaction so a refusal writes
+			// nothing. See `noBinAssetFromSubmission`.
+			const noBinAsset = draft.bfaAssetId
+				? null
+				: noBinAssetFromSubmission({
+						bfaType: input.bfaType,
+						testDate: input.testDate,
+						wizardData,
+					});
+
+			if (noBinAsset && !noBinAsset.ok) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: noBinAsset.message,
+				});
+			}
+
 			const row = await db.transaction(async (tx) => {
+				const [createdAsset] = noBinAsset
+					? await tx
+							.insert(bfaAssets)
+							.values({
+								...noBinAsset.asset,
+								bin: null,
+								waterPurveyorId: input.waterPurveyorId,
+							})
+							.returning({ id: bfaAssets.id })
+					: [];
+				const bfaAssetId = createdAsset?.id ?? draft.bfaAssetId;
+
 				const [updated] = await tx
 					.update(testSubmissions)
 					.set({
@@ -589,6 +626,10 @@ export const certifierWizardRouter = router({
 						signatureData,
 						overriddenFields,
 						currentStep: null,
+						bfaAssetId,
+						// Only a BIN found in the register is ever recorded: one typed
+						// but not found is dropped, never filed (client, October 2026).
+						submittedBinText: null,
 					})
 					.where(
 						and(
@@ -600,10 +641,11 @@ export const certifierWizardRouter = router({
 
 				if (!updated) throw notFound();
 
+				// A no-BIN asset counts as unlinked here: its result waits for the BIN.
 				await applySubmittedTestResult({
 					executor: tx,
 					submissionId: updated.id,
-					bfaAssetId: draft.bfaAssetId,
+					bfaAssetId,
 					testResult,
 					waterPurveyorId: input.waterPurveyorId,
 					actor: auditActor(ctx),
@@ -647,7 +689,11 @@ export const certifierWizardRouter = router({
 						);
 				}
 
-				return { ...updated, assetSync };
+				return {
+					...updated,
+					assetSync,
+					createdAssetId: createdAsset?.id ?? null,
+				};
 			});
 
 			// The photo set is final now; anything else in the folder is unused.
@@ -667,6 +713,21 @@ export const certifierWizardRouter = router({
 				submissionId: row.id,
 				waterPurveyorId: input.waterPurveyorId,
 			});
+
+			if (row.createdAssetId) {
+				logCertifierEvent("bfa_asset_created", {
+					actor: auditActor(ctx),
+					certifierId: ctx.caller.certifierId,
+					extra: {
+						submission_id: row.id,
+						water_purveyor_id: input.waterPurveyorId,
+						asset_id: row.createdAssetId,
+						bin: null,
+						bfa_type: input.bfaType,
+						source: "no_bin_submission",
+					},
+				});
+			}
 
 			// Network calls, deliberately outside the transaction above. A missing
 			// or failing recipient is skipped, never a reason to fail the submit

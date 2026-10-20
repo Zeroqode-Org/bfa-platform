@@ -1131,6 +1131,93 @@ describeDb("submitted-test procedures", () => {
 			).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
 		});
 
+		describe("from a no-BIN asset", () => {
+			/** A no-BIN asset as the wizard registers one at submit. */
+			async function seedNoBinAsset() {
+				const id = randomUUID();
+
+				await pool.query(
+					`insert into bfa_assets (id, water_purveyor_id, bin, bfa_type, service_address, annual_test_date)
+					 values ($1, $2, null, 'RP', '3 No Bin Lane', '2028-03-01')`,
+					[id, wpA],
+				);
+
+				return id;
+			}
+
+			async function assetExists(id: string) {
+				const { rows } = await pool.query(
+					"select 1 from bfa_assets where id = $1",
+					[id],
+				);
+
+				return rows.length > 0;
+			}
+
+			it("moves the test to the registered asset and deletes the empty one", async () => {
+				const noBinAsset = await seedNoBinAsset();
+				const test = await seedSubmission({
+					waterPurveyorId: wpA,
+					bfaAssetId: noBinAsset,
+				});
+
+				const lines = captureLogs();
+
+				const linked = await callerFor(
+					ids.adminA,
+				).submittedTests.linkSubmissionAsset({
+					submissionId: test,
+					assetId: assetA,
+				});
+
+				expect(linked).toMatchObject({
+					bfaAssetId: assetA,
+					bin: "SHARED-SUB-BIN",
+				});
+				expect(await assetExists(noBinAsset)).toBe(false);
+				expect(
+					lines.find((line) => line.event === "bfa_asset_deleted"),
+				).toMatchObject({
+					actor_id: ids.adminA,
+					asset_id: noBinAsset,
+					reason: "no_bin_asset_linked_to_existing",
+				});
+			});
+
+			it("keeps the no-BIN asset while another test is still on it", async () => {
+				const noBinAsset = await seedNoBinAsset();
+				const moved = await seedSubmission({
+					waterPurveyorId: wpA,
+					bfaAssetId: noBinAsset,
+				});
+				await seedSubmission({ waterPurveyorId: wpA, bfaAssetId: noBinAsset });
+
+				await callerFor(ids.adminA).submittedTests.linkSubmissionAsset({
+					submissionId: moved,
+					assetId: assetA,
+				});
+
+				expect(await assetExists(noBinAsset)).toBe(true);
+			});
+
+			it("refuses another no-BIN asset as the target", async () => {
+				const from = await seedNoBinAsset();
+				const to = await seedNoBinAsset();
+				const test = await seedSubmission({
+					waterPurveyorId: wpA,
+					bfaAssetId: from,
+				});
+
+				await expect(
+					callerFor(ids.adminA).submittedTests.linkSubmissionAsset({
+						submissionId: test,
+						assetId: to,
+					}),
+				).rejects.toThrow(/no asset with that id in this water purveyor/i);
+				expect(await assetExists(from)).toBe(true);
+			});
+		});
+
 		it("emits a structured audit line carrying both BINs", async () => {
 			const unresolved = await seedSubmission({
 				waterPurveyorId: wpA,

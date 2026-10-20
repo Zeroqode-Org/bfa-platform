@@ -653,6 +653,13 @@ notices to queue:
 | a **linked fail** | this submission's one failure notice is queued, due immediately. Nothing is cancelled — the assembly is still untested as far as the escalation is concerned |
 | **neither** (result cleared, or still unlinked) | its unsent failure notice, if any, is withdrawn; no chain is touched |
 
+A test on a **no-BIN asset** — registered by the wizard when the certifier had
+no BIN (`0021`) — counts as unlinked: nothing is queued about an assembly the
+register cannot name, and `reconcileAssetNoticeChain` schedules no chain for
+it. When the WP assigns the BIN, `activateAssetWithBin` runs this function for
+each of the asset's tests and then schedules the chain. See
+[the no-BIN asset](/docs/wp-bfa-assets#the-no-bin-asset).
+
 Drafts never reach it: the submitted-tests router pins `status = 'submitted'`
 on every query, and the wizard calls it only at submit — so a failed draft
 sends nothing and appears nowhere, by construction.

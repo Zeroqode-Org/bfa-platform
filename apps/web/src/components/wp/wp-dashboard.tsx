@@ -26,6 +26,14 @@ import {
 	type StatCardTone,
 } from "@bfa-platform/ui/components/stat-card";
 import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "@bfa-platform/ui/components/table";
+import {
 	useFormValidation,
 	type ValidationRules,
 } from "@bfa-platform/ui/hooks/use-form-validation";
@@ -42,6 +50,7 @@ import {
 	FileQuestion,
 	FileText,
 	Inbox,
+	ListChecks,
 	TriangleAlert,
 } from "lucide-react";
 import type { Route } from "next";
@@ -59,6 +68,7 @@ import type {
 	DashboardMetrics,
 	DelinquentAsset,
 	IncomingReport,
+	NoBinReport,
 } from "./dashboard-types";
 import {
 	assetHref,
@@ -138,6 +148,9 @@ export function WpDashboard({ today }: { today: string }) {
 	const trend = useQuery(trpc.dashboard.complianceTrend.queryOptions());
 	const incoming = useQuery(trpc.dashboard.incomingReports.queryOptions({}));
 	const delinquent = useQuery(trpc.dashboard.delinquentAssets.queryOptions({}));
+	const noBin = useQuery(
+		trpc.dashboard.noBinReports.queryOptions({ limit: NO_BIN_TABLE_LIMIT }),
+	);
 	const breakdown = useQuery(
 		trpc.dashboard.passFailBreakdown.queryOptions(
 			{ from: fromIso ?? "", to: toIso ?? "" },
@@ -209,6 +222,40 @@ export function WpDashboard({ today }: { today: string }) {
 						})
 					)}
 				</div>
+			</section>
+
+			<section aria-label="No-BIN reports">
+				<Card>
+					<CardHeader>
+						<CardTitle>No-BIN reports</CardTitle>
+						<CardDescription>
+							Tests submitted without a BIN. Each registered a new asset with no
+							BIN — open it to assign the BIN and attach the customer, or link
+							the test to an assembly you already have. Notices for it start
+							once it has a BIN.
+						</CardDescription>
+					</CardHeader>
+					<CardContent>
+						{noBin.isPending ? (
+							<ListSkeleton />
+						) : noBin.isError ? (
+							<StateBlock
+								tone="danger"
+								title="Couldn&rsquo;t load no-BIN reports"
+								description={noBin.error.message}
+								onRetry={() => noBin.refetch()}
+							/>
+						) : noBin.data.length === 0 ? (
+							<StateBlock
+								icon={<ListChecks />}
+								title="Every test has a BIN"
+								description="A test submitted without a BIN appears here until you assign one."
+							/>
+						) : (
+							<NoBinTable reports={noBin.data} />
+						)}
+					</CardContent>
+				</Card>
 			</section>
 
 			<div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -508,9 +555,82 @@ const CARDS: readonly DashboardCard[] = [
 		label: "No-BIN submissions",
 		tone: "accent",
 		Icon: FileQuestion,
-		hint: "Not yet linked to an asset",
+		hint: "Waiting for a BIN — see the table below",
 	},
 ];
+
+/** How many no-BIN reports the dashboard table shows — the card has the total. */
+const NO_BIN_TABLE_LIMIT = 10;
+
+/**
+ * The No-BIN table: one row per test still waiting for a BIN, the newest
+ * first. A row opens the work: the no-BIN asset the wizard registered, where
+ * the BIN is assigned and the customer attached — or, for a test filed before
+ * those assets existed, the test itself, where the BIN is typed as before.
+ */
+function NoBinTable({ reports }: { reports: NoBinReport[] }) {
+	return (
+		<Table className="whitespace-nowrap">
+			<TableHeader>
+				<TableRow>
+					<TableHead>Test date</TableHead>
+					<TableHead>BFA type</TableHead>
+					<TableHead>Service address</TableHead>
+					<TableHead>Certifier</TableHead>
+					<TableHead>Customer</TableHead>
+					<TableHead>Result</TableHead>
+					<TableHead>
+						<span className="sr-only">Action</span>
+					</TableHead>
+				</TableRow>
+			</TableHeader>
+			<TableBody>
+				{reports.map((report) => (
+					<TableRow key={report.id}>
+						<TableCell>{formatDay(report.testDate)}</TableCell>
+						<TableCell className="text-muted-foreground">
+							{report.bfaType}
+						</TableCell>
+						<TableCell className="max-w-[260px] truncate">
+							{report.serviceAddress ?? "—"}
+						</TableCell>
+						<TableCell className="text-muted-foreground">
+							{report.certifierName ?? "Unnamed certifier"}
+						</TableCell>
+						<TableCell>
+							{report.hasCustomer ? (
+								<Badge variant="success">Attached</Badge>
+							) : (
+								<Badge variant="warning">Not attached</Badge>
+							)}
+						</TableCell>
+						<TableCell>
+							{report.testResult ? (
+								<Badge variant={TEST_RESULT_VARIANTS[report.testResult]}>
+									{TEST_RESULT_LABELS[report.testResult]}
+								</Badge>
+							) : (
+								<Badge variant="neutral">No result</Badge>
+							)}
+						</TableCell>
+						<TableCell className="text-right">
+							<Link
+								href={
+									report.bfaAssetId
+										? assetHref(report.bfaAssetId)
+										: submittedTestHref(report.id)
+								}
+								className="font-semibold text-[13px] text-primary hover:underline"
+							>
+								{report.bfaAssetId ? "Assign BIN" : "Open test"}
+							</Link>
+						</TableCell>
+					</TableRow>
+				))}
+			</TableBody>
+		</Table>
+	);
+}
 
 /**
  * One incoming report.
@@ -542,9 +662,7 @@ function IncomingRow({ report }: { report: IncomingReport }) {
 						{formatDay(report.testDate)}
 					</span>
 					{bin.resolved ? null : (
-						<span className="text-[11px] text-warning">
-							Not linked to an asset
-						</span>
+						<span className="text-[11px] text-warning">Waiting for a BIN</span>
 					)}
 				</span>
 
@@ -578,7 +696,7 @@ function DelinquentRow({
 			>
 				<span className="flex min-w-0 flex-col gap-0.5">
 					<span className="truncate font-semibold text-[13.5px] text-foreground">
-						{asset.bin}
+						{asset.bin ?? "No BIN"}
 						<span className="ml-2 font-normal text-[12px] text-muted-foreground">
 							{asset.bfaType}
 						</span>

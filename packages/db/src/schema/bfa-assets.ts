@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+	check,
 	date,
 	index,
 	pgTable,
@@ -16,6 +17,11 @@ import { waterPurveyors } from "./water-purveyors";
 // engine. bin reassignment on an existing row is allowed (a WP may correct
 // any data it owns) but must be logged at the procedure layer — every BIN
 // change emits a structured JSON line with the old and new value.
+//
+// bin is null on a no-BIN asset: one the certifier wizard registered from a
+// test whose BIN was blank or not found (0021). Its tests' results wait until
+// the WP assigns a BIN — no notice goes out about an assembly the register
+// cannot name. Blank is always NULL, never ''.
 export const bfaAssets = pgTable(
 	"bfa_assets",
 	{
@@ -23,7 +29,7 @@ export const bfaAssets = pgTable(
 		waterPurveyorId: uuid("water_purveyor_id")
 			.notNull()
 			.references(() => waterPurveyors.id),
-		bin: text("bin").notNull(),
+		bin: text("bin"),
 		// live pointer; occupancy history lives in customer_assignments
 		currentCustomerId: uuid("current_customer_id").references(
 			() => customers.id,
@@ -60,5 +66,13 @@ export const bfaAssets = pgTable(
 		index("bfa_assets_wp_past_due_customer_idx")
 			.on(table.waterPurveyorId, table.currentCustomerId)
 			.where(sql`${table.assetStatus} = 'past_due'`),
+		// The dashboard's No-BIN card and table. Added in 0021.
+		index("bfa_assets_wp_no_bin_idx")
+			.on(table.waterPurveyorId)
+			.where(sql`${table.bin} is null`),
+		check(
+			"bfa_assets_bin_not_blank",
+			sql`${table.bin} is null or btrim(${table.bin}) <> ''`,
+		),
 	],
 ).enableRLS();

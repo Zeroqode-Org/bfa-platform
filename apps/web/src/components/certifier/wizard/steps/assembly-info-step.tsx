@@ -39,10 +39,10 @@ const FIELDS: { key: keyof typeof ASSEMBLY_FIELD_KEYS; label: string }[] = [
  * same layout either way, never two different screens. Every prefilled
  * field stays editable; typing over one flags it as overridden.
  *
- * A found assembly's BFA type is editable here too (client, October 2026),
- * opening on the type the register holds. Changing it resets the test answers
- * and flags the type as overwritten — see `changeFoundAssetType`. A BIN that
- * was not found already chose its type on the first screen.
+ * The BFA type is chosen here (client, October 2026). A found assembly's
+ * opens locked on the type the register holds; changing it resets the test
+ * answers and flags the type as overwritten. With no BIN it is a plain
+ * dropdown, starting on RP. See `changeAssemblyType`.
  */
 export function AssemblyInfoStep({
 	form,
@@ -58,13 +58,12 @@ export function AssemblyInfoStep({
 	return (
 		<Card>
 			<CardContent className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				{isPrefilled ? (
-					<BfaTypeField
-						value={form.bfaType}
-						overridden={form.overriddenFields.has("bfaType")}
-						onChange={onTypeChange}
-					/>
-				) : null}
+				<BfaTypeField
+					value={form.bfaType}
+					prefilled={isPrefilled}
+					overridden={form.overriddenFields.has("bfaType")}
+					onChange={onTypeChange}
+				/>
 				{FIELDS.map(({ key, label }) => (
 					<AssemblyField
 						key={key}
@@ -83,23 +82,25 @@ export function AssemblyInfoStep({
 }
 
 /**
- * The found assembly's BFA type, full width above the details. Locked like
- * every other prefilled field — the same grey read-only input with a pencil —
- * and the pencil turns it into the type dropdown in place.
+ * The BFA type, full width above the details. A found assembly's is locked
+ * like every other prefilled field — the same grey read-only input with a
+ * pencil — and the pencil turns it into the type dropdown in place.
  */
 function BfaTypeField({
 	value,
+	prefilled,
 	overridden,
 	onChange,
 }: {
 	value: BfaType;
+	prefilled: boolean;
 	overridden: boolean;
 	onChange: (bfaType: BfaType) => void;
 }) {
 	const id = useId();
 	// Stays a dropdown once unlocked, as `AssemblyField` stays an input.
 	const [editing, setEditing] = useState(false);
-	const locked = !overridden && !editing;
+	const locked = prefilled && !overridden && !editing;
 
 	return (
 		<WizardField

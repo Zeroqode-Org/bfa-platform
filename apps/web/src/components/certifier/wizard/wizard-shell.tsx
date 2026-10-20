@@ -37,7 +37,11 @@ import { trpc } from "@/utils/trpc";
 import { CompletionDialog } from "./completion-dialog";
 import { AssemblyInfoStep } from "./steps/assembly-info-step";
 import { ClosingStep } from "./steps/closing-step";
-import { IdentificationStep } from "./steps/identification-step";
+import {
+	type BinResolution,
+	IdentificationStep,
+	lookupBin,
+} from "./steps/identification-step";
 import { ResultStep } from "./steps/result-step";
 import { ReviewStep } from "./steps/review-step";
 import { TestStep } from "./steps/test-step";
@@ -62,7 +66,6 @@ export type WizardFormState = {
 	 * stored flag says whether it differed.
 	 */
 	assetBfaType: BfaType | null;
-	submittedBinText: string | null;
 	prefilledKeys: Set<string>;
 	overriddenFields: Set<string>;
 	customerName: string;
@@ -87,7 +90,6 @@ function snapshotOf(form: WizardFormState): string {
 		form.bin,
 		form.bfaType,
 		form.bfaAssetId,
-		form.submittedBinText,
 		form.customerName,
 		form.customerEmail,
 		form.testDate,
@@ -107,7 +109,6 @@ function emptyForm(): WizardFormState {
 		resolvedBin: "",
 		bfaAssetId: null,
 		assetBfaType: null,
-		submittedBinText: null,
 		prefilledKeys: new Set(),
 		overriddenFields: new Set(),
 		customerName: "",
@@ -146,7 +147,6 @@ function dropPrefilled(input: WizardFormState): WizardFormState {
 		resolvedBin: "",
 		bfaAssetId: null,
 		assetBfaType: null,
-		submittedBinText: null,
 		prefilledKeys: new Set(),
 		overriddenFields: new Set(),
 		wizardData,
@@ -157,6 +157,52 @@ function dropPrefilled(input: WizardFormState): WizardFormState {
 			? ""
 			: form.customerEmail,
 	};
+}
+
+/**
+ * The form once Next on the first screen found `bin` in the register: the
+ * asset's type, details, customer and last answers take the place of whatever
+ * a previous BIN filled in. Finding the BIN already resolved changes nothing —
+ * and must not wipe what the certifier has since edited.
+ */
+function withFoundBin(
+	current: WizardFormState,
+	bin: string,
+	{ asset, priorWizardData, customer, prefilledKeys }: BinResolution,
+): WizardFormState {
+	if (bin === current.resolvedBin && asset.id === current.bfaAssetId) {
+		return current;
+	}
+
+	// Answers given under another type mean nothing under this one.
+	const base = dropPrefilled(
+		asset.bfaType === current.bfaType
+			? current
+			: clearAssemblyData(current, current.bfaType),
+	);
+
+	return {
+		...base,
+		bin,
+		resolvedBin: bin,
+		bfaAssetId: asset.id,
+		assetBfaType: asset.bfaType,
+		bfaType: asset.bfaType,
+		wizardData: { ...base.wizardData, ...priorWizardData },
+		customerName: customer?.name ?? base.customerName,
+		customerEmail: customer?.email ?? base.customerEmail,
+		prefilledKeys,
+	};
+}
+
+/**
+ * The form going on with no BIN — Next on a blank field, or on a BIN the
+ * register does not have (client, October 2026). The typed text is cleared,
+ * never kept: only a BIN found in the register is ever recorded, and at
+ * submit the test registers a no-BIN asset for the WP to number.
+ */
+function withoutBin(current: WizardFormState): WizardFormState {
+	return { ...dropPrefilled(current), bin: "" };
 }
 
 /**
@@ -197,16 +243,19 @@ function clearAssemblyData(
 }
 
 /**
- * A found assembly's type changed on the Assembly step (client, October 2026):
- * the register said one type and the certifier is recording another. The
- * assembly details and the customer stay — they are still this valve — but
- * every test answer goes, because the new type asks different questions; that
- * reset is deliberate and unannounced, as on the first screen. `bfaType` is
- * flagged as overwritten while it differs from the asset's; at submit the
- * server carries it onto the asset with the other overwritten details, and
- * the flag stays on the test as the record of the change.
+ * The assembly type changed on the Assembly step. The assembly details and the
+ * customer stay — they are still this valve — but every test answer goes,
+ * because the new type asks different questions; that reset is deliberate and
+ * unannounced.
+ *
+ * For a found assembly (client, October 2026) the register said one type and
+ * the certifier is recording another: `bfaType` is flagged as overwritten
+ * while it differs from the asset's; at submit the server carries it onto the
+ * asset with the other overwritten details, and the flag stays on the test as
+ * the record of the change. With no BIN there is no register value to differ
+ * from, so nothing is flagged.
  */
-function changeFoundAssetType(
+function changeAssemblyType(
 	form: WizardFormState,
 	bfaType: BfaType,
 ): WizardFormState {
@@ -216,10 +265,12 @@ function changeFoundAssetType(
 	const cleared = clearAssemblyData(form, form.bfaType);
 	const overriddenFields = new Set(cleared.overriddenFields);
 
-	if (form.assetBfaType !== null && bfaType === form.assetBfaType) {
-		overriddenFields.delete("bfaType");
-	} else {
-		overriddenFields.add("bfaType");
+	if (form.bfaAssetId !== null) {
+		if (form.assetBfaType !== null && bfaType === form.assetBfaType) {
+			overriddenFields.delete("bfaType");
+		} else {
+			overriddenFields.add("bfaType");
+		}
 	}
 
 	return {
@@ -255,6 +306,8 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 	const { active, setActiveWp, isLoading: isWpLoading } = useActiveWp();
 
 	const [form, setForm] = useState<WizardFormState>(emptyForm);
+	// While Next on the first screen is looking the BIN up.
+	const [looking, setLooking] = useState(false);
 	const [step, setStep] = useState(1);
 	const topRef = useRef<HTMLDivElement>(null);
 	const previousStep = useRef(step);
@@ -314,10 +367,11 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 			...emptyForm(),
 			id: draft.id,
 			bfaType: draft.bfaType as BfaType,
-			bin: draft.bin ?? draft.submittedBinText ?? "",
-			resolvedBin: (draft.bin ?? draft.submittedBinText ?? "").trim(),
+			// Only a BIN found in the register comes back. Text an older draft kept
+			// for a BIN that was not found is dropped, as Next would drop it now.
+			bin: draft.bin ?? "",
+			resolvedBin: draft.bin ?? "",
 			bfaAssetId: draft.bfaAssetId,
-			submittedBinText: draft.submittedBinText,
 			// A resolved draft's assembly and customer values came from the asset;
 			// treating them as prefilled keeps a later edit flagged as an overwrite.
 			prefilledKeys: draft.bfaAssetId
@@ -418,35 +472,39 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 	async function persistDraft(
 		nextStep: number,
 		options?: { silent?: boolean },
+		// The form as it is about to be, when the caller has just changed it —
+		// state set in the same handler is not readable yet.
+		source = form,
 	) {
 		if (!active) return;
 
-		const snapshot = snapshotOf(form);
+		const snapshot = snapshotOf(source);
 		const result = await saveDraft.mutateAsync({
-			id: form.id,
+			id: source.id,
 			waterPurveyorId: active.id,
-			bfaType: form.bfaType,
+			bfaType: source.bfaType,
 			currentStep: nextStep,
 			wizardData: {
-				...form.wizardData,
-				[CUSTOMER_NAME_KEY]: form.customerName,
-				[CUSTOMER_EMAIL_KEY]: form.customerEmail,
+				...source.wizardData,
+				[CUSTOMER_NAME_KEY]: source.customerName,
+				[CUSTOMER_EMAIL_KEY]: source.customerEmail,
 				...Object.fromEntries(
 					PHOTO_PATH_KEYS.map((key, index) => [
 						key,
-						form.photoPaths[index] ?? null,
+						source.photoPaths[index] ?? null,
 					]),
 				),
 			},
-			submittedBinText: form.bfaAssetId ? null : form.bin.trim() || null,
-			bfaAssetId: form.bfaAssetId,
-			testDate: form.testDate,
-			signatureMethod: form.signatureMethod || null,
-			signatureData: form.signatureData,
-			overriddenFields: Array.from(form.overriddenFields),
+			// Never typed text: a BIN is recorded only by its asset.
+			submittedBinText: null,
+			bfaAssetId: source.bfaAssetId,
+			testDate: source.testDate,
+			signatureMethod: source.signatureMethod || null,
+			signatureData: source.signatureData,
+			overriddenFields: Array.from(source.overriddenFields),
 		});
 
-		if (!form.id) setField("id", result.id);
+		if (!source.id) setField("id", result.id);
 		setSavedSnapshot(snapshot);
 		if (!options?.silent) toast.success("Saved");
 
@@ -472,7 +530,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 	}
 
 	async function handleNext() {
-		if (needsLookup) return;
+		if (looking || saveDraft.isPending) return;
 		setSavingKind("next");
 		if (stepMissingKeys(step, form).length > 0) {
 			refuse();
@@ -480,15 +538,58 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 		}
 
 		try {
-			await persistDraft(Math.min(step + 1, total), {
-				silent: true,
-			});
-			setStep((current) => Math.min(current + 1, total));
+			const next =
+				stepKind(step, form.bfaType).kind === "identification"
+					? await resolveIdentification()
+					: form;
+
+			await persistDraft(
+				Math.min(step + 1, stepCount(next.bfaType)),
+				{ silent: true },
+				next,
+			);
+			setStep((current) => Math.min(current + 1, stepCount(next.bfaType)));
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Could not save this step",
 			);
 		}
+	}
+
+	/**
+	 * Next on the first screen looks the BIN up (client, October 2026): found
+	 * prefills the form from its asset; blank or not found clears the field and
+	 * goes on with no BIN. A BIN already resolved is not looked up again, so
+	 * coming back to this screen and on does not undo edits made since.
+	 */
+	async function resolveIdentification(): Promise<WizardFormState> {
+		if (!active) return form;
+
+		const bin = form.bin.trim();
+		let next: WizardFormState;
+
+		if (!bin) {
+			next = withoutBin(form);
+		} else if (form.bfaAssetId && bin === form.resolvedBin) {
+			next = form;
+		} else {
+			setLooking(true);
+			try {
+				const resolution = await lookupBin(queryClient, active.id, bin);
+
+				next = resolution
+					? withFoundBin(form, bin, resolution)
+					: withoutBin(form);
+				if (!resolution) {
+					toast.info(`BIN ${bin} was not found — continuing with no BIN.`);
+				}
+			} finally {
+				setLooking(false);
+			}
+		}
+
+		setForm(next);
+		return next;
 	}
 
 	function handleBack() {
@@ -571,15 +672,6 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 
 	const missing = new Set(stepMissingKeys(step, form));
 	const current = stepKind(step, form.bfaType);
-	// A typed BIN must be looked up before the wizard moves on (client,
-	// October 2026): looking it up is what links the test to an existing
-	// asset, and a BIN typed but never looked up would file an unlinked test
-	// under a number the purveyor may already have. An empty BIN is a new
-	// assembly and needs no lookup.
-	const needsLookup =
-		current.kind === "identification" &&
-		form.bin.trim() !== "" &&
-		form.resolvedBin !== form.bin.trim();
 	// Once the assembly type is known the heading names it — "RPDA Test Wizard".
 	const title =
 		current.kind === "identification" && !form.bfaAssetId
@@ -589,8 +681,8 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 		isFirst: step === 1,
 		isLast: step >= total,
 		nextLabel: step === total - 1 ? "Preview" : "Next",
-		nextDisabled: needsLookup,
-		saving: saveDraft.isPending,
+		nextDisabled: false,
+		saving: saveDraft.isPending || looking,
 		savingKind,
 		submitting: submitTest.isPending,
 		onBack: handleBack,
@@ -673,9 +765,9 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 							<IdentificationStep
 								form={form}
 								waterPurveyorId={active.id}
-								// Once the text no longer matches the BIN that was looked up, what came
-								// from that BIN's asset is stale — it is dropped now, and a new lookup
-								// fills it from the new one.
+								// Once the text no longer matches the BIN that was found, what
+								// came from that BIN's asset is stale — it is dropped now, and
+								// Next looks the new text up.
 								onBinChange={(bin) =>
 									setForm((current) =>
 										current.bfaAssetId !== null &&
@@ -684,59 +776,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 											: { ...current, bin },
 									)
 								}
-								onTypeChange={(bfaType) =>
-									setForm((current) =>
-										bfaType === current.bfaType
-											? current
-											: {
-													...clearAssemblyData(current, current.bfaType),
-													bfaType,
-												},
-									)
-								}
-								onResolved={({
-									asset,
-									priorWizardData,
-									customer,
-									prefilledKeys,
-								}) => {
-									setForm((current) => {
-										const bin = current.bin.trim();
-
-										// Looking up the same BIN again changes nothing — and must not
-										// wipe what the certifier has since edited.
-										if (
-											bin === current.resolvedBin &&
-											(asset?.id ?? null) === current.bfaAssetId
-										) {
-											return current;
-										}
-
-										// A different BIN (or none found): whatever the previous one filled
-										// in goes, and this one's data takes its place.
-										const nextType =
-											(asset?.bfaType as BfaType) ?? current.bfaType;
-										// Answers given under another type mean nothing under this one.
-										const base = dropPrefilled(
-											nextType === current.bfaType
-												? current
-												: clearAssemblyData(current, current.bfaType),
-										);
-
-										return {
-											...base,
-											resolvedBin: bin,
-											bfaAssetId: asset?.id ?? null,
-											assetBfaType: (asset?.bfaType as BfaType) ?? null,
-											submittedBinText: asset ? null : bin,
-											bfaType: (asset?.bfaType as BfaType) ?? base.bfaType,
-											wizardData: { ...base.wizardData, ...priorWizardData },
-											customerName: customer?.name ?? base.customerName,
-											customerEmail: customer?.email ?? base.customerEmail,
-											prefilledKeys,
-										};
-									});
-								}}
+								onSubmit={handleNext}
 							/>
 						) : null}
 
@@ -745,7 +785,7 @@ export function WizardShell({ draftId }: { draftId?: string }) {
 								form={form}
 								onAnswer={setAnswer}
 								onTypeChange={(bfaType) =>
-									setForm((current) => changeFoundAssetType(current, bfaType))
+									setForm((current) => changeAssemblyType(current, bfaType))
 								}
 							/>
 						) : null}

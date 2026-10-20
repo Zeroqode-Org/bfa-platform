@@ -138,6 +138,52 @@ export function newAssetFromSubmission(
 }
 
 /**
+ * The no-BIN asset the certifier wizard registers at submit, when the BIN was
+ * blank or not found in the register (client, October 2026).
+ *
+ * The same details and the same annual test date `newAssetFromSubmission`
+ * gives a WP-numbered asset, but no BIN — the purveyor assigns that from the
+ * dashboard's No-BIN table — and no customer: the client asked that the WP
+ * attach the customer by hand, so a typed email does not create one.
+ *
+ * Submit already requires the test date and every assembly answer, so a
+ * refusal here means the request skipped the wizard's own rules.
+ */
+export function noBinAssetFromSubmission(next: {
+	bfaType: UpdateSubmittedTestInput["bfaType"];
+	testDate: string;
+	wizardData: Record<string, unknown>;
+}):
+	| { ok: true; asset: Omit<NewAssetPlan["asset"], "bin"> }
+	| { ok: false; message: string } {
+	if (!isCalendarDay(next.testDate)) {
+		return { ok: false, message: "The test date is not a calendar day" };
+	}
+
+	const answers = next.wizardData;
+	const parsed = createAssetInput.omit({ bin: true }).safeParse({
+		bfaType: next.bfaType,
+		serviceAddress: answerText(answers[ASSEMBLY_FIELD_KEYS.serviceAddress]),
+		make: answerText(answers[ASSEMBLY_FIELD_KEYS.make]),
+		model: answerText(answers[ASSEMBLY_FIELD_KEYS.model]),
+		serialNumber: answerText(answers[ASSEMBLY_FIELD_KEYS.serialNumber]),
+		size: answerText(answers[ASSEMBLY_FIELD_KEYS.size]),
+		assemblyLocation: answerText(answers[ASSEMBLY_FIELD_KEYS.location]),
+		annualTestDate: addCalendarYears(next.testDate, 1),
+		currentCustomerId: null,
+	});
+
+	if (!parsed.success) {
+		return {
+			ok: false,
+			message: parsed.error.issues[0]?.message ?? "The new asset is not valid",
+		};
+	}
+
+	return { ok: true, asset: parsed.data };
+}
+
+/**
  * The wizard's customer, if it recorded an email that is one.
  *
  * Email is the match key because it is what the purveyor's customers are

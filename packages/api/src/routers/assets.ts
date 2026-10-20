@@ -3,6 +3,7 @@ import {
 	bfaAssets,
 	customerAssignments,
 	customers,
+	testSubmissions,
 } from "@bfa-platform/db/schema";
 import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 
@@ -15,6 +16,7 @@ import {
 	listAssetsInput,
 	updateAssetInput,
 } from "../lib/asset-input";
+import { wizardCustomerEmail } from "../lib/asset-sync";
 import {
 	ASSET_STALE_DATE_MESSAGE,
 	resolveAnnualTestDate,
@@ -26,7 +28,9 @@ import {
 	auditActorFields,
 } from "../lib/audit-actor";
 import { attachCustomerToAsset } from "../lib/customer-assignment";
+import { CUSTOMER_EMAIL_KEY, CUSTOMER_NAME_KEY } from "../lib/wizard-input";
 import { reconcileAssetNoticeChain } from "../scheduler/notice-chain";
+import { activateAssetWithBin } from "../scheduler/submission-lifecycle";
 
 /**
  * The columns every asset procedure returns. Declared once so the table, the
@@ -339,11 +343,21 @@ export const assetsRouter = router({
 					});
 				}
 
-				// Only when the date actually moved. Correcting a service address
+				// A BIN given to a no-BIN asset — the WP numbering an assembly the
+				// wizard registered without one — starts what was waiting for it:
+				// its tests' results and its reminder chain. Otherwise only a date
+				// that actually moved reschedules. Correcting a service address
 				// does not touch the schedule, and reconciling anyway would rewrite
 				// a job row — and emit a scheduling line — for a schedule nobody
 				// changed.
-				if (locked.annualTestDate !== updated.annualTestDate) {
+				if (existing.bin === null && updated.bin !== null) {
+					await activateAssetWithBin({
+						executor: tx,
+						assetId: updated.id,
+						waterPurveyorId: ctx.caller.waterPurveyorId,
+						actor: auditActor(ctx),
+					});
+				} else if (locked.annualTestDate !== updated.annualTestDate) {
 					await reconcileAssetNoticeChain({
 						executor: tx,
 						assetId: updated.id,
@@ -586,7 +600,72 @@ async function readAssetDetail(waterPurveyorId: string, assetId: string) {
 			desc(customerAssignments.createdAt),
 		);
 
-	return { asset, assignments };
+	return {
+		asset,
+		assignments,
+		testCustomer: await testCustomerSuggestion(waterPurveyorId, asset),
+	};
+}
+
+/**
+ * The customer the certifier recorded on the asset's latest test, offered to
+ * the WP as the one to attach (client, October 2026: the WP links a no-BIN
+ * asset to its customer by hand, keeping the master database clean). Nothing
+ * here is written — it is a suggestion the WP confirms or ignores.
+ *
+ * Whenever nobody is attached — with or without a BIN, since assigning the BIN
+ * first is the usual order and the asset still needs its customer after.
+ * From the latest submitted test. `match` is this purveyor's customer with that email, if
+ * there is one: then the WP attaches them; without one, the WP creates a
+ * customer from these details, checking them first.
+ */
+async function testCustomerSuggestion(
+	waterPurveyorId: string,
+	asset: { id: string; currentCustomerId: string | null },
+) {
+	if (asset.currentCustomerId !== null) return null;
+
+	const [latest] = await db
+		.select({ wizardData: testSubmissions.wizardData })
+		.from(testSubmissions)
+		.where(
+			and(
+				eq(testSubmissions.bfaAssetId, asset.id),
+				eq(testSubmissions.waterPurveyorId, waterPurveyorId),
+				eq(testSubmissions.status, "submitted"),
+			),
+		)
+		.orderBy(
+			sql`${testSubmissions.testDate} desc nulls last`,
+			desc(testSubmissions.createdAt),
+		)
+		.limit(1);
+
+	const answers = (latest?.wizardData ?? {}) as Record<string, unknown>;
+	const email = wizardCustomerEmail(answers[CUSTOMER_EMAIL_KEY]);
+	const rawName = answers[CUSTOMER_NAME_KEY];
+	const name = typeof rawName === "string" ? rawName.trim() : "";
+
+	if (!email && !name) return null;
+
+	const [match] = email
+		? await db
+				.select({
+					id: customers.id,
+					name: customers.name,
+					status: customers.status,
+				})
+				.from(customers)
+				.where(
+					and(
+						eq(customers.waterPurveyorId, waterPurveyorId),
+						sql`lower(btrim(${customers.email})) = ${email}`,
+					),
+				)
+				.limit(1)
+		: [];
+
+	return { name, email, match: match ?? null };
 }
 
 /**
@@ -730,7 +809,7 @@ function withResolvedDate(
 /** Postgres' `unique_violation`. */
 const UNIQUE_VIOLATION = "23505";
 
-function duplicateBinError(error: unknown, bin: string) {
+function duplicateBinError(error: unknown, bin: string | null | undefined) {
 	if (!isUniqueViolation(error)) return error;
 
 	return new TRPCError({

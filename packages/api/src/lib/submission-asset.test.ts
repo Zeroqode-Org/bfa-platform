@@ -5,6 +5,7 @@ import {
 	MISSING_TEST_DATE_MESSAGE,
 	missingAssemblyDetailsMessage,
 	newAssetFromSubmission,
+	noBinAssetFromSubmission,
 } from "./submission-asset";
 
 /**
@@ -127,6 +128,52 @@ describe("newAssetFromSubmission", () => {
 		const result = newAssetFromSubmission({
 			...correction,
 			wizardData: { ...correction.wizardData, assemblyMake: "x".repeat(201) },
+		});
+
+		expect(result.ok).toBe(false);
+	});
+});
+
+describe("noBinAssetFromSubmission", () => {
+	const submitted = {
+		bfaType: correction.bfaType,
+		testDate: correction.testDate,
+		wizardData: correction.wizardData,
+	};
+
+	it("takes the assembly details from the test, with no BIN", () => {
+		const result = noBinAssetFromSubmission(submitted);
+
+		if (!result.ok) throw new Error(result.message);
+
+		expect(result.asset).toMatchObject({
+			bfaType: "RP",
+			serviceAddress: "12 Kalakaua Ave",
+			make: "Watts",
+			model: "LF909",
+			serialNumber: "SN-1",
+			size: "1.5",
+			assemblyLocation: "Front yard",
+		});
+		expect(result.asset).not.toHaveProperty("bin");
+	});
+
+	it("dates the next test a year after this one", () => {
+		const result = noBinAssetFromSubmission(submitted);
+
+		expect(result.ok && result.asset.annualTestDate).toBe("2027-10-07");
+	});
+
+	it("attaches no customer, whatever the wizard recorded", () => {
+		const result = noBinAssetFromSubmission(submitted);
+
+		expect(result.ok && result.asset.currentCustomerId).toBeNull();
+	});
+
+	it("refuses a test with no service address", () => {
+		const result = noBinAssetFromSubmission({
+			...submitted,
+			wizardData: { ...correction.wizardData, assemblyServiceAddress: " " },
 		});
 
 		expect(result.ok).toBe(false);

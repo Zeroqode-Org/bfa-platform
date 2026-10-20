@@ -1,5 +1,5 @@
 import { Document, Image, Page, Text, View } from "@react-pdf/renderer";
-
+import { SHOW_WP_ADDRESS_ON_DOCUMENT } from "../result-document-options";
 import {
 	ASSEMBLY_FIELD_KEYS,
 	INITIAL_TEST_KEY,
@@ -10,7 +10,8 @@ import { pdfStyles, textValue } from "./pdf-styles";
 import { Cell, Check, Table } from "./test-blocks";
 
 export type ResultDocumentAsset = {
-	bin: string;
+	/** Null on a no-BIN asset the wizard registered at submit. */
+	bin: string | null;
 	serviceAddress: string;
 	make: string | null;
 	model: string | null;
@@ -121,7 +122,7 @@ export function ResultDocument({
 					<View style={pdfStyles.header}>
 						<View>
 							<Text style={pdfStyles.wpName}>{wp.companyName}</Text>
-							{wp.address ? (
+							{SHOW_WP_ADDRESS_ON_DOCUMENT && wp.address ? (
 								<Text style={pdfStyles.muted}>{wp.address}</Text>
 							) : null}
 							{wp.pwsid ? (
@@ -142,7 +143,7 @@ export function ResultDocument({
 						<Table>
 							<Cell
 								label="BIN"
-								value={asset?.bin ?? textValue(submission.submittedBinText)}
+								value={asset?.bin ?? submission.submittedBinText ?? "No BIN"}
 							/>
 							<Cell
 								label="Service address"
