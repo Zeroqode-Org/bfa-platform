@@ -3,6 +3,7 @@ import { repairCompanies } from "@bfa-platform/db/schema";
 import { and, asc, eq } from "drizzle-orm";
 
 import { router, TRPCError, wpProcedure } from "../index";
+import { alphabetically } from "../lib/alphabetical-order";
 import {
 	type AuditActor,
 	auditActor,
@@ -69,9 +70,13 @@ export const repairCompaniesRouter = router({
 				.select(repairCompanySelection)
 				.from(repairCompanies)
 				.where(eq(repairCompanies.waterPurveyorId, ctx.caller.waterPurveyorId))
-				// `id` breaks the tie so two companies with the same name keep a
-				// stable order between renders rather than swapping places on refetch.
-				.orderBy(asc(repairCompanies.companyName), asc(repairCompanies.id))
+				// Alphabetical, digits first and ignoring case — the same order the
+				// failure notice lists them in. `id` breaks the tie so two companies
+				// with the same name keep a stable order between renders.
+				.orderBy(
+					alphabetically(repairCompanies.companyName),
+					asc(repairCompanies.id),
+				)
 		);
 	}),
 

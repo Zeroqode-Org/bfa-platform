@@ -54,6 +54,7 @@ import {
 } from "@bfa-platform/db/schema";
 import { and, asc, eq, sql } from "drizzle-orm";
 
+import { alphabetically } from "../lib/alphabetical-order";
 import type { AuditActor } from "../lib/audit-actor";
 import { type EmailDriver, resolveSenderIdentity } from "../lib/email";
 import { renderTextEmail } from "../lib/email-layout";
@@ -440,9 +441,13 @@ async function activeRepairCompaniesFor(waterPurveyorId: string) {
 					eq(repairCompanies.status, "active"),
 				),
 			)
-			// `id` breaks the tie so two companies with one name keep a stable order
+			// Alphabetical, digits first and ignoring case (WP/Admin feedback). `id`
+			// breaks the tie so two companies with one name keep a stable order
 			// between one customer's email and the next.
-			.orderBy(asc(repairCompanies.companyName), asc(repairCompanies.id))
+			.orderBy(
+				alphabetically(repairCompanies.companyName),
+				asc(repairCompanies.id),
+			)
 	);
 }
 

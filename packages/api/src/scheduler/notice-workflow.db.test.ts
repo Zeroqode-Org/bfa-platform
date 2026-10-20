@@ -1037,6 +1037,44 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			expect(eventsNamed(lines, "scheduler_job_held")).toHaveLength(1);
 		});
 
+		it("holds while the water purveyor is blocked, and sends once it is unblocked", async () => {
+			// A blocked purveyor's customers get no email on its behalf (WP/Admin
+			// feedback). A hold, not a cancel: unblocking resumes the waiting stage.
+			const caller = callerFor(ids.adminA);
+			const asset = await caller.assets.createAsset(
+				newAsset({ currentCustomerId: customerIds.primary }),
+			);
+
+			await pool.query(
+				"update water_purveyors set status = 'blocked' where id = $1",
+				[wpA],
+			);
+			try {
+				const lines = captureLogs();
+				const { outcome } = await runStage(asset.id);
+
+				expect(outcome).toMatchObject({ kind: "held" });
+				expect(deliveries(lines)).toHaveLength(0);
+
+				const held = await liveJobFor(asset.id);
+				expect(held.job_type).toBe("reminder");
+				expect(held.status).toBe("pending");
+				expect(held.attempts).toBe(0);
+				expect(held.last_error).toMatch(/purveyor is blocked/i);
+			} finally {
+				await pool.query(
+					"update water_purveyors set status = 'active' where id = $1",
+					[wpA],
+				);
+			}
+
+			const lines = captureLogs();
+			const { outcome } = await runStage(asset.id);
+
+			expect(outcome).toMatchObject({ kind: "sent" });
+			expect(deliveries(lines)).toHaveLength(1);
+		});
+
 		it("resumes the waiting stage — and only that stage — once an active customer is attached", async () => {
 			const caller = callerFor(ids.adminA);
 			const asset = await caller.assets.createAsset(

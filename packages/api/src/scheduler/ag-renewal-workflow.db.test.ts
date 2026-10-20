@@ -1413,6 +1413,36 @@ describeDb("Workflow 2 — AG rate renewal notice", () => {
 			expect((await customerRow(customer.id))?.ag_renewal_date).toBe(PAST_DAY);
 		});
 
+		it("holds, without spending an attempt, while the water purveyor is blocked", async () => {
+			const customer = await callerFor(ids.adminA).customers.createCustomer(
+				agCustomer(PAST_DAY),
+			);
+			const job = await claimRenewalJob(customer.id);
+			const provider = fakeProvider();
+
+			await pool.query(
+				"update water_purveyors set status = 'blocked' where id = $1",
+				[wpA],
+			);
+			try {
+				const outcome = await runAgRenewalJob(job, { driver: provider.driver });
+
+				expect(outcome).toEqual({
+					kind: "held",
+					reason: AG_RENEWAL_HOLD_REASONS.blockedPurveyor,
+				});
+				expect(provider.calls).toHaveLength(0);
+				expect(await jobsFor(customer.id)).toMatchObject([
+					{ status: "pending", attempts: 0, provider_message_id: null },
+				]);
+			} finally {
+				await pool.query(
+					"update water_purveyors set status = 'active' where id = $1",
+					[wpA],
+				);
+			}
+		});
+
 		it("cancels at run time if the customer left the agricultural rate outside the procedures", async () => {
 			const customer = await callerFor(ids.adminA).customers.createCustomer(
 				agCustomer(PAST_DAY),

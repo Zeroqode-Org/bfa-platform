@@ -129,7 +129,12 @@ Status changes go through `updateRepairCompany` rather than a fourth procedure:
 the form and the deactivate button are the same write, and one write means one
 place where the field rules are checked.
 
-The list is ordered by `company_name` then `id`. The tie-break is what keeps two
+The list is ordered alphabetically by `company_name` — case-insensitive, digits
+before letters (`alphabetically` in `lib/alphabetical-order.ts`: `lower(...)`
+compared in the "C" collation, so it does not depend on the server's collation)
+— then `id`. So "1A1A Backflow Testing", "808 Plumbing", "A-1 Plumbing",
+"Commercial Plumbing", "zen Backflow Testers" (WP/Admin feedback). The failure
+notice lists active companies in the same order. The tie-break is what keeps two
 companies with the same name from swapping places between refetches.
 
 ### A save that changes nothing writes nothing

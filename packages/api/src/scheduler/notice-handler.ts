@@ -87,6 +87,7 @@ import {
 } from "./jobs";
 import { logSchedulerEvent } from "./logging";
 import { CANCEL_REASONS, HOLD_REASONS } from "./notice-chain";
+import { isPurveyorBlocked } from "./purveyor-status";
 
 /**
  * What one run of a notice job did.
@@ -404,6 +405,12 @@ export async function resolveRecipient(asset: {
 	waterPurveyorId: string;
 	currentCustomerId: string | null;
 }): Promise<RecipientResult> {
+	// A blocked purveyor holds every email to its customers — see
+	// `isPurveyorBlocked`. First, so no other reason masks it.
+	if (await isPurveyorBlocked(asset.waterPurveyorId)) {
+		return { hold: HOLD_REASONS.blockedPurveyor };
+	}
+
 	if (!asset.currentCustomerId) return { hold: HOLD_REASONS.noCustomer };
 
 	const [customer] = await db

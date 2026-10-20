@@ -63,6 +63,8 @@ export const HOLD_REASONS = {
 		"The customer currently attached to this assembly is suspended, which holds the assembly's notices.",
 	noEmail:
 		"The customer currently attached to this assembly has no email address.",
+	blockedPurveyor:
+		"The water purveyor is blocked, which holds every automated email to its customers.",
 } as const;
 
 type ChainContext = {
