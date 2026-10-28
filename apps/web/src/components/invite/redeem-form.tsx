@@ -12,7 +12,6 @@ import { useFormValidation } from "@bfa-platform/ui/hooks/use-form-validation";
 import {
 	composeRules,
 	maxLength,
-	minLength,
 	required,
 	usDate,
 	usDateToIso,
@@ -23,10 +22,8 @@ import {
 	type RedeemState,
 	redeemInvitationAction,
 } from "@/app/invite/[token]/actions";
-import {
-	MIN_PASSWORD_LENGTH,
-	REDEEM_FIELD_LIMITS,
-} from "@/lib/redeem-field-limits";
+import { PASSWORD_HINT, passwordPolicyError } from "@/lib/password-policy";
+import { REDEEM_FIELD_LIMITS } from "@/lib/redeem-field-limits";
 
 export type RedeemFormProps = {
 	secret: string;
@@ -56,10 +53,7 @@ const EMPTY_VALUES: RedeemValues = {
 
 const passwordRule = composeRules(
 	required("Password is required."),
-	minLength(
-		MIN_PASSWORD_LENGTH,
-		`Use at least ${MIN_PASSWORD_LENGTH} characters.`,
-	),
+	(value) => (value ? passwordPolicyError(value) : undefined),
 	maxLength(REDEEM_FIELD_LIMITS.password, { trim: false }),
 );
 
@@ -248,7 +242,7 @@ export function RedeemForm({ secret, mode, isCertifier }: RedeemFormProps) {
 							id={passwordHintId}
 							className="text-[12px] text-muted-foreground"
 						>
-							At least {MIN_PASSWORD_LENGTH} characters.
+							{PASSWORD_HINT}
 						</p>
 					</div>
 

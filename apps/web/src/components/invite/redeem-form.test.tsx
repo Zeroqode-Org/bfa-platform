@@ -38,7 +38,7 @@ function submit(name = "Create my account") {
 
 function fillCertifier({
 	licenseExpirationDate = "04/01/2027",
-	confirmPassword = "correct horse",
+	confirmPassword = "Correct horse!",
 } = {}) {
 	fireEvent.change(screen.getByLabelText("Full name"), {
 		target: { value: "Alex Rivera" },
@@ -53,7 +53,7 @@ function fillCertifier({
 		target: { value: licenseExpirationDate },
 	});
 	fireEvent.change(screen.getByLabelText("Password"), {
-		target: { value: "correct horse" },
+		target: { value: "Correct horse!" },
 	});
 	fireEvent.change(screen.getByLabelText("Confirm password"), {
 		target: { value: confirmPassword },
@@ -121,7 +121,7 @@ describe("RedeemForm", () => {
 	it("says when the passwords do not match", () => {
 		renderCertifierForm();
 
-		fillCertifier({ confirmPassword: "correct horsf" });
+		fillCertifier({ confirmPassword: "Correct horsf!" });
 		submit();
 
 		expect(redeemInvitationAction).not.toHaveBeenCalled();
@@ -138,10 +138,31 @@ describe("RedeemForm", () => {
 		fireEvent.blur(password);
 
 		const message = screen.getByText("Use at least 8 characters.");
-		const hint = screen.getByText("At least 8 characters.");
+		const hint = screen.getByText(
+			"At least 8 characters, with a capital letter and a special character.",
+		);
 		expect(password.getAttribute("aria-describedby")).toBe(
 			`${message.id} ${hint.id}`,
 		);
+	});
+
+	it("refuses a long password with no capital or special character", () => {
+		renderCertifierForm();
+
+		const password = screen.getByLabelText("Password");
+		fireEvent.change(password, { target: { value: "correcthorse" } });
+		fireEvent.blur(password);
+
+		expect(
+			screen.getByText("Include at least one capital letter."),
+		).toBeTruthy();
+
+		fireEvent.change(password, { target: { value: "Correcthorse" } });
+		fireEvent.blur(password);
+
+		expect(
+			screen.getByText(/Include at least one special character/),
+		).toBeTruthy();
 	});
 
 	it("sends the server-decided mode and the date as the action's ISO day", async () => {

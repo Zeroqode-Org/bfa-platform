@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { PASSWORD_HINT, passwordPolicyError } from "@/lib/password-policy";
 import { createClient } from "@/lib/supabase/client";
 import { trpc } from "@/utils/trpc";
 
@@ -220,8 +221,9 @@ function PasswordCard() {
 	async function handleSubmit(event: React.FormEvent) {
 		event.preventDefault();
 
-		if (password.length < 8) {
-			toast.error("Use at least 8 characters");
+		const policyError = passwordPolicyError(password);
+		if (policyError) {
+			toast.error(policyError);
 			return;
 		}
 		if (password !== confirm) {
@@ -268,6 +270,7 @@ function PasswordCard() {
 						placeholder="Confirm new password"
 					/>
 				</Field>
+				<p className="text-[12px] text-muted-foreground">{PASSWORD_HINT}</p>
 				<Button type="submit" className="h-10" disabled={isSubmitting}>
 					{isSubmitting ? "Updating…" : "Update password"}
 				</Button>

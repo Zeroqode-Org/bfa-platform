@@ -93,7 +93,7 @@ set of filtered aggregates over a single scan.
 |---|---|---|
 | **Total assets** | Every `bfa_assets` row in the tenant, at any status | Primary |
 | **Tests this month** | Submitted tests whose `test_date` falls in the current calendar month | Accent |
-| **Past due** | Assets the scheduler has marked `asset_status = 'past_due'`. The whole card is a link to the [fail list](#the-fail-list) | Danger |
+| **Past due** | Assets the scheduler has marked `asset_status = 'past_due'`. The whole card is a link to the [Past Due list](#past-due-list) below it | Danger |
 | **Submitted reports** | Every submitted row in the tenant | Primary |
 | **No-BIN submissions** | Submitted rows with no BIN: linked to a no-BIN asset, or (filed before `0021`) not linked at all | Accent |
 
@@ -199,7 +199,7 @@ predicate, `noBinSubmission` — *no linked asset with a non-null BIN* — so th
 count and the rows cannot disagree. It is served by the partial index
 `bfa_assets_wp_no_bin_idx` (`0021`).
 
-## Delinquent assets
+## Past Due list
 
 Assets the scheduler has marked `past_due`, **worst first** — ordered by the
 annual test date that made them delinquent, not by BIN, because the question
@@ -220,11 +220,11 @@ this list is a view of that computation rather than a second opinion about it.
 
 ## The fail list
 
-**Route:** `/wp/fail-list`, reached from the **Past due** metric card — the
-whole card is a link. The build plan fixes that handoff, not the URL;
-`/wp/fail-list` is the minimal default, produced by the `failListHref` helper
-beside the other typed route helpers, and the page deliberately has **no
-sidebar item**: it is a drill-down of the card, not a section.
+**Route:** `/wp/fail-list`, reached from its own **Fail List** sidebar item.
+The build plan routed it through the **Past due** metric card; the client asked
+for that card to open the past-due assets instead (its number counts those, not
+failures), so the card now jumps to the [Past Due list](#past-due-list) and the
+fail list got a sidebar entry so it stays reachable.
 
 The page carries the standard WP gate (`requireAccount`) and renders inside the
 existing WP shell.

@@ -6,13 +6,14 @@ import {
 	defaultBreakdownRange,
 	failAgeBand,
 	failingDays,
-	failListHref,
 	formatCount,
 	formatDay,
 	formatMonth,
 	formatMonthShort,
 	formatPercent,
 	isCalendarDate,
+	PAST_DUE_LIST_ID,
+	pastDueListHref,
 	submittedTestHref,
 } from "./dashboard-types";
 
@@ -191,9 +192,9 @@ describe("daysOverdue", () => {
 	});
 });
 
-describe("failListHref", () => {
-	it("is the fail-list page, the Past due card's destination", () => {
-		expect(failListHref()).toBe("/wp/fail-list");
+describe("pastDueListHref", () => {
+	it("is the Past Due list on the same screen, the Past due card's destination", () => {
+		expect(pastDueListHref()).toBe(`#${PAST_DUE_LIST_ID}`);
 	});
 });
 

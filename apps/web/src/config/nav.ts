@@ -7,6 +7,7 @@ import {
 	Home,
 	type LucideIcon,
 	Mail,
+	ShieldAlert,
 	User,
 	UserCheck,
 	Users,
@@ -40,6 +41,9 @@ export const certifierNav: NavItem[] = [
 export const wpNav: NavItem[] = [
 	{ href: "/wp", label: "Home", icon: Home },
 	{ href: "/wp/assets", label: "BFA Assets", icon: ClipboardList },
+	// Not in the prototype: the fail list was reached from the Past due card
+	// until the client pointed that card at the past-due assets.
+	{ href: "/wp/fail-list", label: "Fail List", icon: ShieldAlert },
 	{ href: "/wp/certifiers", label: "Certifiers", icon: UserCheck },
 	{ href: "/wp/customers", label: "Customers", icon: Users },
 	{ href: "/wp/repair-companies", label: "Repair Companies", icon: Wrench },

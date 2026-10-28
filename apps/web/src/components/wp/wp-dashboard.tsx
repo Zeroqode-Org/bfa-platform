@@ -74,10 +74,11 @@ import {
 	assetHref,
 	daysOverdue,
 	defaultBreakdownRange,
-	failListHref,
 	formatCount,
 	formatDay,
 	formatMonth,
+	PAST_DUE_LIST_ID,
+	pastDueListHref,
 	submittedTestHref,
 } from "./dashboard-types";
 import {
@@ -203,15 +204,16 @@ export function WpDashboard({ today }: { today: string }) {
 								/>
 							);
 
-							// The Past due card doubles as the door to the fail list
-							// (build plan, Workflow 3). A link around the card rather
-							// than an onClick, so it announces as a link and keeps
-							// middle-click and open-in-new-tab.
+							// The Past due card jumps to the Past Due list further down
+							// this screen — the client's call, replacing the build
+							// plan's handoff to the fail list, which now has its own
+							// sidebar entry. A link around the card rather than an
+							// onClick, so it announces as a link.
 							return card.href ? (
 								<Link
 									key={card.key}
 									href={card.href()}
-									aria-label={`${card.label} — open the fail list`}
+									aria-label={`${card.label} — show the past due list`}
 									className="rounded-xl focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
 								>
 									{stat}
@@ -295,10 +297,14 @@ export function WpDashboard({ today }: { today: string }) {
 					</Card>
 				</section>
 
-				<section aria-label="Delinquent assets" className="flex">
+				<section
+					id={PAST_DUE_LIST_ID}
+					aria-label="Past Due"
+					className="flex scroll-mt-5"
+				>
 					<Card className="w-full">
 						<CardHeader>
-							<CardTitle>Delinquent assets</CardTitle>
+							<CardTitle>Past Due</CardTitle>
 							<CardDescription>
 								Past due, worst first — every assembly whose annual test date
 								has passed.
@@ -310,7 +316,7 @@ export function WpDashboard({ today }: { today: string }) {
 							) : delinquent.isError ? (
 								<StateBlock
 									tone="danger"
-									title="Couldn&rsquo;t load delinquent assets"
+									title="Couldn&rsquo;t load past due assets"
 									description={delinquent.error.message}
 									onRetry={() => delinquent.refetch()}
 								/>
@@ -533,12 +539,10 @@ const CARDS: readonly DashboardCard[] = [
 		label: "Past due",
 		tone: "danger",
 		Icon: TriangleAlert,
-		hint: "Assets outside their test window — open the fail list",
+		hint: "Assets outside their test window — see the list below",
 		// The card's number is the past-due count, from each asset's annual test
-		// date as of today; the fail list it
-		// opens is the failure-based work queue. Related answers, and the build
-		// plan routes one through the other.
-		href: failListHref,
+		// date as of today, so it opens the list of those same assets.
+		href: pastDueListHref,
 	},
 	{
 		key: "submittedReports",

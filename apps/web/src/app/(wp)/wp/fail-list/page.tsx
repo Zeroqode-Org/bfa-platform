@@ -4,10 +4,9 @@ import { FailListTable } from "@/components/wp/fail-list-table";
 import { requireAccount } from "@/lib/auth";
 
 /**
- * The fail list, reached from the dashboard's Past due card rather than from a
- * sidebar item of its own — it is a drill-down of that card, not a section.
- * The build plan fixes the handoff, not the URL; `/wp/fail-list`
- * (`failListHref`) is the minimal default.
+ * The fail list, reached from its own sidebar item. The build plan routed it
+ * through the dashboard's Past due card; the client asked for that card to
+ * open the past-due assets instead, so the list got a section of its own.
  */
 export default async function Page() {
 	// Gated here, not only in the group's layout. A layout renders once and is

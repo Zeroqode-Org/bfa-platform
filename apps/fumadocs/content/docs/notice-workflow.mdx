@@ -931,7 +931,7 @@ The screens no longer read the column, though. A deployment whose tick rarely ra
 showed years-late assets as on time — Home's *Past due* at 0, an empty *Past due*
 filter (WP/Admin feedback). Every status a WP sees is now worked out from the date
 at read time by `effectiveAssetStatus` / `isPastDue` (`lib/asset-status-sql.ts`):
-the asset list's status and filter, the Home card and *Delinquent assets*, and the
+the asset list's status and filter, the Home card and its *Past Due* list, and the
 general-info broadcast's past-due audience. The tick writes the column through
 that same expression, so the two cannot disagree once it has run.
 
