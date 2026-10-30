@@ -101,7 +101,7 @@ const outside: WpCertifier = {
 	certifierType: "external",
 };
 
-function renderTable() {
+function renderTable({ canManage = true }: { canManage?: boolean } = {}) {
 	const queryClient = new QueryClient({
 		defaultOptions: {
 			queries: { retry: false },
@@ -111,7 +111,7 @@ function renderTable() {
 
 	render(
 		<QueryClientProvider client={queryClient}>
-			<CertifiersTable />
+			<CertifiersTable canManage={canManage} />
 		</QueryClientProvider>,
 	);
 }
@@ -412,12 +412,15 @@ describe("CertifiersTable", () => {
 	});
 
 	it("points an empty tab at the other one when the purveyor has certifiers there", async () => {
-		listFn.mockResolvedValue([outside]);
+		listFn.mockResolvedValue([active]);
 		renderTable();
 
-		expect(await screen.findByText("No internal certifiers yet")).toBeTruthy();
+		await screen.findByText("Ada Tester");
+		fireEvent.click(screen.getByRole("tab", { name: /external certifiers/i }));
+
+		expect(screen.getByText("No external certifiers yet")).toBeTruthy();
 		expect(
-			screen.getByText(/move a certifier here from the external tab/i),
+			screen.getByText(/move a certifier here from the internal tab/i),
 		).toBeTruthy();
 	});
 
@@ -440,5 +443,57 @@ describe("CertifiersTable", () => {
 			id: active.id,
 			certifierType: "external",
 		});
+	});
+
+	it("opens on the external tab when every certifier is external", async () => {
+		// The state every purveyor is in right after the release: all existing
+		// authorizations were filed as external.
+		listFn.mockResolvedValue([outside]);
+		renderTable();
+
+		expect(await screen.findByText("Kai External")).toBeTruthy();
+		expect(
+			screen
+				.getByRole("tab", { name: /external certifiers/i })
+				.getAttribute("aria-selected"),
+		).toBe("true");
+	});
+
+	it("labels the table as the panel of the selected tab", async () => {
+		listFn.mockResolvedValue([active, outside]);
+		renderTable();
+
+		await screen.findByText("Ada Tester");
+		const tab = screen.getByRole("tab", { name: /internal certifiers/i });
+		const panel = screen.getByRole("tabpanel");
+
+		expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+		expect(panel.getAttribute("aria-labelledby")).toBe(tab.id);
+	});
+
+	it("moves between the tabs with the arrow keys", async () => {
+		listFn.mockResolvedValue([active, outside]);
+		renderTable();
+
+		await screen.findByText("Ada Tester");
+		fireEvent.keyDown(
+			screen.getByRole("tab", { name: /internal certifiers/i }),
+			{
+				key: "ArrowRight",
+			},
+		);
+
+		expect(screen.getByText("Kai External")).toBeTruthy();
+		const external = screen.getByRole("tab", { name: /external certifiers/i });
+		expect(external.getAttribute("aria-selected")).toBe("true");
+		expect(document.activeElement).toBe(external);
+	});
+
+	it("shows no row actions to a WP Employee, who would only be refused", async () => {
+		renderTable({ canManage: false });
+
+		await screen.findByText("Ada Tester");
+		expect(screen.queryByRole("button", { name: /^block/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^move/i })).toBeNull();
 	});
 });

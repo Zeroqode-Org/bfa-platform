@@ -41,10 +41,13 @@ Three consequences follow, and the screen is built around all three:
 ## What the screen shows
 
 `/wp/certifiers`, in the standard WP shell. The list is split into two tabs,
-**Internal certifiers** and **External certifiers**, each with its count; the
-screen opens on Internal. Columns: name, company, ID number, licence
+**Internal certifiers** and **External certifiers**, each with its count. The
+screen opens on Internal, unless Internal is empty and External is not — the
+state every purveyor is in right after the release, when all existing
+certifiers were filed as external. Columns: name, company, ID number, licence
 expiration, status, and per-row actions — **Make internal** / **Make external**
-and **Block** / **Unblock**. There is no delete control and no edit control.
+and **Block** / **Unblock**, shown to Admins and SubAdmins only (an Employee
+would only be refused). There is no delete control and no edit control.
 
 ## Internal and external certifiers
 

@@ -420,6 +420,78 @@ describeDb("redeemInvitation", () => {
 	});
 
 	describe("existing certifier invited by a second purveyor", () => {
+		it("files them under the type the second purveyor chose, leaving the first as it was", async () => {
+			const email = "redeem.typed.twowp@example.com";
+			const firstSecret = `first-${randomUUID()}`;
+			await insertInvitation({ email, role: "certifier", secret: firstSecret });
+
+			const { admin } = fakeAuthAdmin();
+			const first = await redemption.redeemInvitation(
+				{
+					secret: firstSecret,
+					password: "correct horse battery",
+					fullName: "Redemption Riley",
+					certifier: {
+						company: "Redemption Riley Testing",
+						idNumber: "CERT-7100",
+						licenseExpirationDate: "2030-06-30",
+					},
+				},
+				{ authAdmin: admin },
+			);
+
+			const secondSecret = `second-${randomUUID()}`;
+			await insertInvitation({
+				email,
+				role: "certifier",
+				secret: secondSecret,
+				associatedWpId: wpB,
+				certifierType: "internal",
+			});
+			await redemption.redeemInvitation(
+				{ secret: secondSecret },
+				{ authAdmin: admin },
+			);
+
+			const { rows } = await pool.query(
+				`select a.water_purveyor_id, a.certifier_type
+				 from wp_certifier_authorizations a
+				 join certifiers c on c.id = a.certifier_id
+				 where c.profile_id = $1`,
+				[first.profileId],
+			);
+			const typeFor = (wp: string) =>
+				rows.find((row) => row.water_purveyor_id === wp)?.certifier_type;
+
+			expect(typeFor(wpB)).toBe("internal");
+			expect(typeFor(wpA)).toBe("external");
+
+			// Invited again by the same purveyor with the other type: the existing
+			// authorization keeps its type — moving it is the Certifiers screen's
+			// job, not a side effect of a repeat invitation.
+			const repeatSecret = `repeat-${randomUUID()}`;
+			await insertInvitation({
+				email,
+				role: "certifier",
+				secret: repeatSecret,
+				associatedWpId: wpB,
+				certifierType: "external",
+			});
+			await redemption.redeemInvitation(
+				{ secret: repeatSecret },
+				{ authAdmin: admin },
+			);
+
+			const { rows: after } = await pool.query(
+				`select a.certifier_type
+				 from wp_certifier_authorizations a
+				 join certifiers c on c.id = a.certifier_id
+				 where c.profile_id = $1 and a.water_purveyor_id = $2`,
+				[first.profileId, wpB],
+			);
+			expect(after).toEqual([{ certifier_type: "internal" }]);
+		});
+
 		it("adds only the authorization and leaves the profile untouched", async () => {
 			const email = "redeem.twowp@example.com";
 			const firstSecret = `first-${randomUUID()}`;

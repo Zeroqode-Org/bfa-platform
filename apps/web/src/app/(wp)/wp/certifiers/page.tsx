@@ -9,7 +9,13 @@ export default async function Page() {
 	// the layout ran would sail straight through. `certifiers.status` is
 	// exactly that case: a purveyor can block a certifier who is already
 	// signed in and part-way through a session.
-	await requireAccount();
+	const account = await requireAccount();
+
+	// What the screen renders, not what it is allowed to do — blocking and
+	// moving a certifier between tabs are Admin and SubAdmin only, and both
+	// procedures check that again for themselves.
+	const canManage =
+		account.globalRole === "wp_admin" || account.globalRole === "wp_sub_admin";
 
 	return (
 		<div className="flex flex-col gap-5">
@@ -24,7 +30,7 @@ export default async function Page() {
 				</p>
 			</div>
 
-			<CertifiersTable />
+			<CertifiersTable canManage={canManage} />
 		</div>
 	);
 }

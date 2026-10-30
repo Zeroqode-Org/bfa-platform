@@ -372,6 +372,7 @@ async function addSecondPurveyor(
 			certifierId: certifier.id,
 			waterPurveyorId: invitation.associatedWpId,
 			authorizationStatus: "active",
+			certifierType: invitation.certifierType ?? "external",
 		})
 		.onConflictDoNothing();
 
