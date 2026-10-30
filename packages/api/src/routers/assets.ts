@@ -16,12 +16,12 @@ import {
 	listAssetsInput,
 	updateAssetInput,
 } from "../lib/asset-input";
-import { wizardCustomerEmail } from "../lib/asset-sync";
 import {
 	ASSET_STALE_DATE_MESSAGE,
 	resolveAnnualTestDate,
 } from "../lib/asset-stale";
 import { effectiveAssetStatus } from "../lib/asset-status-sql";
+import { wizardCustomerEmail } from "../lib/asset-sync";
 import {
 	type AuditActor,
 	auditActor,
