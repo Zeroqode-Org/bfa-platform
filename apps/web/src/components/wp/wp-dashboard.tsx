@@ -4,6 +4,7 @@ import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import {
 	Card,
+	CardAction,
 	CardContent,
 	CardDescription,
 	CardHeader,
@@ -74,11 +75,15 @@ import {
 	assetHref,
 	daysOverdue,
 	defaultBreakdownRange,
-	failListHref,
 	formatCount,
 	formatDay,
 	formatMonth,
+	noBinTestsHref,
+	PAST_DUE_LIST_ID,
+	pastDueAssetsHref,
+	pastDueListHref,
 	submittedTestHref,
+	submittedTestsHref,
 } from "./dashboard-types";
 import {
 	binLabel,
@@ -203,15 +208,16 @@ export function WpDashboard({ today }: { today: string }) {
 								/>
 							);
 
-							// The Past due card doubles as the door to the fail list
-							// (build plan, Workflow 3). A link around the card rather
-							// than an onClick, so it announces as a link and keeps
-							// middle-click and open-in-new-tab.
+							// The Past due card jumps to the Past Due list further down
+							// this screen — the client's call, replacing the build
+							// plan's handoff to the fail list, which now has its own
+							// sidebar entry. A link around the card rather than an
+							// onClick, so it announces as a link.
 							return card.href ? (
 								<Link
 									key={card.key}
 									href={card.href()}
-									aria-label={`${card.label} — open the fail list`}
+									aria-label={`${card.label} — show the past due list`}
 									className="rounded-xl focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
 								>
 									{stat}
@@ -234,6 +240,9 @@ export function WpDashboard({ today }: { today: string }) {
 							the test to an assembly you already have. Notices for it start
 							once it has a BIN.
 						</CardDescription>
+						<CardAction>
+							<ViewAllLink href={noBinTestsHref()} list="no-BIN reports" />
+						</CardAction>
 					</CardHeader>
 					<CardContent>
 						{noBin.isPending ? (
@@ -267,6 +276,12 @@ export function WpDashboard({ today }: { today: string }) {
 								The newest tests filed against you. Opening one takes you to
 								Submitted Tests, where you can correct it.
 							</CardDescription>
+							<CardAction>
+								<ViewAllLink
+									href={submittedTestsHref()}
+									list="submitted tests"
+								/>
+							</CardAction>
 						</CardHeader>
 						<CardContent>
 							{incoming.isPending ? (
@@ -295,14 +310,24 @@ export function WpDashboard({ today }: { today: string }) {
 					</Card>
 				</section>
 
-				<section aria-label="Delinquent assets" className="flex">
+				<section
+					id={PAST_DUE_LIST_ID}
+					aria-label="Past Due"
+					className="flex scroll-mt-5"
+				>
 					<Card className="w-full">
 						<CardHeader>
-							<CardTitle>Delinquent assets</CardTitle>
+							<CardTitle>Past Due</CardTitle>
 							<CardDescription>
 								Past due, worst first — every assembly whose annual test date
 								has passed.
 							</CardDescription>
+							<CardAction>
+								<ViewAllLink
+									href={pastDueAssetsHref()}
+									list="past due assets"
+								/>
+							</CardAction>
 						</CardHeader>
 						<CardContent>
 							{delinquent.isPending ? (
@@ -310,7 +335,7 @@ export function WpDashboard({ today }: { today: string }) {
 							) : delinquent.isError ? (
 								<StateBlock
 									tone="danger"
-									title="Couldn&rsquo;t load delinquent assets"
+									title="Couldn&rsquo;t load past due assets"
 									description={delinquent.error.message}
 									onRetry={() => delinquent.refetch()}
 								/>
@@ -533,12 +558,10 @@ const CARDS: readonly DashboardCard[] = [
 		label: "Past due",
 		tone: "danger",
 		Icon: TriangleAlert,
-		hint: "Assets outside their test window — open the fail list",
+		hint: "Assets outside their test window — see the list below",
 		// The card's number is the past-due count, from each asset's annual test
-		// date as of today; the fail list it
-		// opens is the failure-based work queue. Related answers, and the build
-		// plan routes one through the other.
-		href: failListHref,
+		// date as of today, so it opens the list of those same assets.
+		href: pastDueListHref,
 	},
 	{
 		key: "submittedReports",
@@ -675,6 +698,24 @@ function IncomingRow({ report }: { report: IncomingReport }) {
 				)}
 			</Link>
 		</li>
+	);
+}
+
+/**
+ * The way out of a capped home list into the full screen behind it. The lists
+ * show the first few rows only (`HOME_LIST_DEFAULT_LIMIT`, or the no-BIN
+ * table's own cap), so without this a reader with more rows than that has no
+ * way to see the rest from here.
+ */
+function ViewAllLink({ href, list }: { href: Route; list: string }) {
+	return (
+		<Link
+			href={href}
+			aria-label={`View all ${list}`}
+			className="whitespace-nowrap rounded-sm font-medium text-[13px] text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
+		>
+			View all
+		</Link>
 	);
 }
 

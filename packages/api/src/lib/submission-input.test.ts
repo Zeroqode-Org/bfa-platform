@@ -180,6 +180,20 @@ describe("listSubmittedTestsInput", () => {
 	it("caps the page size", () => {
 		expect(() => listSubmittedTestsInput.parse({ pageSize: 500 })).toThrow();
 	});
+
+	it("takes the no-BIN filter alongside the others", () => {
+		// The dashboard's No-BIN "View all" lands as `?bin=none`; it narrows
+		// together with a result and a period like any other filter.
+		expect(
+			listSubmittedTestsInput.parse({ bin: "none", result: "fail" }),
+		).toMatchObject({ bin: "none", result: "fail" });
+	});
+
+	it("refuses a BIN filter it does not know", () => {
+		// Dropping it would quietly show every test under a "No BIN" heading.
+		expect(() => listSubmittedTestsInput.parse({ bin: "some" })).toThrow();
+		expect(() => listSubmittedTestsInput.parse({ bin: true })).toThrow();
+	});
 });
 
 describe("exportSubmittedTestsInput", () => {
@@ -198,6 +212,15 @@ describe("exportSubmittedTestsInput", () => {
 		expect(() =>
 			exportSubmittedTestsInput.parse({ from: "2027-03-31", to: "2027-03-01" }),
 		).toThrow();
+	});
+
+	it("takes the no-BIN filter as the query string spells it", () => {
+		// Read straight off `?bin=none`, so the statement holds the rows the
+		// filtered table — and the dashboard's No-BIN card — counted.
+		expect(exportSubmittedTestsInput.parse({ bin: "none" })).toEqual({
+			bin: "none",
+		});
+		expect(() => exportSubmittedTestsInput.parse({ bin: "true" })).toThrow();
 	});
 
 	it("refuses a parameter it does not know rather than dropping it", () => {

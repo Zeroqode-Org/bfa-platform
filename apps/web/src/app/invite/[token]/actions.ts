@@ -9,10 +9,8 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { landingRouteFor } from "@/lib/landing-route";
-import {
-	MIN_PASSWORD_LENGTH,
-	REDEEM_FIELD_LIMITS,
-} from "@/lib/redeem-field-limits";
+import { passwordPolicyError } from "@/lib/password-policy";
+import { REDEEM_FIELD_LIMITS } from "@/lib/redeem-field-limits";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -57,11 +55,11 @@ const redeemSchema = z
 			ctx.addIssue({ code: "custom", message: "Enter your full name" });
 		}
 
-		if (!value.password || value.password.length < MIN_PASSWORD_LENGTH) {
-			ctx.addIssue({
-				code: "custom",
-				message: `Choose a password of at least ${MIN_PASSWORD_LENGTH} characters`,
-			});
+		const passwordError = value.password
+			? passwordPolicyError(value.password)
+			: "Choose a password.";
+		if (passwordError) {
+			ctx.addIssue({ code: "custom", message: passwordError });
 		} else if (value.password !== value.confirmPassword) {
 			ctx.addIssue({ code: "custom", message: "The passwords do not match" });
 		}

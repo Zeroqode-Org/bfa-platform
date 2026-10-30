@@ -9,6 +9,8 @@ import type { SubmissionResult } from "./submission-types";
 /** The Submitted Tests screen's filters, as the export route takes them. */
 export type ExportFilters = {
 	result?: SubmissionResult;
+	/** `"none"`: only the tests with no BIN, as `?bin=none` on the route. */
+	bin?: "none";
 	from?: string;
 	to?: string;
 };

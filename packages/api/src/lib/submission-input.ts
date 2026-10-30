@@ -170,7 +170,7 @@ export const updateSubmittedTestInput = z.object({
  * shows a numbered pager over a set measured in hundreds, and a page number is
  * what the person actually asks for.
  *
- * The three filters are independent, not a mode switch. "Failures in March" is
+ * The filters are independent, not a mode switch. "Failures in March" is
  * one question, and answering it by making the reader choose between a result
  * and a period would be answering a different one. Both dates are inclusive — a
  * WP asking for the 1st to the 31st means the 31st.
@@ -182,6 +182,17 @@ export const updateSubmittedTestInput = z.object({
  */
 const submittedTestsFilterShape = {
 	result: z.enum(TEST_RESULTS).optional(),
+	/**
+	 * `"none"`: only the tests with no BIN — the dashboard's No-BIN card and
+	 * list, whose "View all" lands here as `?bin=none`. Absent: every test.
+	 *
+	 * A one-value enum rather than a boolean because it travels as text: the
+	 * CSV export reads its filters straight off a query string, where `true` is
+	 * a string a `z.boolean()` would refuse, and the screen's own URL already
+	 * spells it `bin=none`. A value for "has a BIN" can join it later without
+	 * renaming the parameter.
+	 */
+	bin: z.enum(["none"]).optional(),
 	/** Inclusive lower bound on `test_date`. */
 	from: z.iso.date().optional(),
 	/** Inclusive upper bound on `test_date`. */

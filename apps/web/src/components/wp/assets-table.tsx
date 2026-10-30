@@ -85,12 +85,21 @@ const SEARCH_DEBOUNCE_MS = 300;
  * editable from it — the status, which the scheduler computes from that date,
  * and the current customer, which is attached from the asset's own page so the
  * change is recorded as occupancy rather than as an edit.
+ *
+ * `initialStatus` opens the list already filtered — how the dashboard's Past
+ * Due block links to every past-due asset. It is a starting value and nothing
+ * more: the filter stays the person's to change, and changing it does not write
+ * back to the URL.
  */
-export function AssetsTable() {
+export function AssetsTable({
+	initialStatus = "all",
+}: {
+	initialStatus?: StatusFilter;
+} = {}) {
 	const queryClient = useQueryClient();
 
 	const [page, setPage] = useState(1);
-	const [status, setStatus] = useState<StatusFilter>("all");
+	const [status, setStatus] = useState<StatusFilter>(initialStatus);
 	const [search, setSearch] = useState("");
 	// What the query actually asks for. Separated from what is in the box so a
 	// typed word is one request rather than one per keystroke.

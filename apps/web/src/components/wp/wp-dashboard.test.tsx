@@ -320,17 +320,19 @@ describe("WpDashboard metric cards", () => {
 		expect(screen.queryByText("Awaiting review")).toBeNull();
 	});
 
-	// The build plan routes the fail list through this card (Workflow 3): the
-	// number is the scheduler's past-due count, and the click is the door to
-	// the failure-based work queue.
-	it("makes the Past due card a link to the fail list, and only that card", async () => {
+	// The client's call: the card counts past-due assets, so the click opens
+	// the list of those same assets, not the failure-based fail list.
+	it("makes the Past due card a link to the Past Due list, and only that card", async () => {
 		renderDashboard();
 
 		const pastDue = await figures().findByRole("link", {
-			name: /Past due — open the fail list/,
+			name: /Past due — show the past due list/,
 		});
 
-		expect(pastDue.getAttribute("href")).toBe("/wp/fail-list");
+		expect(pastDue.getAttribute("href")).toBe("#past-due");
+		expect(
+			document.getElementById("past-due")?.getAttribute("aria-label"),
+		).toBe("Past Due");
 		// The other four cards are numbers, not doors.
 		expect(figures().getAllByRole("link").length).toBe(1);
 	});
@@ -497,7 +499,22 @@ describe("WpDashboard no-BIN reports", () => {
 	});
 });
 
-describe("WpDashboard delinquent assets", () => {
+// The home lists are capped, so each one offers the full screen behind it.
+describe("WpDashboard view-all links", () => {
+	it.each([
+		["Incoming reports", "View all submitted tests", "/wp/tests"],
+		["Past Due", "View all past due assets", "/wp/assets?status=past_due"],
+		["No-BIN reports", "View all no-BIN reports", "/wp/tests?bin=none"],
+	])("%s links to its full list", async (region, name, href) => {
+		renderDashboard();
+
+		const link = await panel(region).findByRole("link", { name });
+
+		expect(link.getAttribute("href")).toBe(href);
+	});
+});
+
+describe("WpDashboard past due list", () => {
 	it("links each asset to its own detail route", async () => {
 		renderDashboard();
 
@@ -531,9 +548,7 @@ describe("WpDashboard delinquent assets", () => {
 
 		// Not "0 days": an asset the scheduler marked past due with no date to be
 		// past is a data problem, and a zero would read as "due today".
-		expect(
-			await panel("Delinquent assets").findByText("Past due"),
-		).toBeTruthy();
+		expect(await panel("Past Due").findByText("Past due")).toBeTruthy();
 		expect(screen.queryByText("0 days")).toBeNull();
 	});
 
@@ -551,7 +566,7 @@ describe("WpDashboard delinquent assets", () => {
 		renderDashboard();
 
 		expect(
-			await screen.findByText("Couldn’t load delinquent assets"),
+			await screen.findByText("Couldn’t load past due assets"),
 		).toBeTruthy();
 		expect(screen.getByText("BIN-10041")).toBeTruthy();
 	});

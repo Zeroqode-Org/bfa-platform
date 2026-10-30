@@ -11,5 +11,3 @@ export const REDEEM_FIELD_LIMITS = {
 	certifierCompany: 200,
 	certifierIdNumber: 100,
 } as const;
-
-export const MIN_PASSWORD_LENGTH = 8;

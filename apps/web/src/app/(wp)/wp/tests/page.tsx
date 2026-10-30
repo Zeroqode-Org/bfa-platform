@@ -6,7 +6,10 @@ import { requireAccount } from "@/lib/auth";
 export default async function Page({
 	searchParams,
 }: {
-	searchParams: Promise<{ test?: string | string[] }>;
+	searchParams: Promise<{
+		test?: string | string[];
+		bin?: string | string[];
+	}>;
 }) {
 	// Gated here, not only in the group's layout. A layout renders once and is
 	// reused across client-side navigations — only the changed page is
@@ -26,8 +29,13 @@ export default async function Page({
 	// ignored rather than guessed at, and the id itself is never trusted —
 	// `getSubmittedTest` scopes by tenant and status, so a foreign id, a draft
 	// id and an invented one all get the same not-found.
-	const { test } = await searchParams;
+	const { test, bin } = await searchParams;
 	const initialSubmissionId = typeof test === "string" ? test : undefined;
+
+	// `?bin=none` starts the list on the no-BIN tests — the dashboard's No-BIN
+	// "View all". Exactly that string and nothing looser: any other value, or a
+	// repeated one, is the unfiltered list rather than a guess at what was meant.
+	const initialNoBin = bin === "none";
 
 	return (
 		<div className="flex flex-col gap-5">
@@ -40,7 +48,14 @@ export default async function Page({
 				</p>
 			</div>
 
-			<SubmittedTestsTable initialSubmissionId={initialSubmissionId} />
+			{/* Keyed by the BIN preset because moving between `?bin=none` and the
+			    bare route keeps this page mounted: without a new key the table
+			    would hold on to the old filter under the new URL. */}
+			<SubmittedTestsTable
+				key={initialNoBin ? "no-bin" : "all"}
+				initialSubmissionId={initialSubmissionId}
+				initialNoBin={initialNoBin}
+			/>
 		</div>
 	);
 }

@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { PASSWORD_HINT, passwordPolicyError } from "@/lib/password-policy";
 import { createClient } from "@/lib/supabase/client";
 import { trpc } from "@/utils/trpc";
 
@@ -216,18 +217,20 @@ function PasswordCard() {
 	const [password, setPassword] = useState("");
 	const [confirm, setConfirm] = useState("");
 	const [isSubmitting, setIsSubmitting] = useState(false);
+	// Shown under the field it is about rather than as a toast: the rule has
+	// five parts, and a toast that fades says only one of them, once.
+	const [passwordError, setPasswordError] = useState<string | null>(null);
+	const [confirmError, setConfirmError] = useState<string | null>(null);
 
 	async function handleSubmit(event: React.FormEvent) {
 		event.preventDefault();
 
-		if (password.length < 8) {
-			toast.error("Use at least 8 characters");
-			return;
-		}
-		if (password !== confirm) {
-			toast.error("Passwords don't match");
-			return;
-		}
+		const policyError = passwordPolicyError(password) ?? null;
+		const mismatch =
+			!policyError && password !== confirm ? "Passwords don't match." : null;
+		setPasswordError(policyError);
+		setConfirmError(mismatch);
+		if (policyError || mismatch) return;
 
 		setIsSubmitting(true);
 		const supabase = createClient();
@@ -254,9 +257,25 @@ function PasswordCard() {
 						type="password"
 						autoComplete="new-password"
 						value={password}
-						onChange={(event) => setPassword(event.target.value)}
+						onChange={(event) => {
+							setPassword(event.target.value);
+							setPasswordError(null);
+						}}
 						placeholder="New password"
+						aria-invalid={passwordError ? true : undefined}
+						aria-describedby={
+							passwordError
+								? "cert-new-password-error cert-new-password-hint"
+								: "cert-new-password-hint"
+						}
 					/>
+					<FieldError id="cert-new-password-error" message={passwordError} />
+					<p
+						id="cert-new-password-hint"
+						className="text-[12px] text-muted-foreground"
+					>
+						{PASSWORD_HINT}
+					</p>
 				</Field>
 				<Field label="Confirm new password" htmlFor="cert-confirm-password">
 					<Input
@@ -264,9 +283,17 @@ function PasswordCard() {
 						type="password"
 						autoComplete="new-password"
 						value={confirm}
-						onChange={(event) => setConfirm(event.target.value)}
+						onChange={(event) => {
+							setConfirm(event.target.value);
+							setConfirmError(null);
+						}}
 						placeholder="Confirm new password"
+						aria-invalid={confirmError ? true : undefined}
+						aria-describedby={
+							confirmError ? "cert-confirm-password-error" : undefined
+						}
 					/>
+					<FieldError id="cert-confirm-password-error" message={confirmError} />
 				</Field>
 				<Button type="submit" className="h-10" disabled={isSubmitting}>
 					{isSubmitting ? "Updating…" : "Update password"}

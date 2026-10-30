@@ -6,14 +6,18 @@ import {
 	defaultBreakdownRange,
 	failAgeBand,
 	failingDays,
-	failListHref,
 	formatCount,
 	formatDay,
 	formatMonth,
 	formatMonthShort,
 	formatPercent,
 	isCalendarDate,
+	noBinTestsHref,
+	PAST_DUE_LIST_ID,
+	pastDueAssetsHref,
+	pastDueListHref,
 	submittedTestHref,
+	submittedTestsHref,
 } from "./dashboard-types";
 
 /**
@@ -191,9 +195,23 @@ describe("daysOverdue", () => {
 	});
 });
 
-describe("failListHref", () => {
-	it("is the fail-list page, the Past due card's destination", () => {
-		expect(failListHref()).toBe("/wp/fail-list");
+describe("view-all links", () => {
+	it("opens every submitted test from the incoming-reports list", () => {
+		expect(submittedTestsHref()).toBe("/wp/tests");
+	});
+
+	it("opens the asset list filtered to past due from the Past Due list", () => {
+		expect(pastDueAssetsHref()).toBe("/wp/assets?status=past_due");
+	});
+
+	it("opens Submitted Tests filtered to no BIN from the no-BIN table", () => {
+		expect(noBinTestsHref()).toBe("/wp/tests?bin=none");
+	});
+});
+
+describe("pastDueListHref", () => {
+	it("is the Past Due list on the same screen, the Past due card's destination", () => {
+		expect(pastDueListHref()).toBe(`#${PAST_DUE_LIST_ID}`);
 	});
 });
 

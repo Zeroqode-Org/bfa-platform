@@ -59,17 +59,38 @@ export function assetHref(assetId: string): Route {
 	return `/wp/assets/${encodeURIComponent(assetId)}` as Route;
 }
 
+/** "View all" on the incoming-reports list: every submitted test, newest first. */
+export function submittedTestsHref(): Route {
+	return "/wp/tests" as Route;
+}
+
 /**
- * The fail-list page, reached from the Past due card. One helper rather than a
- * string literal in the card, so the card and any future caller name the same
- * route. The build plan fixes the handoff, not the URL; `/wp/fail-list` is the
- * minimal default and is documented as such.
+ * "View all" on the Past Due list: the asset list with its status filter
+ * preset, which answers the same question without the home list's cap.
  */
-export function failListHref(): Route {
-	// The same cast the other helpers make: `typedRoutes`' generated union is
-	// refreshed by the Next dev server / build, so a route added in the same
-	// change as its first caller does not exist in the union a bare `tsc` sees.
-	return "/wp/fail-list" as Route;
+export function pastDueAssetsHref(): Route {
+	return "/wp/assets?status=past_due" as Route;
+}
+
+/**
+ * "View all" on the no-BIN table: Submitted Tests narrowed to the same
+ * no-BIN predicate the table and its card use, so the counts agree.
+ */
+export function noBinTestsHref(): Route {
+	return "/wp/tests?bin=none" as Route;
+}
+
+/** The element id of the dashboard's Past Due list, the Past due card's target. */
+export const PAST_DUE_LIST_ID = "past-due";
+
+/**
+ * Where the Past due card goes: the Past Due list on the same screen. A bare
+ * fragment, so the jump is a scroll on the page already loaded rather than a
+ * navigation.
+ */
+export function pastDueListHref(): Route {
+	// `typedRoutes`' union holds paths, not fragments, hence the cast.
+	return `#${PAST_DUE_LIST_ID}` as Route;
 }
 
 /**

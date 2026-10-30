@@ -389,8 +389,8 @@ function TestCustomerSuggestion({
 				// A new customer is attached through a BIN (`createCustomer`'s
 				// `attachBin`), so this asset needs its BIN first.
 				<p>
-					No customer has this email yet. Assign the BIN first — a new
-					customer is created through it.
+					No customer has this email yet. Assign the BIN first — a new customer
+					is created through it.
 				</p>
 			)}
 		</div>

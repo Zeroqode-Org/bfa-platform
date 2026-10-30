@@ -85,6 +85,7 @@ vi.mock("sonner", () => ({
 }));
 
 const { AssetsTable } = await import("./assets-table");
+const { isAssetStatus } = await import("./asset-types");
 
 function asset(overrides: Partial<Asset> = {}): Asset {
 	return {
@@ -119,7 +120,7 @@ function page(rows: Asset[], overrides: Record<string, number> = {}) {
 	};
 }
 
-function renderTable() {
+function renderTable(props: Parameters<typeof AssetsTable>[0] = {}) {
 	const queryClient = new QueryClient({
 		defaultOptions: {
 			queries: { retry: false },
@@ -129,7 +130,7 @@ function renderTable() {
 
 	render(
 		<QueryClientProvider client={queryClient}>
-			<AssetsTable />
+			<AssetsTable {...props} />
 		</QueryClientProvider>,
 	);
 }
@@ -349,6 +350,47 @@ describe("AssetsTable", () => {
 		expect(dialog.textContent).toContain(
 			"Registering an assembly here needs no certifier submission.",
 		);
+	});
+
+	it("opens already filtered when given an initial status", async () => {
+		// How the dashboard's Past Due block lands here: `?status=past_due` is
+		// read by the page and handed down as the filter's starting value.
+		renderTable({ initialStatus: "past_due" });
+
+		await screen.findByText("BIN-10041");
+
+		expect(screen.getByLabelText("Filter by status").textContent).toContain(
+			"Past due",
+		);
+		expect(listFn).toHaveBeenCalledWith(
+			expect.objectContaining({ status: "past_due" }),
+		);
+		// The very first request is already the filtered one — no unfiltered
+		// list is fetched and then thrown away.
+		expect(listFn.mock.calls[0]?.[0]).toMatchObject({ status: "past_due" });
+	});
+
+	it("asks for every status when no initial status is given", async () => {
+		renderTable();
+
+		await screen.findByText("BIN-10041");
+
+		expect(screen.getByLabelText("Filter by status").textContent).toContain(
+			"All statuses",
+		);
+		expect(listFn.mock.calls[0]?.[0]).toMatchObject({ status: undefined });
+	});
+
+	it("accepts only the filter's real statuses from a URL", () => {
+		// `all` is the default, so asking for it is asking for nothing; an array
+		// is a repeated `?status=`; `toString` is on every object's prototype.
+		expect(isAssetStatus("past_due")).toBe(true);
+		expect(isAssetStatus("due_soon")).toBe(true);
+		expect(isAssetStatus("active")).toBe(true);
+		for (const value of ["all", "overdue", "toString", "", ["past_due"]]) {
+			expect(isAssetStatus(value)).toBe(false);
+		}
+		expect(isAssetStatus(undefined)).toBe(false);
 	});
 
 	it("offers no customer picker and never loads the customer list", async () => {

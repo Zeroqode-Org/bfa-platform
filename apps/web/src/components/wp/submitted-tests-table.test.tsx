@@ -162,7 +162,7 @@ function page(rows: Submission[], overrides: Record<string, number> = {}) {
 	};
 }
 
-function renderTable() {
+function renderTable(props: Parameters<typeof SubmittedTestsTable>[0] = {}) {
 	const queryClient = new QueryClient({
 		defaultOptions: {
 			queries: { retry: false },
@@ -172,7 +172,7 @@ function renderTable() {
 
 	render(
 		<QueryClientProvider client={queryClient}>
-			<SubmittedTestsTable />
+			<SubmittedTestsTable {...props} />
 		</QueryClientProvider>,
 	);
 }
@@ -330,6 +330,46 @@ describe("SubmittedTestsTable — the list", () => {
 		await waitFor(() =>
 			expect(listFn).toHaveBeenCalledWith(
 				expect.objectContaining({ result: "fail" }),
+			),
+		);
+	});
+
+	it("starts on the no-BIN tests when the dashboard's View all sends it here", async () => {
+		// `?bin=none` from the No-BIN card: the server applies that card's own
+		// predicate, so the first request has to carry the filter, and the control
+		// has to say so rather than look like the unfiltered list.
+		renderTable({ initialNoBin: true });
+		await screen.findByText("BIN-10041");
+
+		expect(listFn).toHaveBeenCalledWith(
+			expect.objectContaining({ bin: "none" }),
+		);
+		expect(
+			screen.getByRole("combobox", { name: "Filter by BIN" }).textContent,
+		).toContain("No BIN");
+	});
+
+	it("asks for every BIN when it arrives without the filter", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		expect(listFn).toHaveBeenCalledWith(
+			expect.objectContaining({ bin: undefined }),
+		);
+		expect(
+			screen.getByRole("combobox", { name: "Filter by BIN" }).textContent,
+		).toContain("All BINs");
+	});
+
+	it("filters by BIN", async () => {
+		renderTable();
+		await screen.findByText("BIN-10041");
+
+		await choose("Filter by BIN", "No BIN");
+
+		await waitFor(() =>
+			expect(listFn).toHaveBeenCalledWith(
+				expect.objectContaining({ bin: "none", page: 1 }),
 			),
 		);
 	});
@@ -816,6 +856,24 @@ describe("SubmittedTestsTable — the CSV statement", () => {
 		// Saved under the name the server gave it, which says the period.
 		await waitFor(() =>
 			expect(saved).toEqual(["submitted-tests_2027-03-01_2027-03-31.csv"]),
+		);
+	});
+
+	it("downloads only the no-BIN tests when that filter is set", async () => {
+		// The button counts the filtered total, so the file has to hold the
+		// same rows.
+		renderTable({ initialNoBin: true });
+		await screen.findByText("BIN-10041");
+		await waitFor(() =>
+			expect(downloadButton().hasAttribute("disabled")).toBe(false),
+		);
+
+		fireEvent.click(downloadButton());
+
+		await waitFor(() =>
+			expect(fetchFn).toHaveBeenCalledWith(
+				"/api/wp/submitted-tests/export?bin=none",
+			),
 		);
 	});
 
