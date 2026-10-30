@@ -1059,8 +1059,10 @@ describeDb("dashboard procedures", () => {
 			expect(fromA.submittedReports).toBe(8);
 			expect(fromB.submittedReports).toBe(7);
 			// Linked in the column, unlinked in every practical sense — and the
-			// No-BIN card reads the column, so it does not count here.
-			expect(fromA.noBinSubmissions).toBe(7);
+			// No-BIN card counts with `noBinSubmission`, which reads it the same
+			// way: no BIN this purveyor can see. So it is A's eighth, exactly as
+			// the No-BIN list and Submitted Tests' `bin: "none"` filter show it.
+			expect(fromA.noBinSubmissions).toBe(8);
 		});
 	});
 
