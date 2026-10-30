@@ -71,7 +71,10 @@ import {
 	TEST_RESULT_LABELS,
 	TEST_RESULT_VARIANTS,
 } from "./submission-types";
-import { SubmittedTestsExportButton } from "./submitted-tests-export";
+import {
+	type ExportFilters,
+	SubmittedTestsExportButton,
+} from "./submitted-tests-export";
 
 /** The result filter, with the unfiltered case as a value rather than absence. */
 const RESULT_FILTERS = {
@@ -187,17 +190,20 @@ export function SubmittedTestsTable({
 		setPage(1);
 	}, [result, bin, from, to]);
 
+	// Built once and handed to both the list and the CSV button, so a filter
+	// added to one cannot be missing from the other and download rows the
+	// table does not show.
+	const filters: ExportFilters = {
+		result: result === "all" ? undefined : (result as SubmissionResult),
+		bin: bin === "none" ? "none" : undefined,
+		from: fromIso ?? undefined,
+		to: toIso ?? undefined,
+	};
+
 	const { data, isPending, isError, error, refetch, isPlaceholderData } =
 		useQuery(
 			trpc.submittedTests.listSubmittedTests.queryOptions(
-				{
-					page,
-					pageSize: PAGE_SIZE,
-					result: result === "all" ? undefined : (result as SubmissionResult),
-					bin: bin === "none" ? "none" : undefined,
-					from: fromIso ?? undefined,
-					to: toIso ?? undefined,
-				},
+				{ page, pageSize: PAGE_SIZE, ...filters },
 				{
 					// Keeps the previous page on screen while the next one loads, so
 					// paging does not blink the whole table back to skeletons.
@@ -395,12 +401,7 @@ export function SubmittedTestsTable({
 				    is what the table holds — every page of it, as the count on
 				    the button says. */}
 				<SubmittedTestsExportButton
-					filters={{
-						result: result === "all" ? undefined : (result as SubmissionResult),
-						bin: bin === "none" ? "none" : undefined,
-						from: fromIso ?? undefined,
-						to: toIso ?? undefined,
-					}}
+					filters={filters}
 					count={rangeIsUsable && data ? total : undefined}
 					disabled={
 						!rangeIsUsable ||

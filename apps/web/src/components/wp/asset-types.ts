@@ -1,3 +1,4 @@
+import { ASSET_STATUSES } from "@bfa-platform/api/lib/asset-input";
 import { isStaleAssetDateError } from "@bfa-platform/api/lib/asset-stale";
 import type { AppRouter } from "@bfa-platform/api/routers/index";
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
@@ -54,11 +55,15 @@ export const ASSET_STATUS_LABELS: Record<AssetStatus, string> = {
  *
  * Here rather than beside the table's filter because the page calls it on the
  * server, and the table is a client module whose exports a server component
- * cannot call. An own-key check rather than `in`, so `toString` and the rest
- * of the prototype are not statuses.
+ * cannot call. It checks against `ASSET_STATUSES`, the list the server's
+ * `listAssetsInput` validates with, so the URL and the procedure cannot
+ * disagree about what a status is.
  */
 export function isAssetStatus(value: unknown): value is AssetStatus {
-	return typeof value === "string" && Object.hasOwn(ASSET_STATUS_LABELS, value);
+	return (
+		typeof value === "string" &&
+		(ASSET_STATUSES as readonly string[]).includes(value)
+	);
 }
 
 export const ASSET_STATUS_VARIANTS = {

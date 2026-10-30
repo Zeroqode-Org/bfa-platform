@@ -48,7 +48,11 @@ export default async function Page({
 				</p>
 			</div>
 
+			{/* Keyed by the BIN preset because moving between `?bin=none` and the
+			    bare route keeps this page mounted: without a new key the table
+			    would hold on to the old filter under the new URL. */}
 			<SubmittedTestsTable
+				key={initialNoBin ? "no-bin" : "all"}
 				initialSubmissionId={initialSubmissionId}
 				initialNoBin={initialNoBin}
 			/>

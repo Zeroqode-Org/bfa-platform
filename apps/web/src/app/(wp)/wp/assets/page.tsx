@@ -39,7 +39,10 @@ export default async function Page({
 				</p>
 			</div>
 
-			<AssetsTable initialStatus={initialStatus} />
+			{/* Keyed by the preset because moving between `?status=past_due` and
+			    the bare route keeps this page mounted: without a new key the
+			    table would hold on to the old filter under the new URL. */}
+			<AssetsTable key={initialStatus ?? "all"} initialStatus={initialStatus} />
 		</div>
 	);
 }
