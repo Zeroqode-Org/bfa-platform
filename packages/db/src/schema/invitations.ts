@@ -9,7 +9,7 @@ import {
 	uuid,
 } from "drizzle-orm/pg-core";
 
-import { invitationRole, invitationStatus } from "./enums";
+import { certifierType, invitationRole, invitationStatus } from "./enums";
 import { profiles } from "./profiles";
 import { waterPurveyors } from "./water-purveyors";
 
@@ -35,6 +35,11 @@ export const invitations = pgTable(
 		// never asked to name their own organisation on the way in; redemption
 		// reads it from here. Null on every other kind of invitation.
 		proposedWaterPurveyorName: text("proposed_water_purveyor_name"),
+		// Internal or external, as the purveyor chose when inviting a certifier;
+		// redemption copies it onto the authorization it creates. Null on every
+		// other role — and on certifier invitations from before the choice
+		// existed, which redeem as external.
+		certifierType: certifierType("certifier_type"),
 		invitedByProfileId: uuid("invited_by_profile_id").references(
 			() => profiles.id,
 		),
@@ -63,6 +68,11 @@ export const invitations = pgTable(
 				${table.associatedWpId} is not null
 				and ${table.proposedWaterPurveyorName} is null
 			)`,
+		),
+		// Only a certifier invitation may say internal or external.
+		check(
+			"invitations_certifier_type_role",
+			sql`${table.certifierType} is null or ${table.role} = 'certifier'`,
 		),
 	],
 ).enableRLS();

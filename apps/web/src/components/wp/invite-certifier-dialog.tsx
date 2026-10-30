@@ -31,6 +31,8 @@ import { toast } from "sonner";
 
 import { trpc } from "@/utils/trpc";
 
+import { CERTIFIER_TYPE_LABELS, type CertifierType } from "./certifier-types";
+
 /**
  * Invite-certifier action on the WP certifiers screen.
  *
@@ -83,6 +85,13 @@ export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
 	const errorId = useId();
 
 	const [values, setValues] = useState({ email: "" });
+	// No default: which list a certifier is filed under is the purveyor's call,
+	// and a preselected answer is one nobody made.
+	const [certifierType, setCertifierType] = useState<CertifierType | null>(
+		null,
+	);
+	const [typeError, setTypeError] = useState<string | null>(null);
+	const typeErrorId = useId();
 
 	const validation = useFormValidation({
 		values,
@@ -107,6 +116,7 @@ export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
 					description: `They join your water purveyor when the link is redeemed. ${deliveryMessage}`,
 				});
 				setValues({ email: "" });
+				setCertifierType(null);
 				onClose();
 			},
 			// No toast on failure: the message goes inline, next to the field the
@@ -116,11 +126,15 @@ export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
 
 	function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!validation.validate()) return;
+		const emailValid = validation.validate();
+		const missingType = certifierType ? null : "Choose internal or external.";
+		setTypeError(missingType);
+		if (!emailValid || !certifierType) return;
 
 		createInvitation.mutate({
 			email: values.email,
 			role: "certifier",
+			certifierType,
 			// No `waterPurveyorId`. The server reads the tenant off the caller's own
 			// profile and refuses a WP role that names one, so there is deliberately
 			// nothing to send — a client cannot invite into somebody else's purveyor
@@ -150,6 +164,51 @@ export function InviteCertifierForm({ onClose }: { onClose: () => void }) {
 				<p id={hintId} className="text-[12px] text-muted-foreground">
 					A certifier who already works for another purveyor keeps their profile
 					— the link only adds yours.
+				</p>
+			</div>
+
+			<div className="flex flex-col gap-1.5">
+				{/* Label's look without a <label>: a radio group is named by
+				    aria-labelledby, not by a `for` that has no single control. */}
+				<span
+					id={`${typeErrorId}-label`}
+					className="select-none font-medium text-muted-foreground text-xs"
+				>
+					Certifier type
+				</span>
+				<div
+					role="radiogroup"
+					aria-labelledby={`${typeErrorId}-label`}
+					aria-describedby={typeError ? typeErrorId : undefined}
+					aria-invalid={typeError ? true : undefined}
+					className="flex flex-wrap gap-1.5"
+				>
+					{(["internal", "external"] as const).map((type) => {
+						const checked = certifierType === type;
+
+						return (
+							<Button
+								key={type}
+								type="button"
+								role="radio"
+								aria-checked={checked}
+								variant={checked ? "default" : "outline"}
+								size="sm"
+								disabled={createInvitation.isPending}
+								onClick={() => {
+									setCertifierType(type);
+									setTypeError(null);
+								}}
+							>
+								{CERTIFIER_TYPE_LABELS[type]}
+							</Button>
+						);
+					})}
+				</div>
+				<FieldError id={typeErrorId} message={typeError} />
+				<p className="text-[12px] text-muted-foreground">
+					Internal: your own staff. External: a private tester whose reports you
+					accept. You can change it later on the Certifiers screen.
 				</p>
 			</div>
 

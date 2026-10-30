@@ -68,10 +68,14 @@ function renderForm(onClose = vi.fn()) {
 	return { onClose };
 }
 
-function fillAndSubmit(email = "tester@example.com") {
+function fillAndSubmit(
+	email = "tester@example.com",
+	type: "Internal" | "External" = "External",
+) {
 	fireEvent.change(screen.getByLabelText("Certifier email"), {
 		target: { value: email },
 	});
+	fireEvent.click(screen.getByRole("radio", { name: type }));
 	fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
 }
 
@@ -95,6 +99,7 @@ describe("InviteCertifierForm", () => {
 		expect(mutationFn).toHaveBeenCalledWith({
 			email: "tester@example.com",
 			role: "certifier",
+			certifierType: "external",
 		});
 	});
 
@@ -110,7 +115,7 @@ describe("InviteCertifierForm", () => {
 		const payload = Object.keys(mutationFn.mock.calls[0][0]);
 		expect(payload).not.toContain("waterPurveyorId");
 		expect(payload).not.toContain("proposedWaterPurveyorName");
-		expect(payload.sort()).toEqual(["email", "role"]);
+		expect(payload.sort()).toEqual(["certifierType", "email", "role"]);
 	});
 
 	it("does not submit without an address", () => {
@@ -125,6 +130,7 @@ describe("InviteCertifierForm", () => {
 		expect(input.required).toBe(false);
 		expect(screen.queryAllByRole("alert")).toHaveLength(0);
 
+		fireEvent.click(screen.getByRole("radio", { name: "External" }));
 		fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
 
 		expect(mutationFn).not.toHaveBeenCalled();
@@ -140,6 +146,7 @@ describe("InviteCertifierForm", () => {
 		renderForm();
 		const input = screen.getByLabelText("Certifier email");
 
+		fireEvent.click(screen.getByRole("radio", { name: "Internal" }));
 		fireEvent.change(input, { target: { value: "tester@" } });
 		fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
 
@@ -254,5 +261,41 @@ describe("InviteCertifierForm", () => {
 				}) as HTMLButtonElement
 			).disabled,
 		).toBe(false);
+	});
+
+	it("sends the type the purveyor chose", async () => {
+		mutationFn.mockResolvedValue(invitation);
+
+		renderForm();
+		fillAndSubmit("tester@example.com", "Internal");
+
+		await waitFor(() => expect(mutationFn).toHaveBeenCalledTimes(1));
+		expect(mutationFn.mock.calls[0][0].certifierType).toBe("internal");
+	});
+
+	it("does not submit until internal or external is chosen", () => {
+		// No preselected answer: which list a certifier is filed under is the
+		// purveyor's decision, not a default nobody looked at.
+		renderForm();
+		fireEvent.change(screen.getByLabelText("Certifier email"), {
+			target: { value: "tester@example.com" },
+		});
+		expect(
+			screen
+				.getAllByRole("radio")
+				.map((radio) => radio.getAttribute("aria-checked")),
+		).toEqual(["false", "false"]);
+
+		fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
+
+		expect(mutationFn).not.toHaveBeenCalled();
+		const message = screen.getByRole("alert");
+		expect(message.textContent).toBe("Choose internal or external.");
+		expect(
+			screen.getByRole("radiogroup").getAttribute("aria-describedby"),
+		).toBe(message.id);
+
+		fireEvent.click(screen.getByRole("radio", { name: "Internal" }));
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 });

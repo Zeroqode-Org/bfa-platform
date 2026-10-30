@@ -40,9 +40,42 @@ Three consequences follow, and the screen is built around all three:
 
 ## What the screen shows
 
-`/wp/certifiers`, in the standard WP shell. Columns: name, company, ID number,
-licence expiration, status, and a per-row **Block** / **Unblock** action. There
-is no delete control and no edit control.
+`/wp/certifiers`, in the standard WP shell. The list is split into two tabs,
+**Internal certifiers** and **External certifiers**, each with its count. The
+screen opens on Internal, unless Internal is empty and External is not — the
+state every purveyor is in right after the release, when all existing
+certifiers were filed as external. Columns: name, company, ID number, licence
+expiration, status, and per-row actions — **Make internal** / **Make external**
+and **Block** / **Unblock**, shown to Admins and SubAdmins only (an Employee
+would only be refused). There is no delete control and no edit control.
+
+## Internal and external certifiers
+
+A purveyor files each certifier as **internal** (its own staff) or **external**
+(a private tester whose reports it accepts) — chosen when inviting them, and
+changeable from the row afterwards (client, October 2026).
+
+The type lives on `wp_certifier_authorizations.certifier_type`, not on
+`certifiers`. A certifier holds one record across every purveyor they work for,
+and the same person may be internal to one and external to another, so the type
+is each purveyor's own word about the relationship. Moving a certifier here
+changes nothing for any other purveyor.
+
+- **Inviting.** The invite dialog asks *Certifier type* with no preselected
+  answer; the invitation is refused until one is chosen. It rides on
+  `invitations.certifier_type` and redemption copies it onto the authorization it
+  creates.
+- **Existing rows.** Authorizations from before the choice existed — and
+  certifier invitations sent before it, when redeemed — are external, the common
+  case. The purveyor moves any of them with **Make internal**.
+- **Inviting someone you already work with** does not change their type:
+  redemption's `onConflictDoNothing` keeps the existing authorization as it is.
+  Changing it is the row action's job.
+- **Roles.** Moving a certifier is Admin and SubAdmin only, like blocking — it
+  decides which list someone is filed under.
+
+Nothing else reads the type yet: reminders, test submission and the WP
+selector treat internal and external certifiers the same.
 
 Two things are annotated rather than left to be interpreted:
 
@@ -63,13 +96,13 @@ hex values in the components.
 
 ## Roles
 
-| | List | Invite | Block / unblock |
-|---|---|---|---|
-| WP Admin | yes | yes | yes |
-| WP SubAdmin | yes | yes | yes |
-| WP Employee | yes | yes | **no** |
-| Certifier | no | no | no |
-| Super-Admin | no (see below) | yes, for a named WP | not through this procedure |
+| | List | Invite | Block / unblock | Internal / external |
+|---|---|---|---|---|
+| WP Admin | yes | yes | yes | yes |
+| WP SubAdmin | yes | yes | yes | yes |
+| WP Employee | yes | yes | **no** | **no** |
+| Certifier | no | no | no | no |
+| Super-Admin | no (see below) | yes, for a named WP | not through this procedure | not through this procedure |
 
 All three WP roles list and invite — inviting certifiers is confirmed as *not*
 Admin-only (PRD § 9). Blocking is the one line between them: taking somebody's
@@ -93,8 +126,9 @@ instead of inheriting one by accident.
 
 | Procedure | Does |
 |---|---|
-| `listWpCertifiers` | Every certifier authorized for the caller's purveyor, by name, both statuses |
+| `listWpCertifiers` | Every certifier authorized for the caller's purveyor, by name, both statuses, with this purveyor's `certifierType` |
 | `setCertifierStatus` | Writes `certifiers.status` and nothing else |
+| `setCertifierType` | Writes `certifier_type` on the caller's own authorization row and nothing else; strict `{ id, certifierType }`, a no-op when unchanged, `certifier_type_changed` audit line otherwise |
 
 The list is ordered by `profiles.full_name` then `certifiers.id`. The tie-break
 is what keeps two certifiers with the same name from swapping places between

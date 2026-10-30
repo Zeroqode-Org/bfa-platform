@@ -46,6 +46,12 @@ const createInvitationInput = z.object({
 		.max(INVITATION_FIELD_LIMITS.proposedWaterPurveyorName)
 		.optional(),
 	expiresInDays: z.int().min(1).max(30).default(DEFAULT_INVITATION_TTL_DAYS),
+	/**
+	 * Internal (the purveyor's own staff) or external (a private tester). Only
+	 * for a certifier invitation, where it defaults to external; any other role
+	 * that sends one is refused rather than having it dropped.
+	 */
+	certifierType: z.enum(["internal", "external"]).optional(),
 });
 
 export const invitationsRouter = router({
@@ -78,6 +84,16 @@ export const invitationsRouter = router({
 					proposedWaterPurveyorName: input.proposedWaterPurveyorName,
 				});
 
+			if (input.certifierType && input.role !== "certifier") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Only a certifier invitation can be internal or external",
+				});
+			}
+
+			const certifierType =
+				input.role === "certifier" ? (input.certifierType ?? "external") : null;
+
 			// The name shown in the email: the existing purveyor's, or — for an
 			// invitation that creates one — the name it will be created with.
 			const purveyorName = associatedWpId
@@ -97,6 +113,7 @@ export const invitationsRouter = router({
 					expiresAt,
 					associatedWpId,
 					proposedWaterPurveyorName,
+					certifierType,
 					invitedByProfileId: ctx.caller.profileId,
 					isRedeemed: false,
 				})
@@ -107,6 +124,7 @@ export const invitationsRouter = router({
 					expiresAt: invitations.expiresAt,
 					associatedWpId: invitations.associatedWpId,
 					proposedWaterPurveyorName: invitations.proposedWaterPurveyorName,
+					certifierType: invitations.certifierType,
 				});
 
 			if (!invitation) {
@@ -125,6 +143,7 @@ export const invitationsRouter = router({
 					role: invitation.role,
 					wp_id: invitation.associatedWpId,
 					proposed_wp_name: invitation.proposedWaterPurveyorName,
+					certifier_type: invitation.certifierType,
 					expires_at: invitation.expiresAt.toISOString(),
 					timestamp: new Date().toISOString(),
 				}),
@@ -169,6 +188,7 @@ export const invitationsRouter = router({
 				expiresAt: invitation.expiresAt,
 				waterPurveyorId: invitation.associatedWpId,
 				proposedWaterPurveyorName: invitation.proposedWaterPurveyorName,
+				certifierType: invitation.certifierType,
 				emailDelivery,
 			};
 		}),

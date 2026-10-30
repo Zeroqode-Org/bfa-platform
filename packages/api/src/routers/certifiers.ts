@@ -28,7 +28,8 @@ const certifierSelection = {
 };
 
 /**
- * The two administrative WP roles.
+ * The two administrative WP roles, for one named action — the wording of the
+ * refusal says which.
  *
  * Deliberately local to this router rather than a shared procedure in
  * `../index`. The SubAdmin/Employee split is an open question project-wide
@@ -37,23 +38,30 @@ const certifierSelection = {
  * `wpAdminProcedure` would read as a project-wide policy, and the next feature
  * that reached for it would be settling that question by accident.
  */
-const wpStatusWriterProcedure = wpProcedure.use(({ ctx, next }) => {
-	if (
-		ctx.caller.globalRole !== "wp_admin" &&
-		ctx.caller.globalRole !== "wp_sub_admin"
-	) {
-		throw new TRPCError({
-			code: "FORBIDDEN",
-			message: "Only a WP Admin or SubAdmin can block a certifier",
-		});
-	}
+function wpAdministrativeProcedure(action: string) {
+	return wpProcedure.use(({ ctx, next }) => {
+		if (
+			ctx.caller.globalRole !== "wp_admin" &&
+			ctx.caller.globalRole !== "wp_sub_admin"
+		) {
+			throw new TRPCError({
+				code: "FORBIDDEN",
+				message: `Only a WP Admin or SubAdmin can ${action}`,
+			});
+		}
 
-	return next({ ctx });
-});
+		return next({ ctx });
+	});
+}
 
 const setCertifierStatusInput = z.strictObject({
 	id: z.uuid(),
 	status: z.enum(["active", "blocked"]),
+});
+
+const setCertifierTypeInput = z.strictObject({
+	id: z.uuid(),
+	certifierType: z.enum(["internal", "external"]),
 });
 
 /**
@@ -108,7 +116,13 @@ export const certifiersRouter = router({
 	listWpCertifiers: wpProcedure.query(async ({ ctx }) => {
 		return (
 			db
-				.select(certifierSelection)
+				.select({
+					...certifierSelection,
+					// Internal or external is this purveyor's own word about the
+					// certifier, so it comes off this purveyor's authorization row —
+					// the same certifier may carry the other type somewhere else.
+					certifierType: wpCertifierAuthorizations.certifierType,
+				})
 				.from(certifiers)
 				.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
 				.innerJoin(
@@ -142,7 +156,7 @@ export const certifiersRouter = router({
 	 * row and comes back as a not-found — it cannot be read here, and it cannot
 	 * be written.
 	 */
-	setCertifierStatus: wpStatusWriterProcedure
+	setCertifierStatus: wpAdministrativeProcedure("block a certifier")
 		.input(setCertifierStatusInput)
 		.mutation(async ({ ctx, input }) => {
 			// The subquery, not `ctx.caller.waterPurveyorId` on a column, is what
@@ -223,5 +237,86 @@ export const certifiersRouter = router({
 			);
 
 			return { ...existing, status: updated.status };
+		}),
+
+	/**
+	 * Moves one certifier between this purveyor's Internal and External tabs.
+	 *
+	 * Writes `wp_certifier_authorizations.certifier_type` on the caller's own
+	 * authorization row and nothing else — the type is per purveyor, so another
+	 * purveyor that works with the same certifier keeps whatever it chose. The
+	 * row is found by certifier id *and* the caller's purveyor, so a certifier
+	 * this purveyor does not work with is a not-found, exactly as for blocking.
+	 *
+	 * Admin and SubAdmin only, like blocking: it decides which list a certifier
+	 * is filed under, which is not clerk work.
+	 */
+	setCertifierType: wpAdministrativeProcedure(
+		"change whether a certifier is internal or external",
+	)
+		.input(setCertifierTypeInput)
+		.mutation(async ({ ctx, input }) => {
+			const ownAuthorization = and(
+				eq(wpCertifierAuthorizations.certifierId, input.id),
+				eq(
+					wpCertifierAuthorizations.waterPurveyorId,
+					ctx.caller.waterPurveyorId,
+				),
+			);
+
+			const [existing] = await db
+				.select({
+					id: certifiers.id,
+					fullName: profiles.fullName,
+					certifierType: wpCertifierAuthorizations.certifierType,
+				})
+				.from(wpCertifierAuthorizations)
+				.innerJoin(
+					certifiers,
+					eq(certifiers.id, wpCertifierAuthorizations.certifierId),
+				)
+				.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
+				.where(ownAuthorization)
+				.limit(1);
+
+			if (!existing) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Certifier not found",
+				});
+			}
+
+			// Not a change, so not a write and not an audit line — the same rule
+			// `setCertifierStatus` follows, for the same reasons.
+			if (existing.certifierType === input.certifierType) {
+				return existing;
+			}
+
+			const [updated] = await db
+				.update(wpCertifierAuthorizations)
+				.set({ certifierType: input.certifierType })
+				.where(ownAuthorization)
+				.returning({ certifierType: wpCertifierAuthorizations.certifierType });
+
+			if (!updated) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Certifier not found",
+				});
+			}
+
+			console.log(
+				JSON.stringify({
+					event: "certifier_type_changed",
+					...auditActorFields(auditActor(ctx)),
+					certifier_id: existing.id,
+					wp_id: ctx.caller.waterPurveyorId,
+					from: existing.certifierType,
+					to: updated.certifierType,
+					timestamp: new Date().toISOString(),
+				}),
+			);
+
+			return { ...existing, certifierType: updated.certifierType };
 		}),
 });

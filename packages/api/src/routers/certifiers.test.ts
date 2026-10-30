@@ -62,6 +62,13 @@ type CertifierRow = {
 	idNumber: string | null;
 	licenseExpirationDate: string | null;
 	status: "active" | "blocked";
+	certifierType?: "internal" | "external";
+};
+
+type CertifierTypeRow = {
+	id: string;
+	fullName: string | null;
+	certifierType: "internal" | "external";
 };
 
 let callerFor: (profileId: string) => {
@@ -71,6 +78,10 @@ let callerFor: (profileId: string) => {
 			id: string;
 			status: "active" | "blocked";
 		}) => Promise<CertifierRow>;
+		setCertifierType: (input: {
+			id: string;
+			certifierType: "internal" | "external";
+		}) => Promise<CertifierTypeRow>;
 	};
 	whoami: () => Promise<unknown>;
 };
@@ -172,7 +183,20 @@ describeDb("WP certifier procedures", () => {
 			"update certifiers set status = 'active' where id = any($1::uuid[])",
 			[[certifierA, certifierB, certifierShared]],
 		);
+		await pool.query(
+			"update wp_certifier_authorizations set certifier_type = 'external' where certifier_id = any($1::uuid[])",
+			[[certifierA, certifierB, certifierShared]],
+		);
 	});
+
+	async function typeOf(certifierId: string, waterPurveyorId: string) {
+		const { rows } = await pool.query(
+			"select certifier_type from wp_certifier_authorizations where certifier_id = $1 and water_purveyor_id = $2",
+			[certifierId, waterPurveyorId],
+		);
+
+		return rows[0]?.certifier_type as string | undefined;
+	}
 
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -301,6 +325,7 @@ describeDb("WP certifier procedures", () => {
 				idNumber: "LIC-0002",
 				licenseExpirationDate: "2027-06-30",
 				status: "active",
+				certifierType: "external",
 			});
 		});
 
@@ -501,6 +526,101 @@ describeDb("WP certifier procedures", () => {
 			});
 
 			expect((await statusOf(certifierShared)).status).toBe("blocked");
+		});
+	});
+
+	describe("setCertifierType", () => {
+		it("moves a certifier between internal and external in the caller's own purveyor", async () => {
+			const moved = await callerFor(ids.adminA).certifiers.setCertifierType({
+				id: certifierA,
+				certifierType: "internal",
+			});
+
+			expect(moved).toMatchObject({
+				id: certifierA,
+				certifierType: "internal",
+			});
+			expect(await typeOf(certifierA, wpA)).toBe("internal");
+
+			const row = (
+				await callerFor(ids.adminA).certifiers.listWpCertifiers()
+			).find((candidate) => candidate.id === certifierA);
+			expect(row?.certifierType).toBe("internal");
+		});
+
+		it("changes only the caller's own authorization of a shared certifier", async () => {
+			// The type is per purveyor: B's word about this certifier is B's.
+			await callerFor(ids.adminA).certifiers.setCertifierType({
+				id: certifierShared,
+				certifierType: "internal",
+			});
+
+			expect(await typeOf(certifierShared, wpA)).toBe("internal");
+			expect(await typeOf(certifierShared, wpB)).toBe("external");
+		});
+
+		it("lets a SubAdmin move one, and refuses an Employee", async () => {
+			await expect(
+				callerFor(ids.subAdminA).certifiers.setCertifierType({
+					id: certifierA,
+					certifierType: "internal",
+				}),
+			).resolves.toMatchObject({ certifierType: "internal" });
+
+			await expect(
+				callerFor(ids.employeeA).certifiers.setCertifierType({
+					id: certifierA,
+					certifierType: "external",
+				}),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+			expect(await typeOf(certifierA, wpA)).toBe("internal");
+		});
+
+		it("refuses a certifier id from the other tenant, and leaves the row untouched", async () => {
+			await expect(
+				callerFor(ids.adminA).certifiers.setCertifierType({
+					id: certifierB,
+					certifierType: "internal",
+				}),
+			).rejects.toMatchObject({ code: "NOT_FOUND" });
+			expect(await typeOf(certifierB, wpB)).toBe("external");
+		});
+
+		it("accepts only an id and a type", async () => {
+			await expect(
+				callerFor(ids.adminA).certifiers.setCertifierType({
+					id: certifierA,
+					certifierType: "internal",
+					status: "blocked",
+				} as never),
+			).rejects.toMatchObject({ code: "BAD_REQUEST" });
+			expect(await typeOf(certifierA, wpA)).toBe("external");
+			expect((await statusOf(certifierA)).status).toBe("active");
+		});
+
+		it("logs a real change and stays silent on a no-op", async () => {
+			const lines = captureLogs();
+
+			await callerFor(ids.adminA).certifiers.setCertifierType({
+				id: certifierA,
+				certifierType: "external",
+			});
+			expect(
+				lines.filter((line) => line.event === "certifier_type_changed"),
+			).toHaveLength(0);
+
+			await callerFor(ids.adminA).certifiers.setCertifierType({
+				id: certifierA,
+				certifierType: "internal",
+			});
+			expect(
+				lines.find((line) => line.event === "certifier_type_changed"),
+			).toMatchObject({
+				certifier_id: certifierA,
+				wp_id: wpA,
+				from: "external",
+				to: "internal",
+			});
 		});
 	});
 

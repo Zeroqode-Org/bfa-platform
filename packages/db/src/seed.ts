@@ -446,25 +446,39 @@ async function seedDatabase(authUserIds: SeedUserIds) {
 			);
 		}
 
+		// Harbor has one of each type, so both of its Certifiers tabs have a row.
 		const authorizations = [
 			[
 				"10000000-0000-4000-8000-000000000101",
 				ids.certifierSingle,
 				ids.wpHarbor,
+				"internal",
 			],
 			[
 				"10000000-0000-4000-8000-000000000102",
 				ids.certifierMulti,
 				ids.wpHarbor,
+				"external",
 			],
-			["10000000-0000-4000-8000-000000000103", ids.certifierMulti, ids.wpRidge],
+			[
+				"10000000-0000-4000-8000-000000000103",
+				ids.certifierMulti,
+				ids.wpRidge,
+				"external",
+			],
 		] as const;
-		for (const [id, certifierId, waterPurveyorId] of authorizations) {
+		for (const [
+			id,
+			certifierId,
+			waterPurveyorId,
+			certifierType,
+		] of authorizations) {
 			await client.query(
-				`insert into wp_certifier_authorizations (id, certifier_id, water_purveyor_id, authorization_status)
-				 values ($1, $2, $3, 'active')
-				 on conflict (certifier_id, water_purveyor_id) do update set authorization_status = 'active'`,
-				[id, certifierId, waterPurveyorId],
+				`insert into wp_certifier_authorizations (id, certifier_id, water_purveyor_id, authorization_status, certifier_type)
+				 values ($1, $2, $3, 'active', $4::certifier_type)
+				 on conflict (certifier_id, water_purveyor_id) do update set authorization_status = 'active',
+				 certifier_type = excluded.certifier_type`,
+				[id, certifierId, waterPurveyorId, certifierType],
 			);
 		}
 

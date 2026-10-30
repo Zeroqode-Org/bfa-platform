@@ -29,17 +29,18 @@ import {
 } from "@bfa-platform/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, TriangleAlert, UserCheck } from "lucide-react";
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { trpc } from "@/utils/trpc";
 
-import type { WpCertifier } from "./certifier-types";
+import type { CertifierType, WpCertifier } from "./certifier-types";
 import {
 	BLOCK_SCOPE_NOTE,
 	BLOCK_WARNING,
 	CERTIFIER_STATUS_LABELS,
 	CERTIFIER_STATUS_VARIANTS,
+	CERTIFIER_TYPE_LABELS,
 	formatLicenseDate,
 	isLicenseExpired,
 } from "./certifier-types";
@@ -47,6 +48,14 @@ import { InviteCertifierDialog } from "./invite-certifier-dialog";
 
 const COLUMN_COUNT = 6;
 const SKELETON_ROWS = 4;
+
+/** The tabs, in the order the client named them. */
+const CERTIFIER_TYPES = ["internal", "external"] as const;
+
+const OTHER_TYPE: Record<CertifierType, CertifierType> = {
+	internal: "external",
+	external: "internal",
+};
 
 /**
  * The certifiers authorized for this water purveyor, and the one action the
@@ -58,18 +67,32 @@ const SKELETON_ROWS = 4;
  * that could rewrite them could rewrite the identity printed on a results
  * document.
  *
+ * The list is split into Internal and External tabs — the purveyor's own
+ * staff and the private testers it accepts reports from — and a row can be
+ * moved to the other tab. That type is the purveyor's own word about the
+ * certifier, kept on its authorization, so moving one here changes nothing for
+ * any other purveyor they work for.
+ *
  * Blocking is the one action with a consequence past this table, so it asks
  * first and says what it does; unblocking goes straight through — giving
  * somebody their access back is not the destructive direction. Nothing here
  * deletes: there is no delete control, no delete procedure and no DELETE grant
  * behind it.
+ *
+ * `canManage` is what the screen renders, not what it is allowed to do: the
+ * row actions are hidden from a WP Employee because both procedures refuse
+ * them, and each procedure checks the role again for itself.
  */
-export function CertifiersTable() {
+export function CertifiersTable({ canManage }: { canManage: boolean }) {
 	const queryClient = useQueryClient();
 	const { data, isPending, isError, error, refetch } = useQuery(
 		trpc.certifiers.listWpCertifiers.queryOptions(),
 	);
 
+	// Null until somebody picks a tab — see `shownType` below.
+	const [chosenType, setChosenType] = useState<CertifierType | null>(null);
+	const tabsId = useId();
+	const tabRefs = useRef<Partial<Record<CertifierType, HTMLButtonElement>>>({});
 	// Open state is tracked next to the target, not derived from it, so a name
 	// stays on screen through the dialog's closing animation instead of blanking.
 	const [blockTarget, setBlockTarget] = useState<WpCertifier | null>(null);
@@ -98,18 +121,92 @@ export function CertifiersTable() {
 		}),
 	);
 
+	const setType = useMutation(
+		trpc.certifiers.setCertifierType.mutationOptions({
+			onSuccess: async (row) => {
+				toast.success(
+					`${row.fullName ?? "Certifier"} moved to ${CERTIFIER_TYPE_LABELS[
+						row.certifierType
+					].toLowerCase()} certifiers`,
+				);
+				await invalidateList();
+			},
+			onError: (mutationError) => toast.error(mutationError.message),
+		}),
+	);
+
+	const byType = data ? groupByType(data) : undefined;
+	// Until a tab is picked, open on Internal unless it is empty and External is
+	// not. Every authorization from before the type existed is external, so a
+	// fixed Internal default would greet each purveyor after the release with an
+	// empty screen and their whole list hidden behind the other tab.
+	const activeType: CertifierType =
+		chosenType ??
+		(byType && byType.internal.length === 0 && byType.external.length > 0
+			? "external"
+			: "internal");
+	const rows = byType?.[activeType];
+
+	function tabId(type: CertifierType) {
+		return `${tabsId}-tab-${type}`;
+	}
+
+	// Left and Right move between the two tabs and select the one they land
+	// on, as the ARIA tab pattern expects.
+	function handleTabKey(event: React.KeyboardEvent<HTMLDivElement>) {
+		if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+		event.preventDefault();
+		const next = OTHER_TYPE[activeType];
+		setChosenType(next);
+		tabRefs.current[next]?.focus();
+	}
+
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<p className="text-[13px] text-muted-foreground">
-					{isPending || isError
-						? " "
-						: `${data.length} ${data.length === 1 ? "certifier" : "certifiers"}`}
-				</p>
+				<div
+					role="tablist"
+					aria-label="Certifier type"
+					className="flex flex-wrap gap-1.5"
+					onKeyDown={handleTabKey}
+				>
+					{CERTIFIER_TYPES.map((type) => {
+						const active = type === activeType;
+						const count = byType?.[type].length;
+
+						return (
+							<Button
+								key={type}
+								ref={(element) => {
+									if (element) tabRefs.current[type] = element;
+								}}
+								id={tabId(type)}
+								type="button"
+								role="tab"
+								aria-selected={active}
+								aria-controls={`${tabsId}-panel`}
+								tabIndex={active ? 0 : -1}
+								variant={active ? "default" : "outline"}
+								size="sm"
+								onClick={() => setChosenType(type)}
+							>
+								{CERTIFIER_TYPE_LABELS[type]} certifiers
+								{count === undefined ? null : (
+									<span className="tabular-nums opacity-70">{count}</span>
+								)}
+							</Button>
+						);
+					})}
+				</div>
 				<InviteCertifierDialog />
 			</div>
 
-			<div className="relative overflow-x-auto rounded-lg border border-border bg-card shadow-[var(--shadow-card)]">
+			<div
+				id={`${tabsId}-panel`}
+				role="tabpanel"
+				aria-labelledby={tabId(activeType)}
+				className="relative overflow-x-auto rounded-lg border border-border bg-card shadow-[var(--shadow-card)]"
+			>
 				<Table className="whitespace-nowrap">
 					<TableHeader>
 						<TableRow>
@@ -145,24 +242,30 @@ export function CertifiersTable() {
 									</Button>
 								</Empty>
 							</StateRow>
-						) : data.length === 0 ? (
+						) : rows?.length === 0 ? (
 							<StateRow>
 								<Empty>
 									<EmptyHeader>
 										<EmptyMedia variant="icon">
 											<UserCheck />
 										</EmptyMedia>
-										<EmptyTitle>No certifiers yet</EmptyTitle>
+										<EmptyTitle>
+											No {CERTIFIER_TYPE_LABELS[activeType].toLowerCase()}{" "}
+											certifiers yet
+										</EmptyTitle>
 										<EmptyDescription>
-											Invite one and they appear here as soon as they redeem the
-											link.
+											{data.length === 0
+												? "Invite one and they appear here as soon as they redeem the link."
+												: `Invite one as ${activeType}, or move a certifier here from the ${CERTIFIER_TYPE_LABELS[
+														OTHER_TYPE[activeType]
+													].toLowerCase()} tab.`}
 										</EmptyDescription>
 									</EmptyHeader>
 									<InviteCertifierDialog />
 								</Empty>
 							</StateRow>
 						) : (
-							data.map((certifier) => {
+							rows?.map((certifier) => {
 								const blocked = certifier.status === "blocked";
 								// One mutation drives every row's status button, so scope its
 								// pending state to the row actually being changed — otherwise
@@ -170,6 +273,9 @@ export function CertifiersTable() {
 								const statusPending =
 									setStatus.isPending &&
 									setStatus.variables?.id === certifier.id;
+								const typePending =
+									setType.isPending && setType.variables?.id === certifier.id;
+								const otherType = OTHER_TYPE[certifier.certifierType];
 								const expired = isLicenseExpired(
 									certifier.licenseExpirationDate,
 								);
@@ -222,35 +328,55 @@ export function CertifiersTable() {
 											</div>
 										</TableCell>
 										<TableCell className="text-right">
-											<Button
-												variant={blocked ? "secondary" : "destructive"}
-												size="sm"
-												disabled={statusPending}
-												aria-label={
-													blocked
-														? `Unblock ${certifier.fullName ?? "certifier"}`
-														: `Block ${certifier.fullName ?? "certifier"}`
-												}
-												onClick={() => {
-													if (blocked) {
-														setStatus.mutate({
-															id: certifier.id,
-															status: "active",
-														});
-														return;
-													}
-													setBlockTarget(certifier);
-													setIsBlockOpen(true);
-												}}
-											>
-												{statusPending
-													? blocked
-														? "Unblocking…"
-														: "Blocking…"
-													: blocked
-														? "Unblock"
-														: "Block"}
-											</Button>
+											{canManage ? (
+												<div className="flex justify-end gap-2">
+													<Button
+														variant="secondary"
+														size="sm"
+														disabled={typePending}
+														aria-label={`Move ${certifier.fullName ?? "certifier"} to ${CERTIFIER_TYPE_LABELS[otherType].toLowerCase()} certifiers`}
+														onClick={() =>
+															setType.mutate({
+																id: certifier.id,
+																certifierType: otherType,
+															})
+														}
+													>
+														{typePending
+															? "Moving…"
+															: `Make ${CERTIFIER_TYPE_LABELS[otherType].toLowerCase()}`}
+													</Button>
+													<Button
+														variant={blocked ? "secondary" : "destructive"}
+														size="sm"
+														disabled={statusPending}
+														aria-label={
+															blocked
+																? `Unblock ${certifier.fullName ?? "certifier"}`
+																: `Block ${certifier.fullName ?? "certifier"}`
+														}
+														onClick={() => {
+															if (blocked) {
+																setStatus.mutate({
+																	id: certifier.id,
+																	status: "active",
+																});
+																return;
+															}
+															setBlockTarget(certifier);
+															setIsBlockOpen(true);
+														}}
+													>
+														{statusPending
+															? blocked
+																? "Unblocking…"
+																: "Blocking…"
+															: blocked
+																? "Unblock"
+																: "Block"}
+													</Button>
+												</div>
+											) : null}
 										</TableCell>
 									</TableRow>
 								);
@@ -317,4 +443,16 @@ function LoadingRows() {
 			))}
 		</TableRow>
 	));
+}
+
+function groupByType(certifiers: WpCertifier[]) {
+	const groups: Record<CertifierType, WpCertifier[]> = {
+		internal: [],
+		external: [],
+	};
+
+	for (const certifier of certifiers)
+		groups[certifier.certifierType].push(certifier);
+
+	return groups;
 }

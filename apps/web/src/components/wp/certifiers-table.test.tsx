@@ -25,6 +25,7 @@ import type { WpCertifier } from "./certifier-types";
 
 const listFn = vi.fn();
 const setStatusFn = vi.fn();
+const setTypeFn = vi.fn();
 const inviteFn = vi.fn();
 
 vi.mock("@/utils/trpc", () => ({
@@ -42,6 +43,13 @@ vi.mock("@/utils/trpc", () => ({
 					...options,
 					mutationKey: ["certifiers", "setCertifierStatus"],
 					mutationFn: (input: unknown) => setStatusFn(input),
+				}),
+			},
+			setCertifierType: {
+				mutationOptions: (options: Record<string, unknown>) => ({
+					...options,
+					mutationKey: ["certifiers", "setCertifierType"],
+					mutationFn: (input: unknown) => setTypeFn(input),
 				}),
 			},
 		},
@@ -70,6 +78,7 @@ const active: WpCertifier = {
 	idNumber: "LIC-4471",
 	licenseExpirationDate: "2027-04-30",
 	status: "active",
+	certifierType: "internal",
 };
 
 const blocked: WpCertifier = {
@@ -79,9 +88,20 @@ const blocked: WpCertifier = {
 	idNumber: null,
 	licenseExpirationDate: null,
 	status: "blocked",
+	certifierType: "internal",
 };
 
-function renderTable() {
+const outside: WpCertifier = {
+	id: "c0ffee00-1234-4567-89ab-cdef01234567",
+	fullName: "Kai External",
+	company: "Kai Testing LLC",
+	idNumber: "LIC-9001",
+	licenseExpirationDate: "2028-01-15",
+	status: "active",
+	certifierType: "external",
+};
+
+function renderTable({ canManage = true }: { canManage?: boolean } = {}) {
 	const queryClient = new QueryClient({
 		defaultOptions: {
 			queries: { retry: false },
@@ -91,7 +111,7 @@ function renderTable() {
 
 	render(
 		<QueryClientProvider client={queryClient}>
-			<CertifiersTable />
+			<CertifiersTable canManage={canManage} />
 		</QueryClientProvider>,
 	);
 }
@@ -99,6 +119,7 @@ function renderTable() {
 beforeEach(() => {
 	listFn.mockReset();
 	setStatusFn.mockReset();
+	setTypeFn.mockReset();
 	inviteFn.mockReset();
 	listFn.mockResolvedValue([active, blocked]);
 	setStatusFn.mockImplementation(
@@ -324,7 +345,7 @@ describe("CertifiersTable", () => {
 		listFn.mockResolvedValue([]);
 		renderTable();
 
-		expect(await screen.findByText("No certifiers yet")).toBeTruthy();
+		expect(await screen.findByText("No internal certifiers yet")).toBeTruthy();
 	});
 
 	it("shows the server's message and a retry when the list fails to load", async () => {
@@ -351,5 +372,128 @@ describe("CertifiersTable", () => {
 		expect(
 			screen.getByRole("button", { name: /invite certifier/i }),
 		).toBeTruthy();
+	});
+
+	it("opens on the internal tab and lists only internal certifiers", async () => {
+		listFn.mockResolvedValue([active, outside]);
+		renderTable();
+
+		expect(await screen.findByText("Ada Tester")).toBeTruthy();
+		expect(screen.queryByText("Kai External")).toBeNull();
+		expect(
+			screen
+				.getByRole("tab", { name: /internal certifiers/i })
+				.getAttribute("aria-selected"),
+		).toBe("true");
+	});
+
+	it("switches to the external certifiers when that tab is pressed", async () => {
+		listFn.mockResolvedValue([active, outside]);
+		renderTable();
+
+		await screen.findByText("Ada Tester");
+		fireEvent.click(screen.getByRole("tab", { name: /external certifiers/i }));
+
+		expect(screen.getByText("Kai External")).toBeTruthy();
+		expect(screen.queryByText("Ada Tester")).toBeNull();
+	});
+
+	it("counts each tab's certifiers on the tab itself", async () => {
+		listFn.mockResolvedValue([active, blocked, outside]);
+		renderTable();
+
+		await screen.findByText("Ada Tester");
+		expect(
+			screen.getByRole("tab", { name: /internal certifiers/i }).textContent,
+		).toContain("2");
+		expect(
+			screen.getByRole("tab", { name: /external certifiers/i }).textContent,
+		).toContain("1");
+	});
+
+	it("points an empty tab at the other one when the purveyor has certifiers there", async () => {
+		listFn.mockResolvedValue([active]);
+		renderTable();
+
+		await screen.findByText("Ada Tester");
+		fireEvent.click(screen.getByRole("tab", { name: /external certifiers/i }));
+
+		expect(screen.getByText("No external certifiers yet")).toBeTruthy();
+		expect(
+			screen.getByText(/move a certifier here from the internal tab/i),
+		).toBeTruthy();
+	});
+
+	it("moves a certifier to the other tab, sending only the id and the new type", async () => {
+		setTypeFn.mockResolvedValue({
+			id: active.id,
+			fullName: active.fullName,
+			certifierType: "external",
+		});
+		renderTable();
+
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "Move Ada Tester to external certifiers",
+			}),
+		);
+
+		await waitFor(() => expect(setTypeFn).toHaveBeenCalledTimes(1));
+		expect(setTypeFn.mock.calls[0]?.[0]).toEqual({
+			id: active.id,
+			certifierType: "external",
+		});
+	});
+
+	it("opens on the external tab when every certifier is external", async () => {
+		// The state every purveyor is in right after the release: all existing
+		// authorizations were filed as external.
+		listFn.mockResolvedValue([outside]);
+		renderTable();
+
+		expect(await screen.findByText("Kai External")).toBeTruthy();
+		expect(
+			screen
+				.getByRole("tab", { name: /external certifiers/i })
+				.getAttribute("aria-selected"),
+		).toBe("true");
+	});
+
+	it("labels the table as the panel of the selected tab", async () => {
+		listFn.mockResolvedValue([active, outside]);
+		renderTable();
+
+		await screen.findByText("Ada Tester");
+		const tab = screen.getByRole("tab", { name: /internal certifiers/i });
+		const panel = screen.getByRole("tabpanel");
+
+		expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+		expect(panel.getAttribute("aria-labelledby")).toBe(tab.id);
+	});
+
+	it("moves between the tabs with the arrow keys", async () => {
+		listFn.mockResolvedValue([active, outside]);
+		renderTable();
+
+		await screen.findByText("Ada Tester");
+		fireEvent.keyDown(
+			screen.getByRole("tab", { name: /internal certifiers/i }),
+			{
+				key: "ArrowRight",
+			},
+		);
+
+		expect(screen.getByText("Kai External")).toBeTruthy();
+		const external = screen.getByRole("tab", { name: /external certifiers/i });
+		expect(external.getAttribute("aria-selected")).toBe("true");
+		expect(document.activeElement).toBe(external);
+	});
+
+	it("shows no row actions to a WP Employee, who would only be refused", async () => {
+		renderTable({ canManage: false });
+
+		await screen.findByText("Ada Tester");
+		expect(screen.queryByRole("button", { name: /^block/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^move/i })).toBeNull();
 	});
 });

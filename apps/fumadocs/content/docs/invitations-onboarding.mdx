@@ -473,6 +473,15 @@ usable half-account:
 The reverse order would strand a profile with no way to sign in, which no
 compensating write could clean up as safely.
 
+### Internal or external
+
+A certifier invitation carries `certifier_type` — `internal` or `external`, as
+the purveyor chose in the invite dialog — and redemption writes it onto the
+`wp_certifier_authorizations` row it creates. `createInvitation` defaults it to
+`external` when absent and refuses it on any other role; a check constraint
+(`invitations_certifier_type_role`, migration `0022`) keeps it off non-certifier
+rows. See [WP Certifiers](/docs/wp-certifiers#internal-and-external-certifiers).
+
 ### Second-WP path for an existing certifier
 
 A certifier already on the platform who is invited by a second purveyor keeps
