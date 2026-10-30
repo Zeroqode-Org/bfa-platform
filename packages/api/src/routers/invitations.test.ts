@@ -43,11 +43,13 @@ let callerFor: (profileId: string) => {
 			waterPurveyorId?: string | null;
 			proposedWaterPurveyorName?: string;
 			expiresInDays?: number;
+			certifierType?: "internal" | "external";
 		}) => Promise<{
 			id: string;
 			email: string;
 			waterPurveyorId: string | null;
 			proposedWaterPurveyorName: string | null;
+			certifierType: "internal" | "external" | null;
 		}>;
 	};
 };
@@ -176,6 +178,51 @@ describeDb("createInvitation", () => {
 				wp_id: wpA,
 			}),
 		);
+	});
+
+	it("stores the internal or external type a certifier invitation names", async () => {
+		captureLogs();
+
+		const invitation = await callerFor(adminA).invitations.createInvitation({
+			email: "internal.tester@example.com",
+			role: "certifier",
+			certifierType: "internal",
+		});
+
+		expect(invitation.certifierType).toBe("internal");
+		const { rows } = await pool.query(
+			"select certifier_type from invitations where id = $1",
+			[invitation.id],
+		);
+		expect(rows[0].certifier_type).toBe("internal");
+	});
+
+	it("files a certifier invitation that names no type as external", async () => {
+		captureLogs();
+
+		const invitation = await callerFor(adminA).invitations.createInvitation({
+			email: "untyped.tester@example.com",
+			role: "certifier",
+		});
+
+		expect(invitation.certifierType).toBe("external");
+	});
+
+	it("refuses a type on an invitation that is not for a certifier", async () => {
+		captureLogs();
+
+		await expect(
+			callerFor(adminA).invitations.createInvitation({
+				email: "typed.employee@example.com",
+				role: "wp_employee",
+				certifierType: "internal",
+			}),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+		const { rows } = await pool.query(
+			"select id from invitations where email = 'typed.employee@example.com'",
+		);
+		expect(rows).toHaveLength(0);
 	});
 
 	it("refuses a purveyor id that is not the caller's own", async () => {

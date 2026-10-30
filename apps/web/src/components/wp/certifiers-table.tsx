@@ -34,12 +34,13 @@ import { toast } from "sonner";
 
 import { trpc } from "@/utils/trpc";
 
-import type { WpCertifier } from "./certifier-types";
+import type { CertifierType, WpCertifier } from "./certifier-types";
 import {
 	BLOCK_SCOPE_NOTE,
 	BLOCK_WARNING,
 	CERTIFIER_STATUS_LABELS,
 	CERTIFIER_STATUS_VARIANTS,
+	CERTIFIER_TYPE_LABELS,
 	formatLicenseDate,
 	isLicenseExpired,
 } from "./certifier-types";
@@ -47,6 +48,14 @@ import { InviteCertifierDialog } from "./invite-certifier-dialog";
 
 const COLUMN_COUNT = 6;
 const SKELETON_ROWS = 4;
+
+/** The tabs, in the order the client named them. */
+const CERTIFIER_TYPES = ["internal", "external"] as const;
+
+const OTHER_TYPE: Record<CertifierType, CertifierType> = {
+	internal: "external",
+	external: "internal",
+};
 
 /**
  * The certifiers authorized for this water purveyor, and the one action the
@@ -57,6 +66,12 @@ const SKELETON_ROWS = 4;
  * redeemed their invitation and they maintain them from their own profile. A WP
  * that could rewrite them could rewrite the identity printed on a results
  * document.
+ *
+ * The list is split into Internal and External tabs — the purveyor's own
+ * staff and the private testers it accepts reports from — and a row can be
+ * moved to the other tab. That type is the purveyor's own word about the
+ * certifier, kept on its authorization, so moving one here changes nothing for
+ * any other purveyor they work for.
  *
  * Blocking is the one action with a consequence past this table, so it asks
  * first and says what it does; unblocking goes straight through — giving
@@ -72,6 +87,7 @@ export function CertifiersTable() {
 
 	// Open state is tracked next to the target, not derived from it, so a name
 	// stays on screen through the dialog's closing animation instead of blanking.
+	const [activeType, setActiveType] = useState<CertifierType>("internal");
 	const [blockTarget, setBlockTarget] = useState<WpCertifier | null>(null);
 	const [isBlockOpen, setIsBlockOpen] = useState(false);
 
@@ -98,14 +114,56 @@ export function CertifiersTable() {
 		}),
 	);
 
+	const setType = useMutation(
+		trpc.certifiers.setCertifierType.mutationOptions({
+			onSuccess: async (row) => {
+				toast.success(
+					`${row.fullName ?? "Certifier"} moved to ${CERTIFIER_TYPE_LABELS[
+						row.certifierType
+					].toLowerCase()} certifiers`,
+				);
+				await invalidateList();
+			},
+			onError: (mutationError) => toast.error(mutationError.message),
+		}),
+	);
+
+	const rows = data?.filter(
+		(certifier) => certifier.certifierType === activeType,
+	);
+
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<p className="text-[13px] text-muted-foreground">
-					{isPending || isError
-						? " "
-						: `${data.length} ${data.length === 1 ? "certifier" : "certifiers"}`}
-				</p>
+				<div
+					role="tablist"
+					aria-label="Certifier type"
+					className="flex flex-wrap gap-1.5"
+				>
+					{CERTIFIER_TYPES.map((type) => {
+						const active = type === activeType;
+						const count = data?.filter(
+							(certifier) => certifier.certifierType === type,
+						).length;
+
+						return (
+							<Button
+								key={type}
+								type="button"
+								role="tab"
+								aria-selected={active}
+								variant={active ? "default" : "outline"}
+								size="sm"
+								onClick={() => setActiveType(type)}
+							>
+								{CERTIFIER_TYPE_LABELS[type]} certifiers
+								{count === undefined ? null : (
+									<span className="tabular-nums opacity-70">{count}</span>
+								)}
+							</Button>
+						);
+					})}
+				</div>
 				<InviteCertifierDialog />
 			</div>
 
@@ -145,24 +203,30 @@ export function CertifiersTable() {
 									</Button>
 								</Empty>
 							</StateRow>
-						) : data.length === 0 ? (
+						) : rows?.length === 0 ? (
 							<StateRow>
 								<Empty>
 									<EmptyHeader>
 										<EmptyMedia variant="icon">
 											<UserCheck />
 										</EmptyMedia>
-										<EmptyTitle>No certifiers yet</EmptyTitle>
+										<EmptyTitle>
+											No {CERTIFIER_TYPE_LABELS[activeType].toLowerCase()}{" "}
+											certifiers yet
+										</EmptyTitle>
 										<EmptyDescription>
-											Invite one and they appear here as soon as they redeem the
-											link.
+											{data.length === 0
+												? "Invite one and they appear here as soon as they redeem the link."
+												: `Invite one as ${activeType}, or move a certifier here from the ${CERTIFIER_TYPE_LABELS[
+														OTHER_TYPE[activeType]
+													].toLowerCase()} tab.`}
 										</EmptyDescription>
 									</EmptyHeader>
 									<InviteCertifierDialog />
 								</Empty>
 							</StateRow>
 						) : (
-							data.map((certifier) => {
+							rows?.map((certifier) => {
 								const blocked = certifier.status === "blocked";
 								// One mutation drives every row's status button, so scope its
 								// pending state to the row actually being changed — otherwise
@@ -170,6 +234,9 @@ export function CertifiersTable() {
 								const statusPending =
 									setStatus.isPending &&
 									setStatus.variables?.id === certifier.id;
+								const typePending =
+									setType.isPending && setType.variables?.id === certifier.id;
+								const otherType = OTHER_TYPE[certifier.certifierType];
 								const expired = isLicenseExpired(
 									certifier.licenseExpirationDate,
 								);
@@ -222,35 +289,53 @@ export function CertifiersTable() {
 											</div>
 										</TableCell>
 										<TableCell className="text-right">
-											<Button
-												variant={blocked ? "secondary" : "destructive"}
-												size="sm"
-												disabled={statusPending}
-												aria-label={
-													blocked
-														? `Unblock ${certifier.fullName ?? "certifier"}`
-														: `Block ${certifier.fullName ?? "certifier"}`
-												}
-												onClick={() => {
-													if (blocked) {
-														setStatus.mutate({
+											<div className="flex justify-end gap-2">
+												<Button
+													variant="secondary"
+													size="sm"
+													disabled={typePending}
+													aria-label={`Move ${certifier.fullName ?? "certifier"} to ${CERTIFIER_TYPE_LABELS[otherType].toLowerCase()} certifiers`}
+													onClick={() =>
+														setType.mutate({
 															id: certifier.id,
-															status: "active",
-														});
-														return;
+															certifierType: otherType,
+														})
 													}
-													setBlockTarget(certifier);
-													setIsBlockOpen(true);
-												}}
-											>
-												{statusPending
-													? blocked
-														? "Unblocking…"
-														: "Blocking…"
-													: blocked
-														? "Unblock"
-														: "Block"}
-											</Button>
+												>
+													{typePending
+														? "Moving…"
+														: `Make ${CERTIFIER_TYPE_LABELS[otherType].toLowerCase()}`}
+												</Button>
+												<Button
+													variant={blocked ? "secondary" : "destructive"}
+													size="sm"
+													disabled={statusPending}
+													aria-label={
+														blocked
+															? `Unblock ${certifier.fullName ?? "certifier"}`
+															: `Block ${certifier.fullName ?? "certifier"}`
+													}
+													onClick={() => {
+														if (blocked) {
+															setStatus.mutate({
+																id: certifier.id,
+																status: "active",
+															});
+															return;
+														}
+														setBlockTarget(certifier);
+														setIsBlockOpen(true);
+													}}
+												>
+													{statusPending
+														? blocked
+															? "Unblocking…"
+															: "Blocking…"
+														: blocked
+															? "Unblock"
+															: "Block"}
+												</Button>
+											</div>
 										</TableCell>
 									</TableRow>
 								);

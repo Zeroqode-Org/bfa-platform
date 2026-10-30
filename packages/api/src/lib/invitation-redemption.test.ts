@@ -73,14 +73,15 @@ async function insertInvitation(overrides: {
 	expiresAt?: Date;
 	status?: "pending" | "redeemed" | "expired";
 	isRedeemed?: boolean;
+	certifierType?: "internal" | "external";
 }) {
 	const id = randomUUID();
 	const associatedWpId =
 		overrides.associatedWpId === undefined ? wpA : overrides.associatedWpId;
 
 	await pool.query(
-		`insert into invitations (id, email, role, token, status, expires_at, associated_wp_id, proposed_water_purveyor_name, is_redeemed)
-		 values ($1, $2, $3::invitation_role, $4, $5::invitation_status, $6, $7, $8, $9)`,
+		`insert into invitations (id, email, role, token, status, expires_at, associated_wp_id, proposed_water_purveyor_name, is_redeemed, certifier_type)
+		 values ($1, $2, $3::invitation_role, $4, $5::invitation_status, $6, $7, $8, $9, $10::certifier_type)`,
 		[
 			id,
 			overrides.email,
@@ -95,6 +96,7 @@ async function insertInvitation(overrides: {
 				? (overrides.proposedWaterPurveyorName ?? "Brand New Water District")
 				: null,
 			overrides.isRedeemed ?? false,
+			overrides.certifierType ?? null,
 		],
 	);
 
@@ -285,7 +287,7 @@ describeDb("redeemInvitation", () => {
 			expect(result.waterPurveyorId).toBeNull();
 
 			const { rows } = await pool.query(
-				`select c.company, c.id_number, c.license_expiration_date, a.water_purveyor_id, a.authorization_status
+				`select c.company, c.id_number, c.license_expiration_date, a.water_purveyor_id, a.authorization_status, a.certifier_type
 				 from certifiers c
 				 join wp_certifier_authorizations a on a.certifier_id = c.id
 				 where c.profile_id = $1`,
@@ -298,7 +300,45 @@ describeDb("redeemInvitation", () => {
 				id_number: "CERT-9001",
 				water_purveyor_id: wpA,
 				authorization_status: "active",
+				// An invitation that names no type — one sent before the choice
+				// existed — files the certifier as external.
+				certifier_type: "external",
 			});
+		});
+
+		it("files the certifier under the type the invitation names", async () => {
+			const secret = `cert-${randomUUID()}`;
+			await insertInvitation({
+				email: "redeem.internal@example.com",
+				role: "certifier",
+				secret,
+				certifierType: "internal",
+			});
+			const { admin } = fakeAuthAdmin();
+
+			const result = await redemption.redeemInvitation(
+				{
+					secret,
+					password: "correct horse battery",
+					fullName: "Redemption Indy",
+					certifier: {
+						company: "Redemption Indy Testing",
+						idNumber: "CERT-9002",
+						licenseExpirationDate: "2029-01-31",
+					},
+				},
+				{ authAdmin: admin },
+			);
+
+			const { rows } = await pool.query(
+				`select a.certifier_type
+				 from certifiers c
+				 join wp_certifier_authorizations a on a.certifier_id = c.id
+				 where c.profile_id = $1`,
+				[result.profileId],
+			);
+
+			expect(rows).toEqual([{ certifier_type: "internal" }]);
 		});
 
 		it("creates the purveyor with the name from the invitation, never from the form", async () => {

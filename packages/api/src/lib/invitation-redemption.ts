@@ -50,6 +50,12 @@ export type PublicInvitation = {
 	 * way the invitee reads a name rather than typing one.
 	 */
 	waterPurveyorName: string | null;
+	/**
+	 * Internal or external, for the authorization redemption creates. Null on
+	 * non-certifier invitations and on certifier ones sent before the choice
+	 * existed, which redeem as external.
+	 */
+	certifierType: "internal" | "external" | null;
 	expiresAt: Date;
 };
 
@@ -84,6 +90,7 @@ type InvitationRow = {
 	associatedWpId: string | null;
 	waterPurveyorName: string | null;
 	proposedWaterPurveyorName: string | null;
+	certifierType: "internal" | "external" | null;
 };
 
 async function loadInvitation(secret: string): Promise<InvitationRow | null> {
@@ -98,6 +105,7 @@ async function loadInvitation(secret: string): Promise<InvitationRow | null> {
 			associatedWpId: invitations.associatedWpId,
 			waterPurveyorName: waterPurveyors.companyName,
 			proposedWaterPurveyorName: invitations.proposedWaterPurveyorName,
+			certifierType: invitations.certifierType,
 		})
 		.from(invitations)
 		.leftJoin(waterPurveyors, eq(waterPurveyors.id, invitations.associatedWpId))
@@ -115,6 +123,7 @@ function toPublic(row: InvitationRow): PublicInvitation {
 		associatedWpId: row.associatedWpId,
 		// One field for the screen to render, whichever kind of invitation it is.
 		waterPurveyorName: row.waterPurveyorName ?? row.proposedWaterPurveyorName,
+		certifierType: row.certifierType,
 		expiresAt: row.expiresAt,
 	};
 }
@@ -339,7 +348,9 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * Second-WP path. The certifier already has a profile and a `certifiers` row —
  * neither is touched. Only the authorization is added, and `onConflictDoNothing`
  * makes a duplicate invitation for a purveyor they already serve a no-op rather
- * than a unique-constraint failure.
+ * than a unique-constraint failure. That includes its internal/external type:
+ * an existing authorization keeps the one it has, which the purveyor changes
+ * from the Certifiers screen rather than by inviting again.
  */
 async function addSecondPurveyor(
 	tx: Tx,
@@ -457,6 +468,7 @@ async function createAccount(
 			certifierId: certifier.id,
 			waterPurveyorId,
 			authorizationStatus: "active",
+			certifierType: invitation.certifierType ?? "external",
 		});
 	}
 

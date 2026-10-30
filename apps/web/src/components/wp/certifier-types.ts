@@ -24,6 +24,17 @@ export const CERTIFIER_STATUS_VARIANTS = {
 	blocked: "danger",
 } as const;
 
+export type CertifierType = WpCertifier["certifierType"];
+
+/**
+ * Internal (the purveyor's own staff) or external (a private tester), as the
+ * tabs, the invite form and the move action all word it.
+ */
+export const CERTIFIER_TYPE_LABELS: Record<CertifierType, string> = {
+	internal: "Internal",
+	external: "External",
+};
+
 /**
  * What blocking actually does. Shown wherever a certifier can be blocked, from
  * here, so the table and the confirmation cannot describe it differently.

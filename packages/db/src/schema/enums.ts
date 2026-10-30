@@ -43,6 +43,12 @@ export const authorizationStatus = pgEnum("authorization_status", [
 	"revoked",
 ]);
 
+// Whether a certifier is on the purveyor's own staff or a private tester the
+// purveyor accepts reports from. A property of one authorization, not of the
+// certifier: the same person can be internal to one purveyor and external to
+// another.
+export const certifierType = pgEnum("certifier_type", ["internal", "external"]);
+
 export const repairCompanyStatus = pgEnum("repair_company_status", [
 	"active",
 	"inactive",
