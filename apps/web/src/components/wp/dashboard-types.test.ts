@@ -12,9 +12,12 @@ import {
 	formatMonthShort,
 	formatPercent,
 	isCalendarDate,
+	noBinTestsHref,
 	PAST_DUE_LIST_ID,
+	pastDueAssetsHref,
 	pastDueListHref,
 	submittedTestHref,
+	submittedTestsHref,
 } from "./dashboard-types";
 
 /**
@@ -189,6 +192,20 @@ describe("daysOverdue", () => {
 
 	it("crosses a year boundary without drifting", () => {
 		expect(daysOverdue("2025-12-31", "2026-01-01")).toBe(1);
+	});
+});
+
+describe("view-all links", () => {
+	it("opens every submitted test from the incoming-reports list", () => {
+		expect(submittedTestsHref()).toBe("/wp/tests");
+	});
+
+	it("opens the asset list filtered to past due from the Past Due list", () => {
+		expect(pastDueAssetsHref()).toBe("/wp/assets?status=past_due");
+	});
+
+	it("opens Submitted Tests filtered to no BIN from the no-BIN table", () => {
+		expect(noBinTestsHref()).toBe("/wp/tests?bin=none");
 	});
 });
 

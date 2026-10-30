@@ -199,6 +199,21 @@ predicate, `noBinSubmission` — *no linked asset with a non-null BIN* — so th
 count and the rows cannot disagree. It is served by the partial index
 `bfa_assets_wp_no_bin_idx` (`0021`).
 
+## View all
+
+The three home lists are capped — *Incoming reports* and *Past Due* at
+`HOME_LIST_DEFAULT_LIMIT` (5), the no-BIN table at 10 — so each carries a
+**View all** link to the full screen behind it:
+
+| List | View all opens |
+|---|---|
+| Incoming reports | `/wp/tests` — every submitted test |
+| Past Due | `/wp/assets?status=past_due` — the asset list with its status filter preset |
+| No-BIN reports | `/wp/tests?bin=none` — Submitted Tests narrowed by the same `noBinSubmission` predicate, so the counts agree |
+
+The hrefs come from helpers in `dashboard-types.ts` (`submittedTestsHref`,
+`pastDueAssetsHref`, `noBinTestsHref`).
+
 ## Past Due list
 
 Assets the scheduler has marked `past_due`, **worst first** — ordered by the

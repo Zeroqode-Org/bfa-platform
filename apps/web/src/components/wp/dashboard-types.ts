@@ -59,6 +59,27 @@ export function assetHref(assetId: string): Route {
 	return `/wp/assets/${encodeURIComponent(assetId)}` as Route;
 }
 
+/** "View all" on the incoming-reports list: every submitted test, newest first. */
+export function submittedTestsHref(): Route {
+	return "/wp/tests" as Route;
+}
+
+/**
+ * "View all" on the Past Due list: the asset list with its status filter
+ * preset, which answers the same question without the home list's cap.
+ */
+export function pastDueAssetsHref(): Route {
+	return "/wp/assets?status=past_due" as Route;
+}
+
+/**
+ * "View all" on the no-BIN table: Submitted Tests narrowed to the same
+ * no-BIN predicate the table and its card use, so the counts agree.
+ */
+export function noBinTestsHref(): Route {
+	return "/wp/tests?bin=none" as Route;
+}
+
 /** The element id of the dashboard's Past Due list, the Past due card's target. */
 export const PAST_DUE_LIST_ID = "past-due";
 

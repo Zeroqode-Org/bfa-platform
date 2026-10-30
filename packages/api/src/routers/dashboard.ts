@@ -20,7 +20,10 @@ import {
 import { homeListInput, passFailBreakdownInput } from "../lib/dashboard-input";
 import { failListEntryCutoff } from "../lib/fail-list-rule";
 import { ASSEMBLY_FIELD_KEYS } from "../lib/wizard-input";
-import { newestSubmittedTestFirst } from "./submitted-tests";
+// `noBinSubmission` lives with the Submitted Tests screen because its
+// `?bin=none` filter is the No-BIN card's "View all": one predicate for the
+// card, the dashboard list and that page, so their numbers cannot disagree.
+import { newestSubmittedTestFirst, noBinSubmission } from "./submitted-tests";
 
 /**
  * The Water Purveyor home screen: five counts, two short lists, two charts.
@@ -499,21 +502,6 @@ export const dashboardRouter = router({
  */
 function countWhere(predicate: ReturnType<typeof sql>) {
 	return sql<number>`(count(*) filter (where ${predicate}))::int`;
-}
-
-/**
- * A submitted test with no BIN: not linked to an asset (filed before the
- * wizard registered no-BIN assets), or linked to one whose BIN is still null.
- * One `not exists` covers both, and it is the card's and the table's single
- * definition, so the count and the rows cannot disagree.
- */
-function noBinSubmission(waterPurveyorId: string) {
-	return sql`not exists (
-		select 1 from ${bfaAssets}
-		where ${bfaAssets.id} = ${testSubmissions.bfaAssetId}
-			and ${bfaAssets.waterPurveyorId} = ${waterPurveyorId}
-			and ${bfaAssets.bin} is not null
-	)`;
 }
 
 /**

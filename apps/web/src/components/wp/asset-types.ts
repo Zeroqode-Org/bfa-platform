@@ -48,6 +48,19 @@ export const ASSET_STATUS_LABELS: Record<AssetStatus, string> = {
 	past_due: "Past due",
 };
 
+/**
+ * Whether `value` names a real asset status — the check the assets page runs
+ * on `?status=` before handing it to the table's `initialStatus`.
+ *
+ * Here rather than beside the table's filter because the page calls it on the
+ * server, and the table is a client module whose exports a server component
+ * cannot call. An own-key check rather than `in`, so `toString` and the rest
+ * of the prototype are not statuses.
+ */
+export function isAssetStatus(value: unknown): value is AssetStatus {
+	return typeof value === "string" && Object.hasOwn(ASSET_STATUS_LABELS, value);
+}
+
 export const ASSET_STATUS_VARIANTS = {
 	active: "success",
 	due_soon: "warning",

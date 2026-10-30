@@ -102,6 +102,14 @@ is shown in the footer beside the button, not as a toast. The list's
 something that is not a real date holds the list back and says so under itself,
 rather than being quietly dropped from the query.
 
+The **BIN** filter (*All BINs* / *No BIN*) narrows the list to tests with no
+BIN — unlinked, or linked to a no-BIN asset the wizard registered. It is the
+dashboard's No-BIN card and list by construction: `bin: "none"` applies the
+same exported `noBinSubmission` predicate, so the card's count, the list's
+total and the CSV hold the same rows. The dashboard's No-BIN "View all" opens
+`/wp/tests?bin=none`, which starts the filter on *No BIN*; only that exact value
+does, and the reader can widen it afterwards.
+
 **The per-BFA-type layout is deliberately not built yet.** The results document
 has one layout per type — an RP report carries relief-valve rows, a PVB report
 carries air-inlet rows, no empty sections — built as a shared frame plus a
@@ -402,8 +410,8 @@ statement — quick periods on the left, the download on the right:
   browser's — at 3pm on the 31st in Honolulu it is already the 1st in UTC.
   *This month* and *Year to date* end today; *Last month* is the closed month.
   The matching button is marked pressed while the boxes hold exactly its range.
-- **Download CSV (n)** downloads every test the current filters match — result
-  filter and range — across every page, and the count on the button (the
+- **Download CSV (n)** downloads every test the current filters match — result,
+  BIN and range — across every page, and the count on the button (the
   list's own total) says so, rather than leaving a reader to guess whether it
   is the page on screen.
 
@@ -470,7 +478,7 @@ download cannot drift into different answers.
 
 | Procedure | Who | What it does |
 |---|---|---|
-| `listSubmittedTests` | all three WP roles | One page of the caller's own purveyor's submitted tests, cross-certifier. Optional result filter and inclusive `from`/`to` bounds on `test_date`, narrowing together. Each row carries the customer on its test date. |
+| `listSubmittedTests` | all three WP roles | One page of the caller's own purveyor's submitted tests, cross-certifier. Optional result filter, `bin: "none"` filter and inclusive `from`/`to` bounds on `test_date`, narrowing together. Each row carries the customer on its test date. |
 | `getSubmittedTest` | all three WP roles | One submitted row in the caller's purveyor, or the same not-found a draft and a foreign id get. |
 | `updateSubmittedTest` | Admin, SubAdmin | Corrects the record, stamps `edited_by_wp_profile_id`, logs `test_submission_corrected`. On an unlinked test saved with a BIN, also creates the asset (and customer) from the test and links it — see [A new assembly](#a-new-assembly-assigning-its-bin-creates-the-asset). |
 | `getPhotoUrls` | all three WP roles | Ten-minute signed links for the photos stored on one submitted test, keyed by path. |

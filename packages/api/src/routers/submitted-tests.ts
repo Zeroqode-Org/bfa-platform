@@ -8,7 +8,20 @@ import {
 	scheduledJobs,
 	testSubmissions,
 } from "@bfa-platform/db/schema";
-import { and, asc, count, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	gte,
+	isNotNull,
+	isNull,
+	lte,
+	notExists,
+	sql,
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { router, TRPCError, wpProcedure } from "../index";
 import { assetColumns } from "../lib/asset-input";
@@ -158,9 +171,11 @@ export const submittedTestsRouter = router({
 	 * Cross-certifier by design: this is the purveyor's inbox, not one
 	 * certifier's archive, so nothing scopes it by who filed the row.
 	 *
-	 * The result filter and the two date bounds are independent and narrow
-	 * together — "failures in March" is one question, and making the reader pick
-	 * between the result and the period would answer a different one.
+	 * The result filter, the BIN filter and the two date bounds are independent
+	 * and narrow together — "failures in March" is one question, and making the
+	 * reader pick between the result and the period would answer a different
+	 * one. The total is counted under the same `where` as the page, so the pager
+	 * and the dashboard's No-BIN card agree on how many no-BIN tests there are.
 	 */
 	listSubmittedTests: wpProcedure
 		.input(listSubmittedTestsInput)
@@ -266,6 +281,7 @@ export const submittedTestsRouter = router({
 					from: input.from ?? null,
 					to: input.to ?? null,
 					result: input.result ?? null,
+					bin: input.bin ?? null,
 					row_count: rows.length,
 					timestamp: new Date().toISOString(),
 				}),
@@ -1007,10 +1023,14 @@ function submittedRowsOf(waterPurveyorId: string) {
  * CSV export, so the two cannot drift into different answers to the same
  * question.
  *
- * The result filter and the two date bounds are independent and narrow
- * together. Both bounds are inclusive: a WP asking for the 1st to the 31st
- * means the 31st, and `test_date` is a Postgres `date`, so there is no time
- * component for an inclusive upper bound to accidentally exclude.
+ * The result filter, the BIN filter and the two date bounds are independent
+ * and narrow together. Both bounds are inclusive: a WP asking for the 1st to
+ * the 31st means the 31st, and `test_date` is a Postgres `date`, so there is no
+ * time component for an inclusive upper bound to accidentally exclude.
+ *
+ * `bin: "none"` is {@link noBinSubmission} itself — the predicate the
+ * dashboard's No-BIN card counts and its list shows — so "View all" from that
+ * card lands on exactly the rows the card counted, here and in the CSV.
  */
 function submittedTestsMatching(
 	waterPurveyorId: string,
@@ -1019,8 +1039,51 @@ function submittedTestsMatching(
 	return and(
 		submittedRowsOf(waterPurveyorId),
 		filters.result ? eq(testSubmissions.testResult, filters.result) : undefined,
+		filters.bin === "none" ? noBinSubmission(waterPurveyorId) : undefined,
 		filters.from ? gte(testSubmissions.testDate, filters.from) : undefined,
 		filters.to ? lte(testSubmissions.testDate, filters.to) : undefined,
+	);
+}
+
+/**
+ * The inner table of {@link noBinSubmission}'s subquery, under its own name.
+ *
+ * The outer query sometimes joins `bfa_assets` itself (the list does, the
+ * dashboard's card does not), and a correlated subquery over an unaliased
+ * `bfa_assets` would leave every reference to that name one shadowing rule —
+ * or one dropped table qualifier — away from comparing the asset to itself
+ * and matching nothing, with no error. Under its own name the inner row and
+ * the outer submission cannot be confused whatever shape the outer query has.
+ */
+const noBinAsset = alias(bfaAssets, "no_bin_asset");
+
+/**
+ * A submitted test with no BIN: not linked to an asset (filed before the
+ * wizard registered no-BIN assets), or linked to one whose BIN is still null.
+ * One `not exists` covers both.
+ *
+ * The single definition of "no BIN" for the WP: the dashboard's No-BIN card
+ * counts with it, its No-BIN list filters with it, and this screen's
+ * `bin: "none"` filter is it — so the card's number, the list's rows and the
+ * "View all" page cannot disagree. Exported from here rather than from the
+ * dashboard because the dashboard already imports this router's ordering, and
+ * the dependency should run one way.
+ *
+ * Tenant-scoped inside the subquery, like `tenantAsset`: a link that crossed
+ * tenants reads as no BIN, which is how the list already renders that row.
+ */
+export function noBinSubmission(waterPurveyorId: string) {
+	return notExists(
+		db
+			.select({ one: sql`1` })
+			.from(noBinAsset)
+			.where(
+				and(
+					eq(noBinAsset.id, testSubmissions.bfaAssetId),
+					eq(noBinAsset.waterPurveyorId, waterPurveyorId),
+					isNotNull(noBinAsset.bin),
+				),
+			),
 	);
 }
 

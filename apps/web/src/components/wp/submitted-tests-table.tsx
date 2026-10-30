@@ -82,6 +82,18 @@ const RESULT_FILTERS = {
 
 type ResultFilter = keyof typeof RESULT_FILTERS;
 
+/**
+ * The BIN filter. "No BIN" is the dashboard's No-BIN card, row for row: the
+ * server applies the same predicate that card counts with, so following its
+ * "View all" here shows the number the card showed.
+ */
+const BIN_FILTERS = {
+	all: "All BINs",
+	none: "No BIN",
+} as const;
+
+type BinFilter = keyof typeof BIN_FILTERS;
+
 const COLUMN_COUNT = 7;
 const SKELETON_ROWS = 6;
 const PAGE_SIZE = 25;
@@ -106,6 +118,7 @@ const PAGE_SIZE = 25;
  */
 export function SubmittedTestsTable({
 	initialSubmissionId,
+	initialNoBin = false,
 }: {
 	/**
 	 * A record to open on arrival, named in the URL as `?test=<id>`.
@@ -123,11 +136,22 @@ export function SubmittedTestsTable({
 	 * a draft id and an invented one identically.
 	 */
 	initialSubmissionId?: string;
+	/**
+	 * Start on the no-BIN tests only, named in the URL as `?bin=none`.
+	 *
+	 * How the dashboard's No-BIN list, which shows ten rows, offers the rest:
+	 * its "View all" lands here rather than on a no-BIN screen of its own, so
+	 * the paging, the export and the link-to-asset flow stay this screen's.
+	 * Initial state for the same reason as `initialSubmissionId` — the reader
+	 * can widen the filter afterwards without the URL putting it back.
+	 */
+	initialNoBin?: boolean;
 } = {}) {
 	const queryClient = useQueryClient();
 
 	const [page, setPage] = useState(1);
 	const [result, setResult] = useState<ResultFilter>("all");
+	const [bin, setBin] = useState<BinFilter>(initialNoBin ? "none" : "all");
 	const [from, setFrom] = useState("");
 	const [to, setTo] = useState("");
 	const [openSubmissionId, setOpenSubmissionId] = useState<string | null>(
@@ -161,7 +185,7 @@ export function SubmittedTestsTable({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: resets the pager when the filters change, not when the page does
 	useEffect(() => {
 		setPage(1);
-	}, [result, from, to]);
+	}, [result, bin, from, to]);
 
 	const { data, isPending, isError, error, refetch, isPlaceholderData } =
 		useQuery(
@@ -170,6 +194,7 @@ export function SubmittedTestsTable({
 					page,
 					pageSize: PAGE_SIZE,
 					result: result === "all" ? undefined : (result as SubmissionResult),
+					bin: bin === "none" ? "none" : undefined,
 					from: fromIso ?? undefined,
 					to: toIso ?? undefined,
 				},
@@ -195,7 +220,8 @@ export function SubmittedTestsTable({
 		? undefined
 		: canEditSubmissions(whoami.data?.globalRole);
 
-	const hasFilters = result !== "all" || Boolean(from) || Boolean(to);
+	const hasFilters =
+		result !== "all" || bin !== "all" || Boolean(from) || Boolean(to);
 	const total = data?.total ?? 0;
 
 	// Computed once per mount: a clerk who leaves the screen open past midnight
@@ -218,6 +244,7 @@ export function SubmittedTestsTable({
 
 	function clearFilters() {
 		setResult("all");
+		setBin("all");
 		setFrom("");
 		setTo("");
 		rangeValidation.reset();
@@ -263,6 +290,28 @@ export function SubmittedTestsTable({
 						<SelectContent>
 							<SelectGroup>
 								{Object.entries(RESULT_FILTERS).map(([value, label]) => (
+									<SelectItem key={value} value={value}>
+										{label}
+									</SelectItem>
+								))}
+							</SelectGroup>
+						</SelectContent>
+					</Select>
+				</div>
+
+				<div className="flex flex-col gap-1.5">
+					<Label className="text-[12px] text-muted-foreground">BIN</Label>
+					<Select
+						items={BIN_FILTERS}
+						value={bin}
+						onValueChange={(value) => setBin(value as BinFilter)}
+					>
+						<SelectTrigger aria-label="Filter by BIN" className="w-[140px]">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectGroup>
+								{Object.entries(BIN_FILTERS).map(([value, label]) => (
 									<SelectItem key={value} value={value}>
 										{label}
 									</SelectItem>
@@ -348,6 +397,7 @@ export function SubmittedTestsTable({
 				<SubmittedTestsExportButton
 					filters={{
 						result: result === "all" ? undefined : (result as SubmissionResult),
+						bin: bin === "none" ? "none" : undefined,
 						from: fromIso ?? undefined,
 						to: toIso ?? undefined,
 					}}
@@ -434,7 +484,7 @@ export function SubmittedTestsTable({
 										</EmptyTitle>
 										<EmptyDescription>
 											{hasFilters
-												? "Try a wider date range, or both results."
+												? "Try a wider date range, or all results and BINs."
 												: "Tests appear here the moment a certifier submits one against your purveyor. Drafts never do."}
 										</EmptyDescription>
 									</EmptyHeader>

@@ -444,6 +444,13 @@ The add variant additionally renders the optional customer dropdown; its list is
 the WP-scoped `listCustomers`, fetched only once the dialog is open, because
 most visits to this page never open it.
 
+`/wp/assets?status=past_due` (or `due_soon`, `active`) opens the list with the
+status filter already set — how the [dashboard's](/docs/wp-dashboard) Past Due
+block links to the full list. The page reads the parameter on the server and
+passes it to `AssetsTable` as `initialStatus`, a starting value only: the filter
+stays changeable and is not written back to the URL. A repeated or unknown
+`status` (checked by `isAssetStatus` in `asset-types.ts`, not the table: the page calls it on the server and the table is a client module) opens the unfiltered list.
+
 A BIN links to `/wp/assets/[assetId]`: the assembly details, the current
 customer with the control that changes them, and the full assignment history —
 current occupancy at the top, every past one below it with its start and end
@@ -465,7 +472,7 @@ primitives.
 | `packages/api/src/lib/asset-input.test.ts` | `npm test` | The validation rules on their own — no database |
 | `apps/web/src/components/wp/asset-form.test.tsx` | `npm test` | What the form sends, when save unlocks, the BIN-change warning, field-level errors |
 | `apps/web/src/components/wp/asset-assign.test.ts` | `npm test` | The attach decision: blocked, confirm-first, send |
-| `apps/web/src/components/wp/assets-table.test.tsx` | `npm test` | Status wording, the suspended-occupant note, both empty states, search, paging |
+| `apps/web/src/components/wp/assets-table.test.tsx` | `npm test` | Status wording, the suspended-occupant note, both empty states, search, paging, the `?status=` preset |
 | `packages/api/src/routers/assets.test.ts` | `npm run test:db` | Tenant isolation, BIN uniqueness and logging, the assignment transaction, the no-op guards |
 | `packages/db/src/bfa-assets-rls.test.ts` | `npm run test:db` | The row policies and column grants, as the `authenticated` role |
 | `packages/api/src/scheduler/notice-workflow.db.test.ts` | `npm run test:db` | What creating an asset, changing its date and attaching a customer do to the notice chain, and the `asset_status` recomputation |

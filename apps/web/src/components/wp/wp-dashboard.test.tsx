@@ -499,6 +499,21 @@ describe("WpDashboard no-BIN reports", () => {
 	});
 });
 
+// The home lists are capped, so each one offers the full screen behind it.
+describe("WpDashboard view-all links", () => {
+	it.each([
+		["Incoming reports", "View all submitted tests", "/wp/tests"],
+		["Past Due", "View all past due assets", "/wp/assets?status=past_due"],
+		["No-BIN reports", "View all no-BIN reports", "/wp/tests?bin=none"],
+	])("%s links to its full list", async (region, name, href) => {
+		renderDashboard();
+
+		const link = await panel(region).findByRole("link", { name });
+
+		expect(link.getAttribute("href")).toBe(href);
+	});
+});
+
 describe("WpDashboard past due list", () => {
 	it("links each asset to its own detail route", async () => {
 		renderDashboard();
