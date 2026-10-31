@@ -497,7 +497,7 @@ describe("CustomersTable", () => {
 		// The suspended agricultural customer is attached to nothing — a record
 		// no notice can reach, so it still gets a line and says so.
 		expect(screen.getByText(suspendedAgricultural.name)).toBeTruthy();
-		expect(screen.getByText("No BIN")).toBeTruthy();
+		expect(screen.getByText("No asset")).toBeTruthy();
 		expect(screen.getByText("2 customers · 2 assets")).toBeTruthy();
 		// De-link is per asset, so a customer holding nothing has none to offer.
 		expect(screen.getAllByRole("button", { name: /^De-link/ })).toHaveLength(2);
@@ -531,6 +531,46 @@ describe("CustomersTable", () => {
 		});
 		// The list is refetched, so the BIN's line disappears from this customer.
 		await waitFor(() => expect(listFn).toHaveBeenCalledTimes(2));
+	});
+
+	it("holds every other De-link while one is in flight, and names the BIN it sent", async () => {
+		const { toast } = await import("sonner");
+		vi.mocked(toast.success).mockClear();
+		listFn.mockResolvedValue([multiBin]);
+		let finish: (value: unknown) => void = () => {};
+		delinkFn.mockReturnValue(
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+		);
+		renderTable();
+
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: `De-link 1305 from ${multiBin.name}`,
+			}),
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "De-link asset" }),
+		);
+		await waitFor(() => expect(delinkFn).toHaveBeenCalledTimes(1));
+
+		// The other line's De-link waits, so the dialog cannot be swapped to a
+		// different BIN under the request it already sent.
+		// (Behind the modal dialog, so hidden from the accessibility tree.)
+		const other = screen.getByRole("button", {
+			name: `De-link 1201 from ${multiBin.name}`,
+			hidden: true,
+		}) as HTMLButtonElement;
+		expect(other.disabled).toBe(true);
+
+		finish({});
+
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				`1305 de-linked from ${multiBin.name}`,
+			),
+		);
 	});
 
 	it("reports a refused de-link and refreshes the list", async () => {

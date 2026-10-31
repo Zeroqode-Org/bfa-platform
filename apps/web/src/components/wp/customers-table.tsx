@@ -200,10 +200,16 @@ export function CustomersTable() {
 	 */
 	const delinkCustomer = useMutation(
 		trpc.assets.delinkCustomer.mutationOptions({
-			onSuccess: async () => {
-				if (delinkTarget) {
+			// Named from the request that finished, not from whichever line the
+			// dialog shows now.
+			onSuccess: async (_asset, { assetId, customerId }) => {
+				const done = rows.find(
+					(row) => row.customer.id === customerId && row.asset?.id === assetId,
+				);
+
+				if (done?.asset) {
 					toast.success(
-						`${binLabel(delinkTarget.asset)} de-linked from ${delinkTarget.customer.name}`,
+						`${binLabel(done.asset)} de-linked from ${done.customer.name}`,
 					);
 				}
 				await invalidateList();
@@ -220,6 +226,9 @@ export function CustomersTable() {
 	);
 
 	function openDelink(customer: Customer, asset: HeldAsset) {
+		// One De-link at a time: the dialog stays on the request it sent until
+		// that request answers.
+		if (delinkCustomer.isPending) return;
 		delinkCustomer.reset();
 		setDelinkTarget({ customer, asset });
 		setIsDelinkOpen(true);
@@ -337,8 +346,10 @@ export function CustomersTable() {
 											{customer.name}
 										</TableCell>
 										{/* A customer holding nothing is one no notice can
-										    reach, so the gap is flagged rather than left as a
-										    dash that reads like an optional field. */}
+										    reach, so the gap is flagged ("No asset") rather
+										    than left as a dash that reads like an optional
+										    field. A held asset without a BIN is attached, so
+										    it reads plainly as "No BIN". */}
 										<TableCell className="tabular-nums">
 											{asset ? (
 												asset.bin === null ? (
@@ -347,7 +358,7 @@ export function CustomersTable() {
 													asset.bin
 												)
 											) : (
-												<Badge variant="warning">No BIN</Badge>
+												<Badge variant="warning">No asset</Badge>
 											)}
 										</TableCell>
 										<TableCell className="text-muted-foreground tabular-nums">
@@ -425,6 +436,7 @@ export function CustomersTable() {
 														variant="secondary"
 														size="sm"
 														aria-label={`De-link ${binLabel(asset)} from ${customer.name}`}
+														disabled={delinkCustomer.isPending}
 														onClick={() => openDelink(customer, asset)}
 													>
 														<Unlink aria-hidden="true" />
@@ -521,7 +533,13 @@ export function CustomersTable() {
 				</DialogContent>
 			</Dialog>
 
-			<Dialog open={isDelinkOpen} onOpenChange={setIsDelinkOpen}>
+			<Dialog
+				open={isDelinkOpen}
+				onOpenChange={(open) => {
+					if (!open && delinkCustomer.isPending) return;
+					setIsDelinkOpen(open);
+				}}
+			>
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>
@@ -533,7 +551,9 @@ export function CustomersTable() {
 							{delinkTarget?.customer.name} stops receiving automated email
 							about this asset, including any notice already scheduled, and the
 							asset shows as Unassigned until you attach its new owner. Their
-							other assets and past assignments are kept.
+							other assets and past assignments are kept. An agricultural
+							customer's yearly AG renewal notice is about the customer, not the
+							asset, so it continues — suspend the customer to stop it.
 						</DialogDescription>
 					</DialogHeader>
 

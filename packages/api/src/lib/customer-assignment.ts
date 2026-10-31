@@ -6,6 +6,23 @@ import { resumeHeldNoticeChain } from "../scheduler/notice-chain";
 import type { AuditActor } from "./audit-actor";
 
 /**
+ * Ends the asset's open occupancy row, if it has one, with today's
+ * `end_date`. The first step of both attaching and detaching, so the history
+ * is closed the same way whichever one ends it.
+ */
+async function closeOpenAssignment(executor: JobExecutor, assetId: string) {
+	await executor
+		.update(customerAssignments)
+		.set({ endDate: sql`current_date` })
+		.where(
+			and(
+				eq(customerAssignments.bfaAssetId, assetId),
+				isNull(customerAssignments.endDate),
+			),
+		);
+}
+
+/**
  * Makes a customer the current occupant of an asset, preserving whoever was
  * there before.
  *
@@ -42,15 +59,7 @@ export async function attachCustomerToAsset({
 	waterPurveyorId: string;
 	actor: AuditActor;
 }) {
-	await executor
-		.update(customerAssignments)
-		.set({ endDate: sql`current_date` })
-		.where(
-			and(
-				eq(customerAssignments.bfaAssetId, assetId),
-				isNull(customerAssignments.endDate),
-			),
-		);
+	await closeOpenAssignment(executor, assetId);
 
 	await executor.insert(customerAssignments).values({
 		bfaAssetId: assetId,
@@ -110,15 +119,7 @@ export async function detachCustomerFromAsset({
 	assetId: string;
 	waterPurveyorId: string;
 }) {
-	await executor
-		.update(customerAssignments)
-		.set({ endDate: sql`current_date` })
-		.where(
-			and(
-				eq(customerAssignments.bfaAssetId, assetId),
-				isNull(customerAssignments.endDate),
-			),
-		);
+	await closeOpenAssignment(executor, assetId);
 
 	await executor
 		.update(bfaAssets)

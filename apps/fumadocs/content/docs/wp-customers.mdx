@@ -51,7 +51,9 @@ customer holds at least one asset.**
   before the rule — sees a required *BIN* field instead.
 - The table lists **one line per BIN**: a customer holding three assets is
   three lines, each with its own *De-link*. A customer holding nothing still
-  gets a line, with a *No BIN* warning badge rather than a dash.
+  gets a line, with a *No asset* warning badge rather than a dash. (A held
+  asset without a BIN reads *No BIN* in muted text — a different thing: it is
+  attached, and has its own *De-link*.)
 
 Saving a BIN runs `attachCustomerToAsset` (`packages/api/src/lib/customer-assignment.ts`),
 the same three writes `assets.assignCustomer` makes — close the open occupancy
@@ -88,7 +90,12 @@ line therefore carries a **De-link** action for that one BIN.
 - It asks first — *De-link 1305 from Harbor View Apartments?* — and says what
   happens: the customer stops receiving automated email about that asset,
   including notices already scheduled, and the asset shows as *Unassigned*
-  until its new owner is attached. Their other assets are untouched.
+  until its new owner is attached. Their other assets are untouched. It also
+  says the AG renewal notice continues for an agricultural customer (see
+  below), and that suspending the customer is what stops it.
+- While the request is in flight the dialog cannot be closed and no other
+  line's *De-link* can be opened, so the success toast always names the BIN
+  that was actually de-linked.
 - Confirming calls `assets.delinkCustomer({ assetId, customerId })`. In one
   transaction, under a row lock on the asset scoped to the caller's purveyor,
   it closes the open `customer_assignments` row with today's `end_date` and
@@ -116,7 +123,7 @@ The AG renewal notice is about the customer's rate, not an asset, so de-linking
 a BIN does not touch it.
 
 A customer de-linked from their last asset is a record no notice can reach, so
-the line shows the *No BIN* badge and the edit form asks for a BIN again on the
+the line shows the *No asset* badge and the edit form asks for a BIN again on the
 next save.
 
 ### Why the AG renewal date is conditional
