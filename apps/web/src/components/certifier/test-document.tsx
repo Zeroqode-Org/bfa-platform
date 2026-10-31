@@ -1,7 +1,7 @@
 "use client";
 
 import { SHOW_WP_ADDRESS_ON_DOCUMENT } from "@bfa-platform/api/lib/result-document-options";
-import { formatPsid } from "@bfa-platform/api/lib/wizard-answer-layout";
+import { valveAnswerLabels } from "@bfa-platform/api/lib/wizard-answer-layout";
 import {
 	ASSEMBLY_FIELD_KEYS,
 	INITIAL_TEST_KEY,
@@ -9,7 +9,6 @@ import {
 	LINE_PRESSURE_UNIT,
 	OWNER_ABSENT_DISCLAIMER,
 	PRESSURE_DIFFERENCE_UNIT,
-	valveYesWithReading,
 	WATER_METER_END_KEY,
 	WATER_METER_END_LABEL,
 	WATER_METER_START_KEY,
@@ -399,25 +398,14 @@ function AnswerRow({
 	entry: WizardQuestion;
 	data: Record<string, string | number | boolean | null>;
 }) {
-	const answer = data[entry.key];
-	const reading =
-		entry.valueKey && answer === true
-			? formatPsid(data[entry.valueKey]) || null
-			: null;
+	const { answer, yes, no } = valveAnswerLabels(entry, data);
 
 	return (
 		<div className="grid grid-cols-1 items-center gap-1 border-border border-r border-b px-2.5 py-2 sm:grid-cols-[1fr_auto] sm:gap-4">
 			<span className="font-semibold text-[13px]">{entry.label}</span>
 			<span className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
-				<Check
-					checked={answer === true}
-					label={
-						answer === true
-							? valveYesWithReading(entry, reading)
-							: entry.answers.yes
-					}
-				/>
-				<Check checked={answer === false} label={entry.answers.no} />
+				<Check checked={answer === true} label={yes} />
+				<Check checked={answer === false} label={no} />
 			</span>
 		</div>
 	);

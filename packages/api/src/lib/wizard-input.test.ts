@@ -24,7 +24,6 @@ import {
 	recordOverride,
 	saveDraftStepInput,
 	submitTestInput,
-	valveAnswerTerm,
 	valveYesWithReading,
 	WATER_METER_START_KEY,
 	WIZARD_TEST_SPEC,
@@ -652,12 +651,6 @@ describe("valve answer wording", () => {
 	const [relief, , checkValve1] = wizardQuestionsFor("RP");
 	const pvbCheck = wizardQuestionsFor("PVB")[2];
 
-	it("names a stored answer by its term, and nothing when unanswered", () => {
-		expect(valveAnswerTerm(checkValve1 as WizardQuestion, true)).toBe("Tight");
-		expect(valveAnswerTerm(checkValve1 as WizardQuestion, false)).toBe("Leak");
-		expect(valveAnswerTerm(checkValve1 as WizardQuestion, null)).toBeNull();
-	});
-
 	it("reads a reading into the answer as one phrase", () => {
 		expect(valveYesWithReading(relief as WizardQuestion, "2.0")).toBe(
 			"Opened at 2.0 PSID",
@@ -670,9 +663,19 @@ describe("valve answer wording", () => {
 		);
 	});
 
-	it("falls back to the bare term without a reading", () => {
+	it("says a missing reading is missing, and leaves a part without one bare", () => {
+		const [, checkValve2] = wizardQuestionsFor("RP");
+
 		expect(valveYesWithReading(relief as WizardQuestion, null)).toBe(
-			"Opened at",
+			"Opened at — no reading",
 		);
+		expect(valveYesWithReading(checkValve2 as WizardQuestion, null)).toBe(
+			"Tight",
+		);
+	});
+
+	it("labels every reading input as the WP's document lists it", () => {
+		expect(pvbCheck?.valueLabel).toBe("Check Valve reading");
+		expect(relief?.valueLabel).toBe("Differential Relief Valve opened at");
 	});
 });

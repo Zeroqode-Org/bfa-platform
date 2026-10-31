@@ -9,11 +9,13 @@ import {
 	PHOTO_PATH_KEYS,
 	SIGN_OFF_DISCLAIMER_KEY,
 	type ValveAnswerTerms,
+	valveYesWithReading,
 	WATER_METER_END_KEY,
 	WATER_METER_END_LABEL,
 	WATER_METER_START_KEY,
 	WATER_METER_START_LABEL,
 	WIZARD_TEST_SPEC,
+	type WizardQuestion,
 } from "./wizard-input";
 
 /**
@@ -28,8 +30,9 @@ import {
  *
  * Labels come from the spec the wizard and the PDF already read, so a valve
  * row is called by the part it tests ("Check Valve 1"), its answer is worded
- * in the client's terms ("Tight" / "Leak") and its reading is "Check Valve 1
- * PSID". Pure, no DB import, so the browser can use it.
+ * in the client's terms ("Tight" / "Leak") and its reading is labelled as the
+ * wizard asks for it ("Check Valve 1 reading"). Pure, no DB import, so the
+ * browser can use it.
  */
 
 export type WizardAnswerKind =
@@ -128,7 +131,10 @@ export function wizardAnswerFields(bfaType: BfaType): WizardAnswerField[] {
 			if (question.valueKey) {
 				fields.push({
 					key: question.valueKey,
-					label: `${label} PSID`,
+					label: questionLabel(
+						question.key,
+						question.valueLabel ?? `${question.label} reading`,
+					),
 					kind: "psid",
 					column: "end",
 				});
@@ -190,6 +196,30 @@ export function formatPsid(value: unknown): string {
 	const [, decimals = ""] = text.split(".");
 
 	return decimals.length >= 1 ? text : Number(text).toFixed(1);
+}
+
+/**
+ * A valve's two answers as they are printed beside it: the chosen `yes`
+ * carries its reading ("Opened at 2.0 PSID"), the other term stands alone.
+ * One place for the PDF, the certifier's document and the WP's, so the three
+ * cannot word the same answer differently.
+ */
+export function valveAnswerLabels(
+	entry: WizardQuestion,
+	wizardData: Record<string, unknown>,
+): { answer: unknown; yes: string; no: string } {
+	const answer = wizardData[entry.key];
+	const reading =
+		entry.valueKey && answer === true
+			? formatPsid(wizardData[entry.valueKey]) || null
+			: null;
+
+	return {
+		answer,
+		yes:
+			answer === true ? valveYesWithReading(entry, reading) : entry.answers.yes,
+		no: entry.answers.no,
+	};
 }
 
 function field(

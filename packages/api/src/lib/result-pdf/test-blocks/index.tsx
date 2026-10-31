@@ -1,11 +1,10 @@
 import { Path, Svg, Text, View } from "@react-pdf/renderer";
-import { formatPsid } from "../../wizard-answer-layout";
+import { valveAnswerLabels } from "../../wizard-answer-layout";
 import {
 	ADP_KEY,
 	LINE_PRESSURE_KEY,
 	LINE_PRESSURE_UNIT,
 	PRESSURE_DIFFERENCE_UNIT,
-	valveYesWithReading,
 	WATER_METER_END_KEY,
 	WATER_METER_END_LABEL,
 	WATER_METER_START_KEY,
@@ -85,27 +84,16 @@ function AnswerRow({
 	entry: WizardQuestion;
 	wizardData: Record<string, unknown>;
 }) {
-	const answer = wizardData[entry.key];
 	// The reading rides on the chosen answer as one phrase — "Opened at 2.0
 	// PSID", "Tight — Check held at 2.0 PSID" — the way the paper form reads.
-	const reading =
-		entry.valueKey && answer === true
-			? formatPsid(wizardData[entry.valueKey]) || null
-			: null;
+	const { answer, yes, no } = valveAnswerLabels(entry, wizardData);
 
 	return (
 		<View style={pdfStyles.answerRow} wrap={false}>
 			<Text style={pdfStyles.answerLabel}>{entry.label}</Text>
 			<View style={pdfStyles.checks}>
-				<Check
-					checked={answer === true}
-					label={
-						answer === true
-							? valveYesWithReading(entry, reading)
-							: entry.answers.yes
-					}
-				/>
-				<Check checked={answer === false} label={entry.answers.no} />
+				<Check checked={answer === true} label={yes} />
+				<Check checked={answer === false} label={no} />
 			</View>
 		</View>
 	);

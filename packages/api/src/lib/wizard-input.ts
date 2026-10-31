@@ -258,12 +258,21 @@ export function parseSize(text: string | null | undefined): string {
  * Stored as a boolean all the same — `yes` is `true` — so the words can change
  * without touching a single saved test.
  */
-export type ValveAnswerTerms = { yes: string; no: string };
+export type ValveAnswerTerms = {
+	yes: string;
+	no: string;
+	/**
+	 * The `yes` term leads straight into the reading ("Opened at 2.0 PSID")
+	 * rather than taking it after a dash ("Tight — 2.0 PSID").
+	 */
+	readingInline?: boolean;
+};
 
 export const TIGHT_OR_LEAK: ValveAnswerTerms = { yes: "Tight", no: "Leak" };
 export const OPENED_OR_NOT: ValveAnswerTerms = {
 	yes: "Opened at",
 	no: "Did not open",
+	readingInline: true,
 };
 export const FULLY_OPENED_OR_NOT: ValveAnswerTerms = {
 	yes: "Fully opened",
@@ -310,36 +319,26 @@ export const WATER_METER_START_LABEL = "Water meter start reading";
 export const WATER_METER_END_LABEL = "Water meter stop reading";
 
 /**
- * The word for a stored answer — "Tight", "Did not open" — or null when the
- * question has not been answered.
- */
-export function valveAnswerTerm(
-	entry: WizardQuestion,
-	answer: unknown,
-): string | null {
-	if (answer === true) return entry.answers.yes;
-	if (answer === false) return entry.answers.no;
-
-	return null;
-}
-
-/**
  * The `yes` answer with its reading, as one phrase: "Opened at 2.0 PSID",
  * "Tight — 2.0 PSID", "Tight — Check held at 2.0 PSID". `reading` is the
- * already-formatted number; without one the plain term is returned.
+ * already-formatted number. A part that takes no reading gets the plain term;
+ * one whose reading is missing says so, rather than leaving "Opened at"
+ * hanging with nothing after it.
  */
 export function valveYesWithReading(
 	entry: WizardQuestion,
 	reading: string | null,
 ): string {
-	if (!reading) return entry.answers.yes;
+	const { yes, readingInline } = entry.answers;
+
+	if (!entry.valueKey) return yes;
+	if (!reading) return `${yes} — no reading`;
 
 	const value = `${reading} ${PRESSURE_DIFFERENCE_UNIT}`;
 
-	// A term that already ends in "at" leads straight into the number.
-	if (/ at$/.test(entry.answers.yes)) return `${entry.answers.yes} ${value}`;
+	if (readingInline) return `${yes} ${value}`;
 
-	return `${entry.answers.yes} — ${entry.readingLabel ? `${entry.readingLabel} ` : ""}${value}`;
+	return `${yes} — ${entry.readingLabel ? `${entry.readingLabel} ` : ""}${value}`;
 }
 
 function checkValve(
@@ -355,7 +354,7 @@ function checkValve(
 		...(valueKey
 			? {
 					valueKey,
-					valueLabel: readingLabel ?? `${label} reading`,
+					valueLabel: `${label} reading`,
 					readingLabel,
 				}
 			: {}),

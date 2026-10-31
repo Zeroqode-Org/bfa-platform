@@ -143,7 +143,8 @@ export const pdfStyles = StyleSheet.create({
 	tileText: {
 		fontSize: 10,
 		fontFamily: "Helvetica-Bold",
-		color: COLORS.border,
+		// Faded beside the chosen tile, but still legible once printed.
+		color: COLORS.muted,
 	},
 	tileTextPass: { fontSize: 14, color: COLORS.success },
 	tileTextFail: { fontSize: 14, color: COLORS.danger },

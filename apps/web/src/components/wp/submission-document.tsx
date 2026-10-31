@@ -8,6 +8,7 @@ import {
 import {
 	formatPsid,
 	orderedWizardAnswers,
+	valveAnswerLabels,
 	type WizardAnswerField,
 } from "@bfa-platform/api/lib/wizard-answer-layout";
 import {
@@ -20,7 +21,6 @@ import {
 	LINE_PRESSURE_KEY,
 	OWNER_ABSENT_DISCLAIMER,
 	SIGN_OFF_DISCLAIMER_KEY,
-	valveYesWithReading,
 	WATER_METER_END_KEY,
 	WATER_METER_START_KEY,
 	WIZARD_TEST_SPEC,
@@ -423,6 +423,12 @@ export function SubmissionDocument({
 		// takes no reading. A reading stored before the answer changed is kept,
 		// not erased — switching back to Yes shows it again, as in the wizard.
 		const showsReading = Boolean(question.valueKey) && answer?.value === true;
+		const printed = valveAnswerLabels(question, {
+			[question.key]: answer?.value ?? null,
+			...(question.valueKey
+				? { [question.valueKey]: reading?.value ?? null }
+				: {}),
+		});
 
 		return (
 			<div
@@ -466,14 +472,9 @@ export function SubmissionDocument({
 						// prints it: "Opened at 2.0 PSID", "Tight — 2.0 PSID".
 						<span className="font-semibold text-[14px]">
 							{answer?.value === true
-								? valveYesWithReading(
-										question,
-										showsReading
-											? formatPsid(reading?.value ?? null) || null
-											: null,
-									)
+								? printed.yes
 								: answer?.value === false
-									? terms.no
+									? printed.no
 									: "—"}
 						</span>
 					)}

@@ -131,6 +131,11 @@ first term), so no saved test changes.
 | Air Inlet (full opening) | Fully opened | Did not fully open | — |
 | Check Valve (PVB, SVB) | Tight | Leak | "Tight — Check held at 2.0 PSID" |
 
+A first answer whose reading is missing (a WP edit that cleared it) prints as
+"Opened at — no reading", never a bare "Opened at". The reading's own field is
+named the same in the wizard and on the WP's screen: "Check Valve 1 reading",
+"Differential Relief Valve opened at".
+
 The water meter pair reads **Water meter start reading** / **Water meter stop
 reading**. The chosen box on the PDF carries a drawn check mark rather than a
 filled square, as the sheet asks.
@@ -142,7 +147,8 @@ the "input same" note above covers the fields, not their order.
 
 Source of truth: `WIZARD_TEST_SPEC` in `packages/api/src/lib/wizard-input.ts`
 (`answers`, `valueLabel`, `readingLabel` per question, and
-`valveYesWithReading` for the combined phrase).
+`valveYesWithReading` for the combined phrase; `valveAnswerLabels` in
+`wizard-answer-layout.ts` is what the PDF and both documents print).
 
 ## What this confirms
 

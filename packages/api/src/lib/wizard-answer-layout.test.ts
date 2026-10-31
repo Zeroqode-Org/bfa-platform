@@ -49,22 +49,22 @@ describe("wizardAnswerFields", () => {
 
 		expect(labels).toMatchObject({
 			checkValve1ShutTight: "Check Valve 1",
-			checkValve1Value: "Check Valve 1 PSID",
-			checkValve2Value: "Check Valve 2 PSID",
+			checkValve1Value: "Check Valve 1 reading",
+			checkValve2Value: "Check Valve 2 reading",
 		});
 	});
 
-	it("names the main line on a two-line assembly, and the relief reading PSID", () => {
+	it("names the main line on a two-line assembly, and the relief reading as asked", () => {
 		const labels = Object.fromEntries(
 			wizardAnswerFields("RPDA").map((field) => [field.key, field.label]),
 		);
 
 		expect(labels["main.checkValve1ShutTight"]).toBe("Main Check Valve 1");
 		expect(labels["main.reliefValveValue"]).toBe(
-			"Main Differential Relief Valve PSID",
+			"Main Differential Relief Valve opened at",
 		);
 		expect(labels["bypass.reliefValveValue"]).toBe(
-			"Bypass Differential Relief Valve PSID",
+			"Bypass Differential Relief Valve opened at",
 		);
 	});
 
