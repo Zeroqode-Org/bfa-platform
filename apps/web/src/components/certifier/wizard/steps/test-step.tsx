@@ -6,13 +6,15 @@ import {
 	LINE_PRESSURE_UNIT,
 	PRESSURE_DIFFERENCE_UNIT,
 	WATER_METER_END_KEY,
+	WATER_METER_END_LABEL,
 	WATER_METER_START_KEY,
+	WATER_METER_START_LABEL,
 	WIZARD_TEST_SPEC,
 	type WizardQuestion,
 } from "@bfa-platform/api/lib/wizard-input";
 import { Card, CardContent } from "@bfa-platform/ui/components/card";
 import { Input } from "@bfa-platform/ui/components/input";
-import { YesNoButtons } from "../test-blocks/choice-buttons";
+import { TermButtons } from "../test-blocks/choice-buttons";
 import { IsolatesPropertyField } from "../test-blocks/isolates-property-field";
 import { UnitInput } from "../test-blocks/unit-input";
 import { WizardField } from "../wizard-field";
@@ -91,7 +93,7 @@ export function TestStep({
 
 						{spec.hasMeter ? (
 							<WizardField
-								label="Water meter start"
+								label={WATER_METER_START_LABEL}
 								required
 								fieldKey={WATER_METER_START_KEY}
 							>
@@ -136,7 +138,7 @@ export function TestStep({
 					<>
 						{spec.hasMeter ? (
 							<WizardField
-								label="Water meter end"
+								label={WATER_METER_END_LABEL}
 								required
 								fieldKey={WATER_METER_END_KEY}
 							>
@@ -168,8 +170,9 @@ export function TestStep({
 }
 
 /**
- * One Yes/No question. Answering Yes adds its value input beside it — the two
- * share the row — because the sheet's "If Yes → Value" only exists then.
+ * One valve, answered in the client's terms ("Tight" / "Leak"). Choosing the
+ * first adds its reading input beside it — the two share the row — because
+ * the sheet's "If Yes → Value" only exists then.
  */
 function Question({
 	entry,
@@ -195,8 +198,9 @@ function Question({
 				flagged={overridden.has(key)}
 			>
 				{() => (
-					<YesNoButtons
+					<TermButtons
 						label={label}
+						terms={entry.answers}
 						value={values[key] as boolean | null}
 						onValueChange={(value) => onAnswer(key, value)}
 					/>

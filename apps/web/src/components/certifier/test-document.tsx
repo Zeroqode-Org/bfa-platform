@@ -9,8 +9,11 @@ import {
 	LINE_PRESSURE_UNIT,
 	OWNER_ABSENT_DISCLAIMER,
 	PRESSURE_DIFFERENCE_UNIT,
+	valveYesWithReading,
 	WATER_METER_END_KEY,
+	WATER_METER_END_LABEL,
 	WATER_METER_START_KEY,
+	WATER_METER_START_LABEL,
 	WIZARD_TEST_SPEC,
 	type WizardQuestion,
 } from "@bfa-platform/api/lib/wizard-input";
@@ -151,11 +154,11 @@ export function TestDocument({
 				{spec.hasMeter ? (
 					<Cells cols={2}>
 						<Cell
-							label="Water meter start"
+							label={WATER_METER_START_LABEL}
 							value={show(data[WATER_METER_START_KEY])}
 						/>
 						<Cell
-							label="Water meter end"
+							label={WATER_METER_END_LABEL}
 							value={show(data[WATER_METER_END_KEY])}
 						/>
 					</Cells>
@@ -384,7 +387,11 @@ function Check({ checked, label }: { checked: boolean; label: string }) {
 	);
 }
 
-/** One valve question: its label on the left, the answer as ticked boxes (and the reading, if asked) on the right. */
+/**
+ * One valve: the part on the left, its two answers in the client's terms on
+ * the right as ticked boxes, the reading riding on the chosen one — "Opened at
+ * 2.0 PSID", "Tight — 2.0 PSID" — as the PDF prints it.
+ */
 function AnswerRow({
 	entry,
 	data,
@@ -393,24 +400,24 @@ function AnswerRow({
 	data: Record<string, string | number | boolean | null>;
 }) {
 	const answer = data[entry.key];
+	const reading =
+		entry.valueKey && answer === true
+			? formatPsid(data[entry.valueKey]) || null
+			: null;
 
 	return (
 		<div className="grid grid-cols-1 items-center gap-1 border-border border-r border-b px-2.5 py-2 sm:grid-cols-[1fr_auto] sm:gap-4">
 			<span className="font-semibold text-[13px]">{entry.label}</span>
 			<span className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
-				<Check checked={answer === true} label="Yes" />
-				<Check checked={answer === false} label="No" />
-				{entry.valueKey && answer === true ? (
-					<span className="text-muted-foreground">
-						Reading:{" "}
-						<span className="font-semibold text-foreground">
-							{withUnit(
-								formatPsid(data[entry.valueKey]),
-								PRESSURE_DIFFERENCE_UNIT,
-							)}
-						</span>
-					</span>
-				) : null}
+				<Check
+					checked={answer === true}
+					label={
+						answer === true
+							? valveYesWithReading(entry, reading)
+							: entry.answers.yes
+					}
+				/>
+				<Check checked={answer === false} label={entry.answers.no} />
 			</span>
 		</div>
 	);

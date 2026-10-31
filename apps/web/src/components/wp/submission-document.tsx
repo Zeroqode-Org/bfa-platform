@@ -20,6 +20,7 @@ import {
 	LINE_PRESSURE_KEY,
 	OWNER_ABSENT_DISCLAIMER,
 	SIGN_OFF_DISCLAIMER_KEY,
+	valveYesWithReading,
 	WATER_METER_END_KEY,
 	WATER_METER_START_KEY,
 	WIZARD_TEST_SPEC,
@@ -327,6 +328,9 @@ export function SubmissionDocument({
 	/** One answer as a labelled field — input, Yes/No select or coded choice. */
 	function answerField(answer: Answer, className?: string) {
 		const { key, value, label, kind } = answer;
+		// A valve answer reads in the client's terms ("Tight" / "Leak"); any
+		// other boolean stays Yes / No.
+		const terms = answer.answers ?? { yes: "Yes", no: "No" };
 
 		const choices = wizardChoiceOptions(key);
 		const isSelect = typeof value === "boolean" || choices !== null;
@@ -347,8 +351,8 @@ export function SubmissionDocument({
 				readOnlyValue={
 					typeof value === "boolean"
 						? value
-							? "Yes"
-							: "No"
+							? terms.yes
+							: terms.no
 						: kind === "psid"
 							? formatPsid(value) || "—"
 							: wizardChoiceLabel(key, value) ||
@@ -366,7 +370,7 @@ export function SubmissionDocument({
 						/>
 					) : typeof value === "boolean" ? (
 						<Select
-							items={{ yes: "Yes", no: "No" }}
+							items={{ yes: terms.yes, no: terms.no }}
 							value={value ? "yes" : "no"}
 							onValueChange={(next) => setAnswer(key, next === "yes")}
 						>
@@ -375,8 +379,8 @@ export function SubmissionDocument({
 							</SelectTrigger>
 							<SelectContent>
 								<SelectGroup>
-									<SelectItem value="yes">Yes</SelectItem>
-									<SelectItem value="no">No</SelectItem>
+									<SelectItem value="yes">{terms.yes}</SelectItem>
+									<SelectItem value="no">{terms.no}</SelectItem>
 								</SelectGroup>
 							</SelectContent>
 						</Select>
@@ -406,12 +410,12 @@ export function SubmissionDocument({
 	}
 
 	/**
-	 * One valve question as a row of the test table: its wording, the Yes/No
-	 * answer and — where the question takes one and the answer is Yes — the
-	 * PSID reading beside it, as the PDF draws it.
+	 * One valve as a row of the test table: the part, its answer in the
+	 * client's terms ("Tight" / "Leak") and — where the part takes one and the
+	 * first answer was chosen — the PSID reading, as the PDF prints it.
 	 */
 	function valveRow({ question, answer, reading }: ValveRowData) {
-		const label = question.label.replace(/\?$/, "").replace(/#/g, "").trim();
+		const { label, answers: terms } = question;
 		const flagged =
 			overridden.has(question.key) ||
 			Boolean(question.valueKey && overridden.has(question.valueKey));
@@ -437,7 +441,7 @@ export function SubmissionDocument({
 				<span className="flex flex-wrap items-center gap-3">
 					{canEdit ? (
 						<Select
-							items={{ yes: "Yes", no: "No" }}
+							items={{ yes: terms.yes, no: terms.no }}
 							value={
 								answer?.value === true
 									? "yes"
@@ -447,66 +451,64 @@ export function SubmissionDocument({
 							}
 							onValueChange={(next) => setAnswer(question.key, next === "yes")}
 						>
-							<SelectTrigger aria-label={label} className="w-24">
+							<SelectTrigger aria-label={label} className="w-40">
 								<SelectValue placeholder={SELECT_PLACEHOLDER} />
 							</SelectTrigger>
 							<SelectContent>
 								<SelectGroup>
-									<SelectItem value="yes">Yes</SelectItem>
-									<SelectItem value="no">No</SelectItem>
+									<SelectItem value="yes">{terms.yes}</SelectItem>
+									<SelectItem value="no">{terms.no}</SelectItem>
 								</SelectGroup>
 							</SelectContent>
 						</Select>
 					) : (
-						<span className="text-[13px]">
+						// The reading rides on the answer as one phrase, as the PDF
+						// prints it: "Opened at 2.0 PSID", "Tight — 2.0 PSID".
+						<span className="font-semibold text-[14px]">
 							{answer?.value === true
-								? "Yes"
+								? valveYesWithReading(
+										question,
+										showsReading
+											? formatPsid(reading?.value ?? null) || null
+											: null,
+									)
 								: answer?.value === false
-									? "No"
+									? terms.no
 									: "—"}
 						</span>
 					)}
-					{showsReading && question.valueKey ? (
-						canEdit ? (
-							<span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-								<Input
-									{...validation.controlProps(`answer:${question.valueKey}`)}
-									aria-label={`${label} reading`}
-									className="w-24"
-									inputMode="decimal"
-									value={
-										focusedAnswer !== question.valueKey
-											? formatPsid(reading?.value ?? null)
-											: wizardValueText(reading?.value ?? null)
-									}
-									onFocus={() => setFocusedAnswer(question.valueKey ?? null)}
-									onBlur={() => {
-										setFocusedAnswer(null);
-										validation
-											.controlProps(`answer:${question.valueKey}`)
-											.onBlur();
-									}}
-									onChange={(event) =>
-										question.valueKey &&
-										setAnswer(
-											question.valueKey,
-											parseWizardValue(
-												reading?.value ?? null,
-												event.target.value,
-											),
-										)
-									}
-								/>
-								PSID
-							</span>
-						) : (
-							<span className="text-[13px] text-muted-foreground">
-								Reading:{" "}
-								<span className="font-semibold text-foreground">
-									{formatPsid(reading?.value ?? null) || "—"} PSID
-								</span>
-							</span>
-						)
+					{showsReading && question.valueKey && canEdit ? (
+						<span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+							<Input
+								{...validation.controlProps(`answer:${question.valueKey}`)}
+								aria-label={`${label} reading`}
+								className="w-24"
+								inputMode="decimal"
+								value={
+									focusedAnswer !== question.valueKey
+										? formatPsid(reading?.value ?? null)
+										: wizardValueText(reading?.value ?? null)
+								}
+								onFocus={() => setFocusedAnswer(question.valueKey ?? null)}
+								onBlur={() => {
+									setFocusedAnswer(null);
+									validation
+										.controlProps(`answer:${question.valueKey}`)
+										.onBlur();
+								}}
+								onChange={(event) =>
+									question.valueKey &&
+									setAnswer(
+										question.valueKey,
+										parseWizardValue(
+											reading?.value ?? null,
+											event.target.value,
+										),
+									)
+								}
+							/>
+							PSID
+						</span>
 					) : null}
 				</span>
 			</div>

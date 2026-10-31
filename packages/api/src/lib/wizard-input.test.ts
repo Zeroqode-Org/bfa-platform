@@ -24,8 +24,11 @@ import {
 	recordOverride,
 	saveDraftStepInput,
 	submitTestInput,
+	valveAnswerTerm,
+	valveYesWithReading,
 	WATER_METER_START_KEY,
 	WIZARD_TEST_SPEC,
+	type WizardQuestion,
 	wizardQuestionsFor,
 	wizardRequiredFieldsFor,
 } from "./wizard-input";
@@ -111,13 +114,55 @@ describe("WIZARD_TEST_SPEC — the client's sheet, type by type", () => {
 		).toEqual(["RPDA", "RPDA-2", "DCDA", "DCDA-2"]);
 	});
 
-	it("asks PVB and SVB three questions: air inlet opened, fully opened, check valve", () => {
+	it("asks a PVB its air inlet first: opened, fully opened, then the check valve", () => {
 		expect(wizardQuestionsFor("PVB").map((q) => q.key)).toEqual([
 			"airInletValveOpened",
 			"airInletValveFullyOpened",
 			"checkValveShutTight",
 		]);
-		expect(WIZARD_TEST_SPEC.SVB).toBe(WIZARD_TEST_SPEC.PVB);
+	});
+
+	it("asks an SVB its check valve first, then the air inlet — the sheet's own order", () => {
+		expect(wizardQuestionsFor("SVB").map((q) => q.key)).toEqual([
+			"checkValveShutTight",
+			"airInletValveOpened",
+			"airInletValveFullyOpened",
+		]);
+	});
+
+	it("words every valve answer in the client's terms", () => {
+		const byKey = (type: keyof typeof WIZARD_TEST_SPEC) =>
+			Object.fromEntries(
+				wizardQuestionsFor(type).map((q) => [q.key, [q.label, q.answers]]),
+			);
+
+		expect(byKey("RP")).toMatchObject({
+			reliefValveOpened: [
+				"Differential Relief Valve",
+				{ yes: "Opened at", no: "Did not open" },
+			],
+			checkValve2ShutTight: ["Check Valve 2", { yes: "Tight", no: "Leak" }],
+		});
+		expect(byKey("RPDA")["bypass.reliefValveOpened"]?.[0]).toBe(
+			"Bypass Differential Relief Valve",
+		);
+		expect(byKey("DCDA")["bypass.checkValve1ShutTight"]?.[0]).toBe(
+			"Bypass Check Valve 1",
+		);
+		expect(byKey("DCDA-2")["bypass.checkValve1ShutTight"]?.[0]).toBe(
+			"Bypass Check Valve",
+		);
+		expect(byKey("PVB")).toMatchObject({
+			airInletValveOpened: [
+				"Air Inlet",
+				{ yes: "Opened at", no: "Did not open" },
+			],
+			airInletValveFullyOpened: [
+				"Air Inlet (full opening)",
+				{ yes: "Fully opened", no: "Did not fully open" },
+			],
+			checkValveShutTight: ["Check Valve", { yes: "Tight", no: "Leak" }],
+		});
 	});
 
 	it("asks one Initial Test and the isolates question for every type", () => {
@@ -600,5 +645,34 @@ describe("photo paths and wizard-data cleaning", () => {
 		});
 
 		expect(carried).toEqual({ initialTestResult: "pass" });
+	});
+});
+
+describe("valve answer wording", () => {
+	const [relief, , checkValve1] = wizardQuestionsFor("RP");
+	const pvbCheck = wizardQuestionsFor("PVB")[2];
+
+	it("names a stored answer by its term, and nothing when unanswered", () => {
+		expect(valveAnswerTerm(checkValve1 as WizardQuestion, true)).toBe("Tight");
+		expect(valveAnswerTerm(checkValve1 as WizardQuestion, false)).toBe("Leak");
+		expect(valveAnswerTerm(checkValve1 as WizardQuestion, null)).toBeNull();
+	});
+
+	it("reads a reading into the answer as one phrase", () => {
+		expect(valveYesWithReading(relief as WizardQuestion, "2.0")).toBe(
+			"Opened at 2.0 PSID",
+		);
+		expect(valveYesWithReading(checkValve1 as WizardQuestion, "4.5")).toBe(
+			"Tight — 4.5 PSID",
+		);
+		expect(valveYesWithReading(pvbCheck as WizardQuestion, "1.2")).toBe(
+			"Tight — Check held at 1.2 PSID",
+		);
+	});
+
+	it("falls back to the bare term without a reading", () => {
+		expect(valveYesWithReading(relief as WizardQuestion, null)).toBe(
+			"Opened at",
+		);
 	});
 });

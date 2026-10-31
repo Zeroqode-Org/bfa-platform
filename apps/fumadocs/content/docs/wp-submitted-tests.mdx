@@ -131,13 +131,16 @@ an uppercase heading: Assembly information, Customer information, Initial
 test, Property isolation and result, Comment, Photos, and the sign-off
 disclaimer under Sign-off. Initial test has the reading fields first (Line
 Pressure beside ADP, the water meter pair together), then a table per test
-section (Main/Bypass) with one row per valve question: its wording, a Yes/No
-dropdown, and the PSID input beside it when the question takes a reading and
-the answer is Yes. A stored answer this type's form does not ask goes under
-"Other answers" rather than disappearing, labelled by `humanizeFieldName`
-(every word capitalised). Valve rows carry the spec's wording without the "#"
-and the "?" ("Check Valve 1 Shut Tight"); the section heading says whether it
-is the main or the bypass line.
+section (Main/Bypass) with one row per valve: the part it tests ("Check
+Valve 1"), its answer in the client's terms — read-only as one phrase with the
+reading ("Opened at 2.0 PSID", "Tight — 2.0 PSID"), editable as a dropdown of
+the two terms ("Tight" / "Leak") with the PSID input beside it when the part
+takes a reading and the first term is chosen. See
+[Answer terminology](/docs/wizard-field-reference#answer-terminology-client-october-2026).
+A stored answer this type's form does not ask goes under "Other answers"
+rather than disappearing, labelled by `humanizeFieldName` (every word
+capitalised). The section heading says whether a row is the main or the
+bypass line.
 
 - **PSID readings always show one decimal place** ("2" reads "2.0"), on this
   screen, the certifier's list, the wizard's review and the PDF. This is display
