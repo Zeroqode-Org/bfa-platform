@@ -32,12 +32,22 @@ import type { Customer } from "./customer-types";
 const listFn = vi.fn();
 const updateFn = vi.fn();
 const createFn = vi.fn();
+const delinkFn = vi.fn();
 
 vi.mock("@/utils/trpc", () => ({
 	trpc: {
 		// Attaching a BIN moves an asset's customer, so a save refreshes the
 		// assets screens' cache as well.
-		assets: { pathKey: () => ["assets"] },
+		assets: {
+			pathKey: () => ["assets"],
+			delinkCustomer: {
+				mutationOptions: (options: Record<string, unknown>) => ({
+					...options,
+					mutationKey: ["assets", "delinkCustomer"],
+					mutationFn: (input: unknown) => delinkFn(input),
+				}),
+			},
+		},
 		customers: {
 			listCustomers: {
 				queryOptions: () => ({
@@ -80,7 +90,8 @@ const active: Customer = {
 	agRenewalDate: null,
 	status: "active",
 	revision: 4,
-	bins: ["1201", "1202"],
+	bins: ["1201"],
+	assets: [{ id: "0c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5", bin: "1201" }],
 	createdAt: "2026-09-01T00:00:00.000Z",
 	updatedAt: "2026-09-01T00:00:00.000Z",
 };
@@ -97,6 +108,20 @@ const suspendedAgricultural: Customer = {
 	status: "suspended",
 	revision: 7,
 	bins: [],
+	assets: [],
+};
+
+/** A customer holding two assets — two lines in the table. */
+const multiBin: Customer = {
+	...active,
+	id: "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+	name: "Harbor View Apartments",
+	email: "office@harborview.example",
+	bins: ["1201", "1305"],
+	assets: [
+		{ id: "0c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5", bin: "1201" },
+		{ id: "7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a", bin: "1305" },
+	],
 };
 
 /** Types the add form's required text fields. */
@@ -154,6 +179,7 @@ beforeEach(() => {
 	listFn.mockReset();
 	updateFn.mockReset();
 	createFn.mockReset();
+	delinkFn.mockReset();
 	listFn.mockResolvedValue([active, suspendedAgricultural]);
 	updateFn.mockImplementation((input: Customer) => Promise.resolve(input));
 });
@@ -459,13 +485,82 @@ describe("CustomersTable", () => {
 		expect(toast.error).not.toHaveBeenCalled();
 	});
 
-	it("lists each customer's BINs, and flags one who holds none", async () => {
+	it("gives each BIN a customer holds its own line, and flags one who holds none", async () => {
+		listFn.mockResolvedValue([multiBin, suspendedAgricultural]);
 		renderTable();
 
-		expect(await screen.findByText("1201, 1202")).toBeTruthy();
+		// One line per BIN, not "1201, 1305" clumped into one cell — the client
+		// manages, and de-links, each asset on its own.
+		expect(await screen.findByText("1201")).toBeTruthy();
+		expect(screen.getByText("1305")).toBeTruthy();
+		expect(screen.getAllByText(multiBin.name)).toHaveLength(2);
 		// The suspended agricultural customer is attached to nothing — a record
-		// no notice can reach, so it says so rather than showing a dash.
+		// no notice can reach, so it still gets a line and says so.
+		expect(screen.getByText(suspendedAgricultural.name)).toBeTruthy();
 		expect(screen.getByText("No BIN")).toBeTruthy();
+		expect(screen.getByText("2 customers · 2 assets")).toBeTruthy();
+		// De-link is per asset, so a customer holding nothing has none to offer.
+		expect(screen.getAllByRole("button", { name: /^De-link/ })).toHaveLength(2);
+	});
+
+	it("asks before de-linking, and sends only that asset with its customer", async () => {
+		listFn.mockResolvedValue([multiBin]);
+		delinkFn.mockResolvedValue({});
+		renderTable();
+
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: `De-link 1305 from ${multiBin.name}`,
+			}),
+		);
+
+		const dialog = await screen.findByRole("dialog");
+		expect(dialog.textContent).toContain(`De-link 1305 from ${multiBin.name}?`);
+		expect(dialog.textContent).toContain("stops receiving automated email");
+		// A question, not a write.
+		expect(delinkFn).not.toHaveBeenCalled();
+
+		fireEvent.click(screen.getByRole("button", { name: "De-link asset" }));
+
+		await waitFor(() => expect(delinkFn).toHaveBeenCalledTimes(1));
+		// The customer travels with the asset, so a stale line cannot end
+		// whoever holds the BIN now.
+		expect(delinkFn).toHaveBeenCalledWith({
+			assetId: multiBin.assets[1]?.id,
+			customerId: multiBin.id,
+		});
+		// The list is refetched, so the BIN's line disappears from this customer.
+		await waitFor(() => expect(listFn).toHaveBeenCalledTimes(2));
+	});
+
+	it("reports a refused de-link and refreshes the list", async () => {
+		const { toast } = await import("sonner");
+		vi.mocked(toast.error).mockClear();
+		delinkFn.mockRejectedValue(
+			Object.assign(
+				new Error("This BIN is no longer attached to that customer."),
+				{
+					data: { code: "CONFLICT" },
+				},
+			),
+		);
+		renderTable();
+
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: `De-link 1201 from ${active.name}`,
+			}),
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "De-link asset" }),
+		);
+
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(
+				"This BIN is no longer attached to that customer.",
+			),
+		);
+		await waitFor(() => expect(listFn).toHaveBeenCalledTimes(2));
 	});
 
 	it("shows the BINs an edited customer already holds", async () => {

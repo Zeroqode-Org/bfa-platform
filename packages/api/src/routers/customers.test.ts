@@ -72,6 +72,7 @@ type CustomerRow = {
 	status: "active" | "suspended";
 	revision: number;
 	bins: string[];
+	assets: { id: string; bin: string | null }[];
 	createdAt: Date;
 	updatedAt: Date;
 };
@@ -1004,6 +1005,9 @@ describeDb("customers procedures", () => {
 				await rawCallerFor(ids.adminA).customers.listCustomers()
 			).find((row) => row.id === created.id);
 			expect(listed?.bins).toEqual([bin]);
+			// The same asset with its id — what the screen lists one line per,
+			// and what its De-link sends.
+			expect(listed?.assets).toEqual([{ id: expect.any(String), bin }]);
 		});
 
 		it("asks before taking a BIN from another customer, and moves it once confirmed", async () => {

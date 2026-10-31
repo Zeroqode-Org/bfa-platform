@@ -29,10 +29,10 @@ the [build plan](/docs/build-plan) and PRD § 6.6.4.
 The record attaches to the *customer*, not to an asset. Which assets a customer
 currently holds lives in `customer_assignments`, with `bfa_assets.current_customer_id`
 as the live pointer — occupants change over time, and that history is not this
-screen's to rewrite. The one thing this screen does to it is **attach**: the BIN
-field opens a new occupancy exactly as the asset page's *Attach customer* does.
-It never closes one on its own or detaches an asset; that stays on the asset's
-page, next to the history.
+screen's to rewrite. This screen does two things to it: **attach** — the BIN
+field opens a new occupancy exactly as the asset page's *Attach customer* does —
+and **de-link**, which closes one occupancy and leaves the asset unassigned. See
+[De-linking a BIN](#de-linking-a-bin).
 
 ### The BIN
 
@@ -49,8 +49,9 @@ customer holds at least one asset.**
   BINs*, read from `bfa_assets.current_customer_id` within the purveyor) and
   offers *Attach another BIN*, optional. A customer who holds none — a row saved
   before the rule — sees a required *BIN* field instead.
-- The table has a **BIN** column; a customer holding nothing shows a *No BIN*
-  warning badge rather than a dash.
+- The table lists **one line per BIN**: a customer holding three assets is
+  three lines, each with its own *De-link*. A customer holding nothing still
+  gets a line, with a *No BIN* warning badge rather than a dash.
 
 Saving a BIN runs `attachCustomerToAsset` (`packages/api/src/lib/customer-assignment.ts`),
 the same three writes `assets.assignCustomer` makes — close the open occupancy
@@ -76,6 +77,47 @@ states what suspension does as soon as it is chosen.
 The messages live in `packages/api/src/lib/customer-bin.ts`, import-free, so the
 form can route them without pulling the router into the bundle. Every attachment
 writes the same `bfa_asset_customer_assigned` audit line as the asset page.
+
+### De-linking a BIN
+
+The client's problem: with every BIN a customer held clumped onto one line,
+there was no way to say "this one assembly is not theirs any more", so a
+customer who left a site or sold an asset kept receiving its reminders. Each
+line therefore carries a **De-link** action for that one BIN.
+
+- It asks first — *De-link 1305 from Harbor View Apartments?* — and says what
+  happens: the customer stops receiving automated email about that asset,
+  including notices already scheduled, and the asset shows as *Unassigned*
+  until its new owner is attached. Their other assets are untouched.
+- Confirming calls `assets.delinkCustomer({ assetId, customerId })`. In one
+  transaction, under a row lock on the asset scoped to the caller's purveyor,
+  it closes the open `customer_assignments` row with today's `end_date` and
+  clears `bfa_assets.current_customer_id` (`detachCustomerFromAsset` in
+  `packages/api/src/lib/customer-assignment.ts`). No new occupancy is opened.
+  The history keeps the one that ended.
+- The customer travels with the request so a stale line cannot end somebody
+  else's link: if the BIN was reassigned or de-linked since the list loaded,
+  the call is refused with `CONFLICT`, the toast says so, and the list is
+  refetched. An asset in another purveyor is a `NOT_FOUND`.
+- Every de-link writes a `bfa_asset_customer_delinked` audit line carrying
+  `bin` and `from` (the former customer).
+
+**Why nothing is written to the scheduler.** Every notice resolves its recipient
+from the asset's `current_customer_id` when the job runs, not when it was
+queued (`resolveRecipient`). Once the pointer is cleared, a stage that is already
+scheduled finds no customer and **holds**, the same hold an asset that never had
+a customer sits in, rather than mailing the former occupant. Attaching the next
+occupant (here or on the asset page) resumes the waiting stage as usual. One
+narrow case is settled the existing way: a send *already attempted* before the
+de-link, waiting on a provider retry, replays the payload it froze. That is the
+same email, not a new one (see [Workflow 1](/docs/notice-workflow)).
+
+The AG renewal notice is about the customer's rate, not an asset, so de-linking
+a BIN does not touch it.
+
+A customer de-linked from their last asset is a record no notice can reach, so
+the line shows the *No BIN* badge and the edit form asks for a BIN again on the
+next save.
 
 ### Why the AG renewal date is conditional
 
@@ -208,6 +250,16 @@ already sent is replayed.
 | `createCustomer` | One new customer, filed under the caller's purveyor |
 | `updateCustomer` | Rewrites one record — every field is sent, so an omitted optional field is one being cleared |
 
+`listCustomers` returns, with each customer, `bins` (the held BINs, as the edit
+form lists them) and `assets` (the same assets as `{ id, bin }`, with `bin` null
+for a no-BIN asset). The table builds its one line per asset from `assets`. The
+customer list stays one row per customer on the wire because the asset page's
+customer picker reads the same procedure.
+
+De-linking is `assets.delinkCustomer` in `packages/api/src/routers/assets.ts`,
+next to `assignCustomer`, because it is a change to the asset's occupancy rather
+than to the customer record.
+
 Status changes go through `updateCustomer` rather than a fourth procedure: the
 form and the suspend button are the same write, and one write means one place
 where the agricultural rule is checked.
@@ -316,9 +368,12 @@ it is the field whose effect leaves this table.
 
 ## The screen
 
-`/wp/customers`, in the standard WP shell. The table shows name, BIN(s), account number,
-email, rate category, status, and per-row **Edit** and **Suspend** /
-**Reactivate** actions. Create and edit are the same dialog form — the only
+`/wp/customers`, in the standard WP shell. The table has one line per
+(customer, BIN) and shows name, BIN, account number, email, rate category,
+status, and per-line **Edit**, **Suspend** / **Reactivate** and **De-link**
+actions. Edit and Suspend act on the customer, so they do the same thing on
+every line of that customer. De-link acts on that line's BIN only. The count
+above the table reads *N customers · M assets*. Create and edit are the same dialog form — the only
 differences are the starting values and the button label.
 
 Design notes, from the [design system](/docs/design-system): agricultural uses
@@ -336,8 +391,9 @@ The screen also introduced `Select` to `packages/ui` — the popup twin of
 |---|---|---|
 | `packages/api/src/lib/customer-input.test.ts` | `npm test` | The validation rules on their own — no database |
 | `apps/web/src/components/wp/customer-form.test.tsx` | `npm test` | What the form sends; the conditional AG date; the suspension warning |
-| `apps/web/src/components/wp/customers-table.test.tsx` | `npm test` | The suspend confirmation and reactivate paths; empty and error states |
+| `apps/web/src/components/wp/customers-table.test.tsx` | `npm test` | One line per BIN; the de-link confirmation and its refusal; the suspend confirmation and reactivate paths; empty and error states |
 | `packages/api/src/routers/customers.test.ts` | `npm run test:db` | Who may call the procedures, and a cross-WP update attempt |
+| `packages/api/src/routers/assets.test.ts` (`delinkCustomer`) | `npm run test:db` | De-link closes the occupancy and clears the pointer; a stale or cross-WP request is refused and inert; notices no longer resolve to the former customer |
 | `packages/db/src/customers-rls.test.ts` | `npm run test:db` | The row policies, as the `authenticated` role |
 
 The two database suites seed two purveyors with deliberately interchangeable

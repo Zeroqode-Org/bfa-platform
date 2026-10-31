@@ -13,6 +13,7 @@ import {
 	assetIdInput,
 	assignCustomerInput,
 	createAssetInput,
+	delinkCustomerInput,
 	listAssetsInput,
 	updateAssetInput,
 } from "../lib/asset-input";
@@ -27,7 +28,10 @@ import {
 	auditActor,
 	auditActorFields,
 } from "../lib/audit-actor";
-import { attachCustomerToAsset } from "../lib/customer-assignment";
+import {
+	attachCustomerToAsset,
+	detachCustomerFromAsset,
+} from "../lib/customer-assignment";
 import { CUSTOMER_EMAIL_KEY, CUSTOMER_NAME_KEY } from "../lib/wizard-input";
 import { reconcileAssetNoticeChain } from "../scheduler/notice-chain";
 import { activateAssetWithBin } from "../scheduler/submission-lifecycle";
@@ -487,7 +491,84 @@ export const assetsRouter = router({
 
 			return readAssetDetail(waterPurveyorId, asset.id);
 		}),
+
+	/**
+	 * Ends one customer's link to one asset, leaving the asset unassigned —
+	 * what the Customers screen's De-link does when a BIN changes hands.
+	 *
+	 * The asset is read and locked inside the transaction, scoped to the
+	 * caller's purveyor, so an asset from another WP is a not-found and two
+	 * clerks de-linking or reassigning the same BIN serialise. The customer in
+	 * the request has to be the one still attached: a list rendered before the
+	 * BIN moved to somebody else is refused rather than allowed to end the new
+	 * occupant's link.
+	 *
+	 * From the moment this commits, the asset's automated notices stop going
+	 * to this customer — see `detachCustomerFromAsset` for why that needs no
+	 * write to the scheduler.
+	 */
+	delinkCustomer: wpProcedure
+		.input(delinkCustomerInput)
+		.mutation(async ({ ctx, input }) => {
+			const waterPurveyorId = ctx.caller.waterPurveyorId;
+
+			const asset = await db.transaction(async (tx) => {
+				const [locked] = await tx
+					.select({
+						id: bfaAssets.id,
+						bin: bfaAssets.bin,
+						currentCustomerId: bfaAssets.currentCustomerId,
+					})
+					.from(bfaAssets)
+					.where(
+						and(
+							eq(bfaAssets.id, input.assetId),
+							eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+						),
+					)
+					.limit(1)
+					.for("update");
+
+				if (!locked) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Asset not found",
+					});
+				}
+
+				if (locked.currentCustomerId !== input.customerId) {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message: ASSET_DELINK_STALE_MESSAGE,
+					});
+				}
+
+				await detachCustomerFromAsset({
+					executor: tx,
+					assetId: locked.id,
+					waterPurveyorId,
+				});
+
+				return locked;
+			});
+
+			logAssetEvent("bfa_asset_customer_delinked", {
+				actor: auditActor(ctx),
+				assetId: asset.id,
+				waterPurveyorId,
+				extra: { bin: asset.bin, from: input.customerId },
+			});
+
+			return readAssetDetail(waterPurveyorId, asset.id);
+		}),
 });
+
+/**
+ * Why a De-link was refused: the BIN is no longer this customer's — somebody
+ * de-linked or reassigned it since the list was loaded.
+ */
+const ASSET_DELINK_STALE_MESSAGE =
+	"This BIN is no longer attached to that customer. Refresh the list to see who holds it now.";
 
 /**
  * BIN or service address, case-insensitively, anywhere in the value.

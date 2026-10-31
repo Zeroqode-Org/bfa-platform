@@ -71,8 +71,24 @@ const heldBins = sql<string[]>`coalesce((
 	  and held.water_purveyor_id = "customers"."water_purveyor_id"
 ), '{}')`;
 
-/** What every procedure returns: the row plus the BINs attached to it. */
-const customerWithBinsSelection = { ...customerSelection, bins: heldBins };
+/**
+ * The same assets as `heldBins`, as `{ id, bin }` pairs in the same order —
+ * what the Customers screen lists one row per, and the id its De-link sends.
+ * `bin` stays null for a no-BIN asset; the screen decides how to say so.
+ */
+const heldAssets = sql<{ id: string; bin: string | null }[]>`coalesce((
+	select json_agg(json_build_object('id', held.id, 'bin', held.bin) order by held.bin nulls last, held.id)
+	from bfa_assets held
+	where held.current_customer_id = "customers"."id"
+	  and held.water_purveyor_id = "customers"."water_purveyor_id"
+), '[]'::json)`;
+
+/** What every procedure returns: the row plus the assets attached to it. */
+const customerWithBinsSelection = {
+	...customerSelection,
+	bins: heldBins,
+	assets: heldAssets,
+};
 
 /**
  * Customers are managed entirely by their water purveyor — they never sign in,

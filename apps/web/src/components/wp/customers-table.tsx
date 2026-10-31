@@ -29,8 +29,8 @@ import {
 	TableRow,
 } from "@bfa-platform/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PauseCircle, Plus, TriangleAlert, Users } from "lucide-react";
-import { useState } from "react";
+import { PauseCircle, Plus, TriangleAlert, Unlink, Users } from "lucide-react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { trpc } from "@/utils/trpc";
@@ -48,6 +48,37 @@ import { SUSPENSION_WARNING } from "./customer-types";
 
 /** Which record the form dialog is editing — or nothing, for a new one. */
 type FormTarget = { mode: "create" } | { mode: "edit"; customer: Customer };
+
+/** One asset a customer currently holds, as `listCustomers` returns it. */
+type HeldAsset = Customer["assets"][number];
+
+/**
+ * One line of the table: a customer and one asset they hold — or, for a
+ * customer holding nothing, the customer alone. The client asked for a line
+ * per BIN so each one can be managed — de-linked — on its own.
+ */
+type CustomerRow = { customer: Customer; asset: HeldAsset | null };
+
+/** The asset a De-link confirmation is about, and whose link it ends. */
+type DelinkTarget = { customer: Customer; asset: HeldAsset };
+
+/**
+ * A line per (customer, asset), keeping the server's order: customers A–Z,
+ * each one's assets by BIN. A customer holding nothing still gets a line, so
+ * the record stays reachable and its missing BIN stays visible.
+ */
+function customerRows(customers: Customer[]): CustomerRow[] {
+	return customers.flatMap<CustomerRow>((customer) =>
+		customer.assets.length > 0
+			? customer.assets.map((asset) => ({ customer, asset }))
+			: [{ customer, asset: null }],
+	);
+}
+
+/** How a held asset's BIN reads in a row, sentence or toast. */
+function binLabel(asset: HeldAsset) {
+	return asset.bin ?? "No BIN";
+}
 
 /**
  * What to say after a write lands. Shared by the form's save and the row's
@@ -85,6 +116,10 @@ export function CustomersTable() {
 	const [isFormOpen, setIsFormOpen] = useState(false);
 	const [suspendTarget, setSuspendTarget] = useState<Customer | null>(null);
 	const [isSuspendOpen, setIsSuspendOpen] = useState(false);
+	const [delinkTarget, setDelinkTarget] = useState<DelinkTarget | null>(null);
+	const [isDelinkOpen, setIsDelinkOpen] = useState(false);
+
+	const rows = useMemo(() => (data ? customerRows(data) : []), [data]);
 
 	async function invalidateList() {
 		await queryClient.invalidateQueries({
@@ -159,6 +194,38 @@ export function CustomersTable() {
 	);
 
 	/**
+	 * The row's De-link. Ends this customer's link to this one asset, so its
+	 * automated email stops going to them; the asset reads as Unassigned until
+	 * somebody else is attached.
+	 */
+	const delinkCustomer = useMutation(
+		trpc.assets.delinkCustomer.mutationOptions({
+			onSuccess: async () => {
+				if (delinkTarget) {
+					toast.success(
+						`${binLabel(delinkTarget.asset)} de-linked from ${delinkTarget.customer.name}`,
+					);
+				}
+				await invalidateList();
+				setIsDelinkOpen(false);
+			},
+			// A refusal here is usually the BIN having moved since the list was
+			// loaded, so the list is refetched to show who holds it now.
+			onError: async (mutationError) => {
+				toast.error(mutationError.message);
+				setIsDelinkOpen(false);
+				await invalidateList();
+			},
+		}),
+	);
+
+	function openDelink(customer: Customer, asset: HeldAsset) {
+		delinkCustomer.reset();
+		setDelinkTarget({ customer, asset });
+		setIsDelinkOpen(true);
+	}
+
+	/**
 	 * The full record with one status flipped — the update takes every field,
 	 * and the revision of the row this button was rendered from, so a list that
 	 * has gone stale cannot suspend a customer using an old snapshot of it.
@@ -190,9 +257,7 @@ export function CustomersTable() {
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-wrap items-center justify-between gap-3">
 				<p className="text-[13px] text-muted-foreground">
-					{isPending || isError
-						? " "
-						: `${data.length} ${data.length === 1 ? "customer" : "customers"}`}
+					{isPending || isError ? " " : listSummary(data, rows)}
 				</p>
 				<Button size="sm" onClick={openCreate}>
 					<Plus />
@@ -257,7 +322,7 @@ export function CustomersTable() {
 								</Empty>
 							</StateRow>
 						) : (
-							data.map((customer) => {
+							rows.map(({ customer, asset }) => {
 								const suspended = customer.status === "suspended";
 								// One mutation drives every row's status button, so scope its
 								// pending state to the row actually being changed. Saving an
@@ -267,7 +332,7 @@ export function CustomersTable() {
 									setStatus.variables?.id === customer.id;
 
 								return (
-									<TableRow key={customer.id}>
+									<TableRow key={`${customer.id}:${asset?.id ?? "none"}`}>
 										<TableCell className="font-semibold">
 											{customer.name}
 										</TableCell>
@@ -275,8 +340,12 @@ export function CustomersTable() {
 										    reach, so the gap is flagged rather than left as a
 										    dash that reads like an optional field. */}
 										<TableCell className="tabular-nums">
-											{customer.bins.length > 0 ? (
-												customer.bins.join(", ")
+											{asset ? (
+												asset.bin === null ? (
+													<span className="text-muted-foreground">No BIN</span>
+												) : (
+													asset.bin
+												)
 											) : (
 												<Badge variant="warning">No BIN</Badge>
 											)}
@@ -351,6 +420,17 @@ export function CustomersTable() {
 															? "Reactivate"
 															: "Suspend"}
 												</Button>
+												{asset ? (
+													<Button
+														variant="secondary"
+														size="sm"
+														aria-label={`De-link ${binLabel(asset)} from ${customer.name}`}
+														onClick={() => openDelink(customer, asset)}
+													>
+														<Unlink aria-hidden="true" />
+														De-link
+													</Button>
+												) : null}
 											</div>
 										</TableCell>
 									</TableRow>
@@ -440,8 +520,49 @@ export function CustomersTable() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+
+			<Dialog open={isDelinkOpen} onOpenChange={setIsDelinkOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>
+							De-link {delinkTarget ? binLabel(delinkTarget.asset) : ""} from{" "}
+							{delinkTarget?.customer.name}?
+						</DialogTitle>
+						<DialogDescription>
+							Use this when the asset has changed hands.{" "}
+							{delinkTarget?.customer.name} stops receiving automated email
+							about this asset, including any notice already scheduled, and the
+							asset shows as Unassigned until you attach its new owner. Their
+							other assets and past assignments are kept.
+						</DialogDescription>
+					</DialogHeader>
+
+					<DialogFooter>
+						<DialogClose render={<Button variant="secondary">Cancel</Button>} />
+						<Button
+							variant="destructive"
+							disabled={delinkCustomer.isPending}
+							onClick={() => {
+								if (!delinkTarget) return;
+								delinkCustomer.mutate({
+									assetId: delinkTarget.asset.id,
+									customerId: delinkTarget.customer.id,
+								});
+							}}
+						>
+							{delinkCustomer.isPending ? "De-linking…" : "De-link asset"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
+}
+
+/** "3 customers · 5 assets" — both counts, now that each line is one asset. */
+function listSummary(customers: Customer[], rows: CustomerRow[]) {
+	const assets = rows.filter((row) => row.asset).length;
+	return `${customers.length} ${customers.length === 1 ? "customer" : "customers"} · ${assets} ${assets === 1 ? "asset" : "assets"}`;
 }
 
 /** Full-width cell for the empty and error states, inside the table frame. */

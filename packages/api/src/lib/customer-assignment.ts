@@ -85,3 +85,48 @@ export async function attachCustomerToAsset({
 		});
 	}
 }
+
+/**
+ * Leaves an asset with no occupant — the customer sold the property, left
+ * the site, or handed the assembly on — preserving the occupancy that ended.
+ *
+ * Two writes, run inside the caller's transaction: close the open occupancy
+ * row with today's `end_date`, and clear the asset's live pointer. No new row
+ * is opened, which is what makes the asset read as unassigned everywhere.
+ *
+ * Nothing is done to the asset's scheduled jobs, on purpose. Every notice
+ * resolves its recipient from `current_customer_id` when it sends (see
+ * `resolveRecipient`), so a stage that has not been attempted yet now finds
+ * no customer and holds instead of mailing the former occupant. The hold is
+ * the same one an asset that never had a customer sits in, and attaching the
+ * next occupant resumes it through `attachCustomerToAsset`.
+ */
+export async function detachCustomerFromAsset({
+	executor,
+	assetId,
+	waterPurveyorId,
+}: {
+	executor: JobExecutor;
+	assetId: string;
+	waterPurveyorId: string;
+}) {
+	await executor
+		.update(customerAssignments)
+		.set({ endDate: sql`current_date` })
+		.where(
+			and(
+				eq(customerAssignments.bfaAssetId, assetId),
+				isNull(customerAssignments.endDate),
+			),
+		);
+
+	await executor
+		.update(bfaAssets)
+		.set({ currentCustomerId: null })
+		.where(
+			and(
+				eq(bfaAssets.id, assetId),
+				eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+			),
+		);
+}
