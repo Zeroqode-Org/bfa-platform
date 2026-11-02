@@ -48,22 +48,41 @@ describe("wizardAnswerFields", () => {
 		);
 
 		expect(labels).toMatchObject({
-			checkValve1ShutTight: "Check Valve 1 Shut Tight",
-			checkValve1Value: "Check Valve 1 PSID",
-			checkValve2Value: "Check Valve 2 PSID",
+			checkValve1ShutTight: "Check Valve 1",
+			checkValve1Value: "Check Valve 1 reading",
+			checkValve2Value: "Check Valve 2 reading",
 		});
 	});
 
-	it("names the main line on a two-line assembly, and the relief reading PSID", () => {
+	it("names the main line on a two-line assembly, and the relief reading as asked", () => {
 		const labels = Object.fromEntries(
 			wizardAnswerFields("RPDA").map((field) => [field.key, field.label]),
 		);
 
-		expect(labels["main.checkValve1ShutTight"]).toBe(
-			"Main Check Valve 1 Shut Tight",
+		expect(labels["main.checkValve1ShutTight"]).toBe("Main Check Valve 1");
+		expect(labels["main.reliefValveValue"]).toBe(
+			"Main Differential Relief Valve opened at",
 		);
-		expect(labels["main.reliefValveValue"]).toBe("Main Relief Valve PSID");
-		expect(labels["bypass.reliefValveValue"]).toBe("Bypass Relief Valve PSID");
+		expect(labels["bypass.reliefValveValue"]).toBe(
+			"Bypass Differential Relief Valve opened at",
+		);
+	});
+
+	it("carries each valve's answer terms for the screens that print them", () => {
+		const field = wizardAnswerFields("DC").find(
+			(entry) => entry.key === "checkValve1ShutTight",
+		);
+
+		expect(field?.answers).toEqual({ yes: "Tight", no: "Leak" });
+	});
+
+	it("words the water meter as the client's sheet does", () => {
+		const labels = Object.fromEntries(
+			wizardAnswerFields("DCDA").map((field) => [field.key, field.label]),
+		);
+
+		expect(labels.waterMeterStart).toBe("Water meter start reading");
+		expect(labels.waterMeterEnd).toBe("Water meter stop reading");
 	});
 
 	it("marks readings as PSID and photos as photos", () => {

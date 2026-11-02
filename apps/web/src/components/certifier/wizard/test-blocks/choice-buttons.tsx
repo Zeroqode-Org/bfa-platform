@@ -61,13 +61,19 @@ function ChoiceButtons<Value extends string>({
 	);
 }
 
-/** A Yes/No answer, stored as a real boolean in `wizard_data` — never the strings "yes"/"no". */
-export function YesNoButtons({
+/**
+ * A valve question's answer in the client's own terms — "Tight" / "Leak",
+ * "Opened at" / "Did not open" — stored as a boolean exactly as a Yes/No would
+ * be, `true` for the first.
+ */
+export function TermButtons({
 	label,
+	terms,
 	value,
 	onValueChange,
 }: {
 	label: string;
+	terms: { yes: string; no: string };
 	value: boolean | null | undefined;
 	onValueChange: (value: boolean) => void;
 }) {
@@ -75,8 +81,8 @@ export function YesNoButtons({
 		<ChoiceButtons
 			label={label}
 			choices={[
-				{ value: "yes", label: "Yes" },
-				{ value: "no", label: "No" },
+				{ value: "yes", label: terms.yes },
+				{ value: "no", label: terms.no },
 			]}
 			value={value === true ? "yes" : value === false ? "no" : undefined}
 			onValueChange={(next) => onValueChange(next === "yes")}

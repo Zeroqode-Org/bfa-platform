@@ -94,7 +94,10 @@ export const pdfStyles = StyleSheet.create({
 	},
 	cellHighlight: { backgroundColor: COLORS.accent },
 	label: { fontSize: 6.5, color: COLORS.muted, textTransform: "uppercase" },
-	value: { fontSize: 9, fontFamily: "Helvetica-Bold", marginTop: 1 },
+	// The readings are what a reader opens this document for (client, October
+	// 2026: "make the results more prominent"), so values set a size above the
+	// labels and the running text rather than matching them.
+	value: { fontSize: 10, fontFamily: "Helvetica-Bold", marginTop: 1 },
 	answerRow: {
 		flexDirection: "row",
 		justifyContent: "space-between",
@@ -105,23 +108,31 @@ export const pdfStyles = StyleSheet.create({
 		borderBottomWidth: 0.75,
 		borderColor: COLORS.border,
 	},
-	answerLabel: { fontSize: 8.5, fontFamily: "Helvetica-Bold" },
+	answerLabel: { fontSize: 9, fontFamily: "Helvetica-Bold" },
+	checkText: { fontSize: 8.5, color: COLORS.muted },
+	checkTextOn: {
+		fontSize: 9.5,
+		fontFamily: "Helvetica-Bold",
+		color: COLORS.text,
+	},
 	checks: { flexDirection: "row", alignItems: "center" },
 	check: { flexDirection: "row", alignItems: "center", marginLeft: 10 },
 	box: {
-		width: 8,
-		height: 8,
+		width: 9,
+		height: 9,
 		borderWidth: 0.9,
 		borderColor: COLORS.muted,
 		borderRadius: 1.5,
 		marginRight: 3,
+		alignItems: "center",
+		justifyContent: "center",
 	},
 	boxOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
 	tiles: { flexDirection: "row" },
 	tile: {
 		flexGrow: 1,
 		flexBasis: 0,
-		height: 24,
+		height: 30,
 		alignItems: "center",
 		justifyContent: "center",
 		borderRadius: 4,
@@ -129,7 +140,14 @@ export const pdfStyles = StyleSheet.create({
 	},
 	tilePass: { backgroundColor: COLORS.successBg, borderColor: COLORS.success },
 	tileFail: { backgroundColor: COLORS.dangerBg, borderColor: COLORS.danger },
-	tileText: { fontSize: 10, fontFamily: "Helvetica-Bold" },
+	tileText: {
+		fontSize: 10,
+		fontFamily: "Helvetica-Bold",
+		// Faded beside the chosen tile, but still legible once printed.
+		color: COLORS.muted,
+	},
+	tileTextPass: { fontSize: 14, color: COLORS.success },
+	tileTextFail: { fontSize: 14, color: COLORS.danger },
 	comment: {
 		minHeight: 22,
 		padding: 4,

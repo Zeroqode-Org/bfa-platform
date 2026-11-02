@@ -8,9 +8,14 @@ import {
 	LINE_PRESSURE_KEY,
 	PHOTO_PATH_KEYS,
 	SIGN_OFF_DISCLAIMER_KEY,
+	type ValveAnswerTerms,
+	valveYesWithReading,
 	WATER_METER_END_KEY,
+	WATER_METER_END_LABEL,
 	WATER_METER_START_KEY,
+	WATER_METER_START_LABEL,
 	WIZARD_TEST_SPEC,
+	type WizardQuestion,
 } from "./wizard-input";
 
 /**
@@ -24,9 +29,10 @@ import {
  * photos.
  *
  * Labels come from the spec the wizard and the PDF already read, so a valve
- * row is called what the certifier was asked, without the "#" ("Check Valve 1
- * Shut Tight"), and its reading is "Check Valve 1 PSID". Pure, no DB import, so the browser
- * can use it.
+ * row is called by the part it tests ("Check Valve 1"), its answer is worded
+ * in the client's terms ("Tight" / "Leak") and its reading is labelled as the
+ * wizard asks for it ("Check Valve 1 reading"). Pure, no DB import, so the
+ * browser can use it.
  */
 
 export type WizardAnswerKind =
@@ -58,6 +64,8 @@ export type WizardAnswerField = {
 	label: string;
 	kind: WizardAnswerKind;
 	column?: WizardAnswerColumn;
+	/** A `yes_no` field's words for `true` and `false` — "Tight" / "Leak". */
+	answers?: ValveAnswerTerms;
 };
 
 type BfaType = keyof typeof WIZARD_TEST_SPEC;
@@ -103,8 +111,8 @@ export function wizardAnswerFields(bfaType: BfaType): WizardAnswerField[] {
 
 	if (spec.hasMeter) {
 		fields.push(
-			field(WATER_METER_START_KEY, "Water Meter Start", "start"),
-			field(WATER_METER_END_KEY, "Water Meter End", "end"),
+			field(WATER_METER_START_KEY, WATER_METER_START_LABEL, "start"),
+			field(WATER_METER_END_KEY, WATER_METER_END_LABEL, "end"),
 		);
 	}
 
@@ -117,12 +125,16 @@ export function wizardAnswerFields(bfaType: BfaType): WizardAnswerField[] {
 				label,
 				kind: "yes_no",
 				column: "start",
+				answers: question.answers,
 			});
 
 			if (question.valueKey) {
 				fields.push({
 					key: question.valueKey,
-					label: `${label.replace(/ (Shut Tight|Opened)$/, "")} PSID`,
+					label: questionLabel(
+						question.key,
+						question.valueLabel ?? `${question.label} reading`,
+					),
 					kind: "psid",
 					column: "end",
 				});
@@ -186,6 +198,30 @@ export function formatPsid(value: unknown): string {
 	return decimals.length >= 1 ? text : Number(text).toFixed(1);
 }
 
+/**
+ * A valve's two answers as they are printed beside it: the chosen `yes`
+ * carries its reading ("Opened at 2.0 PSID"), the other term stands alone.
+ * One place for the PDF, the certifier's document and the WP's, so the three
+ * cannot word the same answer differently.
+ */
+export function valveAnswerLabels(
+	entry: WizardQuestion,
+	wizardData: Record<string, unknown>,
+): { answer: unknown; yes: string; no: string } {
+	const answer = wizardData[entry.key];
+	const reading =
+		entry.valueKey && answer === true
+			? formatPsid(wizardData[entry.valueKey]) || null
+			: null;
+
+	return {
+		answer,
+		yes:
+			answer === true ? valveYesWithReading(entry, reading) : entry.answers.yes,
+		no: entry.answers.no,
+	};
+}
+
 function field(
 	key: string,
 	label: string,
@@ -197,13 +233,10 @@ function field(
 }
 
 /**
- * The spec's question as a field label: no trailing "?", and the main line of
- * a two-line assembly named as such — the spec leaves "Main" off because the
- * PDF shows it under its section heading, which a flat list does not have.
+ * The spec's part name as a field label, with the main line of a two-line
+ * assembly named as such — the spec leaves "Main" off because the PDF shows it
+ * under its section heading, which a flat list does not have.
  */
 function questionLabel(key: string, label: string): string {
-	// No "#" either: "Check Valve 1", as the client writes it (October 2026).
-	const bare = label.replace(/\?$/, "").replace(/#/g, "").trim();
-
-	return key.startsWith("main.") ? `Main ${bare}` : bare;
+	return key.startsWith("main.") ? `Main ${label}` : label;
 }

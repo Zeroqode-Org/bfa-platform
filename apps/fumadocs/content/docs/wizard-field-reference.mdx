@@ -114,6 +114,42 @@ The differentiator between types is entirely in this middle block — everything
 - Does this assembly isolate the entire property? Yes/No/Undetermined
 - No relief valve, no bypass/detector line, no ADP field — the simplest of the 8 flows.
 
+## Answer terminology (client, October 2026)
+
+The client's terminology sheet replaced the Yes/No wording above with the
+words a backflow tester writes on the paper form ("USE ONLY THESE TERMS"), and
+Daria confirmed they apply **everywhere** — the wizard's buttons, the results
+PDF, the WP's submitted-test screen and the certifier's review — with the PDF's
+layout unchanged. The answers are still stored as booleans (`true` is the
+first term), so no saved test changes.
+
+| Part (label) | First answer (`true`) | Second answer (`false`) | Reading |
+|---|---|---|---|
+| Differential Relief Valve (and Bypass …) | Opened at | Did not open | "Opened at 2.0 PSID" |
+| Check Valve 1 / 2, Bypass Check Valve 1 / 2, Bypass Check Valve | Tight | Leak | "Tight — 2.0 PSID", where the part takes one |
+| Air Inlet (PVB, SVB) | Opened at | Did not open | "Opened at 2.0 PSID" |
+| Air Inlet (full opening) | Fully opened | Did not fully open | — |
+| Check Valve (PVB, SVB) | Tight | Leak | "Tight — Check held at 2.0 PSID" |
+
+A first answer whose reading is missing (a WP edit that cleared it) prints as
+"Opened at — no reading", never a bare "Opened at". The reading's own field is
+named the same in the wizard and on the WP's screen: "Check Valve 1 reading",
+"Differential Relief Valve opened at".
+
+The water meter pair reads **Water meter start reading** / **Water meter stop
+reading**. The chosen box on the PDF carries a drawn check mark rather than a
+filled square, as the sheet asks.
+
+**SVB's order differs from PVB's.** The sheet lists a spill-resistant vacuum
+breaker's check valve **first**, then the air inlet (opened, fully opened); a
+PVB asks the air inlet first. `WIZARD_TEST_SPEC` gives each its own order —
+the "input same" note above covers the fields, not their order.
+
+Source of truth: `WIZARD_TEST_SPEC` in `packages/api/src/lib/wizard-input.ts`
+(`answers`, `valueLabel`, `readingLabel` per question, and
+`valveYesWithReading` for the combined phrase; `valveAnswerLabels` in
+`wizard-answer-layout.ts` is what the PDF and both documents print).
+
 ## What this confirms
 
 From [PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log): every type shares the same assembly-details/closing-block shell; only the middle test block differs; "Does this assembly isolate the entire property?" and Initial Test Pass/Fail are asked **before** the wizard reaches the closing block, consistent with the confirmed behavior that a pass/fail answer doesn't end the questionnaire early.

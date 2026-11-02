@@ -1,16 +1,18 @@
-import { Text, View } from "@react-pdf/renderer";
-import { formatPsid } from "../../wizard-answer-layout";
+import { Path, Svg, Text, View } from "@react-pdf/renderer";
+import { valveAnswerLabels } from "../../wizard-answer-layout";
 import {
 	ADP_KEY,
 	LINE_PRESSURE_KEY,
 	LINE_PRESSURE_UNIT,
 	PRESSURE_DIFFERENCE_UNIT,
 	WATER_METER_END_KEY,
+	WATER_METER_END_LABEL,
 	WATER_METER_START_KEY,
+	WATER_METER_START_LABEL,
 	WIZARD_TEST_SPEC,
 	type WizardQuestion,
 } from "../../wizard-input";
-import { pdfStyles, textValue } from "../pdf-styles";
+import { COLORS, pdfStyles, textValue } from "../pdf-styles";
 
 type BfaType = keyof typeof WIZARD_TEST_SPEC;
 
@@ -48,12 +50,29 @@ export function Table({ children }: { children: React.ReactNode }) {
 	);
 }
 
-/** A ticked or empty box, drawn — the PDF's fonts carry no check glyph. */
+/**
+ * A box with a check mark when chosen, empty otherwise — drawn, because the
+ * PDF's fonts carry no check glyph. The client's sheet asks for a check mark
+ * or an X in the box, not a filled square.
+ */
 export function Check({ checked, label }: { checked: boolean; label: string }) {
 	return (
 		<View style={pdfStyles.check}>
-			<View style={[pdfStyles.box, checked ? pdfStyles.boxOn : {}]} />
-			<Text style={{ fontSize: 8.5 }}>{label}</Text>
+			<View style={[pdfStyles.box, checked ? pdfStyles.boxOn : {}]}>
+				{checked ? (
+					<Svg width={7} height={7} viewBox="0 0 10 10">
+						<Path
+							d="M1.5 5.2 L4 7.7 L8.7 2.3"
+							stroke={COLORS.page}
+							strokeWidth={1.8}
+							fill="none"
+						/>
+					</Svg>
+				) : null}
+			</View>
+			<Text style={checked ? pdfStyles.checkTextOn : pdfStyles.checkText}>
+				{label}
+			</Text>
 		</View>
 	);
 }
@@ -65,25 +84,16 @@ function AnswerRow({
 	entry: WizardQuestion;
 	wizardData: Record<string, unknown>;
 }) {
-	const answer = wizardData[entry.key];
+	// The reading rides on the chosen answer as one phrase — "Opened at 2.0
+	// PSID", "Tight — Check held at 2.0 PSID" — the way the paper form reads.
+	const { answer, yes, no } = valveAnswerLabels(entry, wizardData);
 
 	return (
 		<View style={pdfStyles.answerRow} wrap={false}>
 			<Text style={pdfStyles.answerLabel}>{entry.label}</Text>
 			<View style={pdfStyles.checks}>
-				<Check checked={answer === true} label="Yes" />
-				<Check checked={answer === false} label="No" />
-				{entry.valueKey && answer === true ? (
-					<Text style={{ fontSize: 8.5, marginLeft: 10 }}>
-						Reading: {/* The value bold, as on the wizard's review screen. */}
-						<Text style={{ fontFamily: "Helvetica-Bold" }}>
-							{withUnit(
-								formatPsid(wizardData[entry.valueKey]),
-								PRESSURE_DIFFERENCE_UNIT,
-							)}
-						</Text>
-					</Text>
-				) : null}
+				<Check checked={answer === true} label={yes} />
+				<Check checked={answer === false} label={no} />
 			</View>
 		</View>
 	);
@@ -123,11 +133,11 @@ export function TestBlockForTypePdf({
 				{spec.hasMeter ? (
 					<>
 						<Cell
-							label="Water meter start"
+							label={WATER_METER_START_LABEL}
 							value={textValue(wizardData[WATER_METER_START_KEY])}
 						/>
 						<Cell
-							label="Water meter end"
+							label={WATER_METER_END_LABEL}
 							value={textValue(wizardData[WATER_METER_END_KEY])}
 						/>
 					</>

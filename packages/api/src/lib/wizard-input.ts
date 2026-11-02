@@ -251,14 +251,50 @@ export function parseSize(text: string | null | undefined): string {
 	return decimal ? decimal[0] : raw;
 }
 
+/**
+ * The two answers a valve question offers, in the client's terminology sheet
+ * ("USE ONLY THESE TERMS", October 2026): "Tight" / "Leak" for a check valve,
+ * "Opened at" / "Did not open" for a relief valve or air inlet, and so on.
+ * Stored as a boolean all the same — `yes` is `true` — so the words can change
+ * without touching a single saved test.
+ */
+export type ValveAnswerTerms = {
+	yes: string;
+	no: string;
+	/**
+	 * The `yes` term leads straight into the reading ("Opened at 2.0 PSID")
+	 * rather than taking it after a dash ("Tight — 2.0 PSID").
+	 */
+	readingInline?: boolean;
+};
+
+export const TIGHT_OR_LEAK: ValveAnswerTerms = { yes: "Tight", no: "Leak" };
+export const OPENED_OR_NOT: ValveAnswerTerms = {
+	yes: "Opened at",
+	no: "Did not open",
+	readingInline: true,
+};
+export const FULLY_OPENED_OR_NOT: ValveAnswerTerms = {
+	yes: "Fully opened",
+	no: "Did not fully open",
+};
+
 export type WizardQuestion = {
-	/** `wizard_data` key of the Yes/No answer. */
+	/** `wizard_data` key of the answer, a boolean: `true` is `answers.yes`. */
 	key: string;
+	/** The part being tested, as the terminology sheet names it: "Check Valve 1". */
 	label: string;
-	/** Present when answering Yes asks for a value ("If Yes → Value"). */
+	/** The words for the two answers — see {@link ValveAnswerTerms}. */
+	answers: ValveAnswerTerms;
+	/** Present when the `yes` answer asks for a reading ("If Yes → Value"). */
 	valueKey?: string;
-	/** What that value is, as its field label: "PSID across Check Valve 1". */
+	/** What that reading is, as its field label: "Check Valve 1 reading". */
 	valueLabel?: string;
+	/**
+	 * Words before the reading where the answer does not already lead into it:
+	 * "Check held at" on a vacuum breaker's check valve. "Opened at" needs none.
+	 */
+	readingLabel?: string;
 };
 
 export type WizardSection = {
@@ -274,83 +310,123 @@ export type WizardTestSpec = {
 	sections: WizardSection[];
 };
 
-function question(
-	key: string,
-	label: string,
-	valueKey?: string,
-	valueLabel?: string,
-): WizardQuestion {
-	return { key, label, valueKey, valueLabel };
-}
-
 /** Pressure readings are entered in these units, shown inside the input. */
 export const LINE_PRESSURE_UNIT = "PSI";
 export const PRESSURE_DIFFERENCE_UNIT = "PSID";
 
-/** A reduced-pressure line: relief valve, then check valve #2, then #1. */
+/** The water meter pair, worded as the terminology sheet has it. */
+export const WATER_METER_START_LABEL = "Water meter start reading";
+export const WATER_METER_END_LABEL = "Water meter stop reading";
+
+/**
+ * The `yes` answer with its reading, as one phrase: "Opened at 2.0 PSID",
+ * "Tight — 2.0 PSID", "Tight — Check held at 2.0 PSID". `reading` is the
+ * already-formatted number. A part that takes no reading gets the plain term;
+ * one whose reading is missing says so, rather than leaving "Opened at"
+ * hanging with nothing after it.
+ */
+export function valveYesWithReading(
+	entry: WizardQuestion,
+	reading: string | null,
+): string {
+	const { yes, readingInline } = entry.answers;
+
+	if (!entry.valueKey) return yes;
+	if (!reading) return `${yes} — no reading`;
+
+	const value = `${reading} ${PRESSURE_DIFFERENCE_UNIT}`;
+
+	if (readingInline) return `${yes} ${value}`;
+
+	return `${yes} — ${entry.readingLabel ? `${entry.readingLabel} ` : ""}${value}`;
+}
+
+function checkValve(
+	key: string,
+	label: string,
+	valueKey?: string,
+	readingLabel?: string,
+): WizardQuestion {
+	return {
+		key,
+		label,
+		answers: TIGHT_OR_LEAK,
+		...(valueKey
+			? {
+					valueKey,
+					valueLabel: `${label} reading`,
+					readingLabel,
+				}
+			: {}),
+	};
+}
+
+function openedAt(
+	key: string,
+	label: string,
+	valueKey: string,
+): WizardQuestion {
+	return {
+		key,
+		label,
+		answers: OPENED_OR_NOT,
+		valueKey,
+		valueLabel: `${label} opened at`,
+	};
+}
+
+/** A reduced-pressure line: relief valve, then check valve 2, then 1. */
 function rpLine(prefix: string, labelPrefix = ""): WizardQuestion[] {
 	return [
-		question(
+		openedAt(
 			`${prefix}reliefValveOpened`,
-			`${labelPrefix}Relief Valve Opened`,
+			`${labelPrefix}Differential Relief Valve`,
 			`${prefix}reliefValveValue`,
-			`${labelPrefix}Relief Valve opened at`,
 		),
-		question(
-			`${prefix}checkValve2ShutTight`,
-			`${labelPrefix}Check Valve 2 Shut Tight`,
-		),
-		question(
+		checkValve(`${prefix}checkValve2ShutTight`, `${labelPrefix}Check Valve 2`),
+		checkValve(
 			`${prefix}checkValve1ShutTight`,
-			`${labelPrefix}Check Valve 1 Shut Tight`,
+			`${labelPrefix}Check Valve 1`,
 			`${prefix}checkValve1Value`,
-			`PSID across ${labelPrefix}Check Valve 1`,
 		),
 	];
 }
 
-/** A double-check line: check valve #1 then #2, each with its own value. */
+/** A double-check line: check valve 1 then 2, each with its own reading. */
 function dcLine(prefix: string, labelPrefix = ""): WizardQuestion[] {
 	return [
-		question(
+		checkValve(
 			`${prefix}checkValve1ShutTight`,
-			`${labelPrefix}Check Valve 1 Shut Tight`,
+			`${labelPrefix}Check Valve 1`,
 			`${prefix}checkValve1Value`,
-			`PSID across ${labelPrefix}Check Valve 1`,
 		),
-		question(
+		checkValve(
 			`${prefix}checkValve2ShutTight`,
-			`${labelPrefix}Check Valve 2 Shut Tight`,
+			`${labelPrefix}Check Valve 2`,
 			`${prefix}checkValve2Value`,
-			`PSID across ${labelPrefix}Check Valve 2`,
 		),
 	];
 }
 
-const vacuumBreaker: WizardTestSpec = {
-	hasAdp: false,
-	hasMeter: false,
-	sections: [
-		{
-			title: null,
-			questions: [
-				question(
-					"airInletValveOpened",
-					"Air Inlet Valve Opened",
-					"airInletValveValue",
-					"PSID across Air Inlet Valve",
-				),
-				question("airInletValveFullyOpened", "Air Inlet Valve FULLY Opened"),
-				question(
-					"checkValveShutTight",
-					"Check Valve Shut Tight",
-					"checkValveValue",
-					"PSID across Check Valve",
-				),
-			],
-		},
-	],
+const airInletOpened = openedAt(
+	"airInletValveOpened",
+	"Air Inlet",
+	"airInletValveValue",
+);
+
+const airInletFullyOpened: WizardQuestion = {
+	key: "airInletValveFullyOpened",
+	// Same part as the question before it, so the label says which check this is.
+	label: "Air Inlet (full opening)",
+	answers: FULLY_OPENED_OR_NOT,
 };
+
+const vacuumBreakerCheckValve = checkValve(
+	"checkValveShutTight",
+	"Check Valve",
+	"checkValveValue",
+	"Check held at",
+);
 
 /**
  * The test block of every BFA type, transcribed from the client's "Wizard data
@@ -386,11 +462,10 @@ export const WIZARD_TEST_SPEC: Record<
 			{
 				title: "DA TEST 2 — BYPASS ASSEMBLY",
 				questions: [
-					question(
+					checkValve(
 						"bypass.checkValve1ShutTight",
-						"Bypass Check Valve Shut Tight",
+						"Bypass Check Valve",
 						"bypass.checkValve1Value",
-						"PSID across Bypass Check Valve",
 					),
 				],
 			},
@@ -407,7 +482,7 @@ export const WIZARD_TEST_SPEC: Record<
 		sections: [
 			{
 				title: "DA TEST 1 — BYPASS ASSEMBLY",
-				questions: dcLine("bypass.", "Bypass Assembly "),
+				questions: dcLine("bypass.", "Bypass "),
 			},
 			{ title: "DC TEST 2 — MAIN ASSEMBLY", questions: dcLine("main.") },
 		],
@@ -419,19 +494,47 @@ export const WIZARD_TEST_SPEC: Record<
 			{
 				title: "DA TEST 1 — BYPASS ASSEMBLY",
 				questions: [
-					question(
+					checkValve(
 						"bypass.checkValve1ShutTight",
-						"Bypass Assembly Check Valve 1 Shut Tight",
+						"Bypass Check Valve",
 						"bypass.checkValve1Value",
-						"PSID across Bypass Assembly Check Valve 1",
 					),
 				],
 			},
 			{ title: "DC TEST 2 — MAIN ASSEMBLY", questions: dcLine("main.") },
 		],
 	},
-	PVB: vacuumBreaker,
-	SVB: vacuumBreaker,
+	// The same three questions, in each type's own order from the sheet: a
+	// pressure vacuum breaker tests the air inlet first, a spill-resistant one
+	// its check valve first.
+	PVB: {
+		hasAdp: false,
+		hasMeter: false,
+		sections: [
+			{
+				title: null,
+				questions: [
+					airInletOpened,
+					airInletFullyOpened,
+					vacuumBreakerCheckValve,
+				],
+			},
+		],
+	},
+	SVB: {
+		hasAdp: false,
+		hasMeter: false,
+		sections: [
+			{
+				title: null,
+				questions: [
+					vacuumBreakerCheckValve,
+					airInletOpened,
+					airInletFullyOpened,
+				],
+			},
+		],
+	},
 };
 
 /** Every question of a type's test block, across its sections. */

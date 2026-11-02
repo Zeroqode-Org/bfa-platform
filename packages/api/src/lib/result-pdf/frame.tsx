@@ -220,7 +220,14 @@ export function ResultDocument({
 									{ marginRight: 6 },
 								]}
 							>
-								<Text style={pdfStyles.tileText}>PASS</Text>
+								<Text
+									style={[
+										pdfStyles.tileText,
+										result === "pass" ? pdfStyles.tileTextPass : {},
+									]}
+								>
+									PASS
+								</Text>
 							</View>
 							<View
 								style={[
@@ -228,7 +235,14 @@ export function ResultDocument({
 									result === "fail" ? pdfStyles.tileFail : {},
 								]}
 							>
-								<Text style={pdfStyles.tileText}>FAIL</Text>
+								<Text
+									style={[
+										pdfStyles.tileText,
+										result === "fail" ? pdfStyles.tileTextFail : {},
+									]}
+								>
+									FAIL
+								</Text>
 							</View>
 						</View>
 					</Section>
