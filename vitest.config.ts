@@ -34,12 +34,14 @@ export default defineConfig({
 		// Workspace packages export TypeScript source, so they must be transformed
 		// rather than externalised the way a published dependency would be.
 		server: { deps: { inline: [/@bfa-platform\//] } },
-		// Both settings below exist for `npm run test:db` and cost the default
-		// unit-only run nothing: the database suites share fixture rows, so running
-		// their files in parallel would interleave inserts and deletes on them, and
-		// every assertion in them is a round trip to a hosted Postgres, which a
-		// handful of statements in one test comfortably outlasts at the 5s default.
-		fileParallelism: false,
+		// Files run one at a time only when the database suites are on: they share
+		// fixture rows, so running their files in parallel would interleave inserts
+		// and deletes on them. The default unit-only run touches no database and
+		// spreads its files across workers. The timeouts exist for the database
+		// suites too — every assertion in them is a round trip to a hosted
+		// Postgres, which a handful of statements in one test comfortably outlasts
+		// at the 5s default — and cost the unit run nothing.
+		fileParallelism: process.env.RUN_DB_TESTS !== "1",
 		testTimeout: 30_000,
 		hookTimeout: 60_000,
 	},
