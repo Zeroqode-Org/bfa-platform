@@ -89,6 +89,9 @@ let callerFor: (profileId: string) => {
 		assignCustomer: (
 			input: Inputs["assignCustomer"],
 		) => Promise<Outputs["assignCustomer"]>;
+		delinkCustomer: (
+			input: Inputs["delinkCustomer"],
+		) => Promise<Outputs["delinkCustomer"]>;
 	};
 };
 
@@ -999,6 +1002,143 @@ describeDb("asset procedures", () => {
 				wp_id: wpA,
 				from: customerA,
 				to: customerA2,
+			});
+		});
+	});
+
+	describe("delinkCustomer", () => {
+		/** A fresh asset of the caller's, occupied by `customerA`. */
+		async function occupiedAsset(bin: string) {
+			const created = await callerFor(ids.adminA).assets.createAsset(
+				newAsset(bin),
+			);
+			await callerFor(ids.adminA).assets.assignCustomer({
+				assetId: created.id,
+				customerId: customerA,
+			});
+
+			return created;
+		}
+
+		it("leaves the asset unassigned and closes the occupancy, keeping it", async () => {
+			const created = await occupiedAsset("DELINKED");
+
+			const detail = await callerFor(ids.adminA).assets.delinkCustomer({
+				assetId: created.id,
+				customerId: customerA,
+			});
+
+			expect(detail.asset.currentCustomerId).toBeNull();
+			expect(detail.asset.currentCustomerName).toBeNull();
+			// History is closed, not erased — and nothing new is opened.
+			expect(detail.assignments).toHaveLength(1);
+			expect(detail.assignments[0]?.customerId).toBe(customerA);
+			expect(detail.assignments[0]?.endDate).not.toBeNull();
+		});
+
+		it("stops the asset's notices resolving to the former customer", async () => {
+			// Every notice picks its recipient when it sends, from the asset's live
+			// pointer — so a stage already scheduled before the de-link holds for
+			// want of a customer instead of mailing the one who left.
+			const { resolveRecipient } = await import("../scheduler/notice-handler");
+			const { HOLD_REASONS } = await import("../scheduler/notice-chain");
+			const created = await occupiedAsset("DELINKED-NOTICES");
+
+			const { rows: jobs } = await pool.query(
+				"select status from scheduled_jobs where bfa_asset_id = $1",
+				[created.id],
+			);
+			expect(jobs.map((job) => job.status)).toContain("pending");
+
+			await callerFor(ids.adminA).assets.delinkCustomer({
+				assetId: created.id,
+				customerId: customerA,
+			});
+
+			const { rows } = await pool.query(
+				"select water_purveyor_id, current_customer_id from bfa_assets where id = $1",
+				[created.id],
+			);
+
+			expect(
+				await resolveRecipient({
+					waterPurveyorId: rows[0]?.water_purveyor_id,
+					currentCustomerId: rows[0]?.current_customer_id,
+				}),
+			).toEqual({ hold: HOLD_REASONS.noCustomer });
+		});
+
+		it("refuses when the asset is no longer that customer's, and changes nothing", async () => {
+			// A list loaded before the BIN moved to somebody else must not end the
+			// new occupant's link.
+			const created = await occupiedAsset("MOVED-ON");
+			await callerFor(ids.adminA).assets.assignCustomer({
+				assetId: created.id,
+				customerId: customerA2,
+			});
+
+			await expect(
+				callerFor(ids.adminA).assets.delinkCustomer({
+					assetId: created.id,
+					customerId: customerA,
+				}),
+			).rejects.toMatchObject({ code: "CONFLICT" });
+
+			const { rows } = await pool.query(
+				"select current_customer_id from bfa_assets where id = $1",
+				[created.id],
+			);
+			const open = await pool.query(
+				"select customer_id from customer_assignments where bfa_asset_id = $1 and end_date is null",
+				[created.id],
+			);
+
+			expect(rows[0]?.current_customer_id).toBe(customerA2);
+			expect(open.rows).toEqual([{ customer_id: customerA2 }]);
+		});
+
+		it("refuses an asset belonging to another purveyor", async () => {
+			await pool.query(
+				"update bfa_assets set current_customer_id = $1 where id = $2",
+				[customerB, assetB],
+			);
+
+			await expect(
+				callerFor(ids.adminA).assets.delinkCustomer({
+					assetId: assetB,
+					customerId: customerB,
+				}),
+			).rejects.toThrow(/asset not found/i);
+
+			const { rows } = await pool.query(
+				"select current_customer_id from bfa_assets where id = $1",
+				[assetB],
+			);
+			expect(rows[0]?.current_customer_id).toBe(customerB);
+
+			await pool.query(
+				"update bfa_assets set current_customer_id = null where id = $1",
+				[assetB],
+			);
+		});
+
+		it("emits a structured audit line naming the former customer", async () => {
+			const created = await occupiedAsset("AUDITED-DELINK");
+			const lines = captureLogs();
+
+			await callerFor(ids.adminA).assets.delinkCustomer({
+				assetId: created.id,
+				customerId: customerA,
+			});
+
+			expect(
+				lines.find((line) => line.event === "bfa_asset_customer_delinked"),
+			).toMatchObject({
+				actor_id: ids.adminA,
+				asset_id: created.id,
+				wp_id: wpA,
+				bin: "AUDITED-DELINK",
+				from: customerA,
 			});
 		});
 	});

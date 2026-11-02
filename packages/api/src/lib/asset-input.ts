@@ -187,6 +187,16 @@ export const assignCustomerInput = z.object({
 	acknowledgeSuspendedCustomer: z.boolean().default(false),
 });
 
+/**
+ * De-linking a customer from one asset. The customer travels with the asset
+ * so the request says *whose* link it is ending: a row rendered before the
+ * asset moved to somebody else must not end the new occupant's link instead.
+ */
+export const delinkCustomerInput = z.object({
+	assetId: z.uuid(),
+	customerId: z.uuid(),
+});
+
 export type AssetFieldsInput = z.infer<typeof assetFieldsInput>;
 export type CreateAssetInput = z.infer<typeof createAssetInput>;
 export type UpdateAssetInput = z.infer<typeof updateAssetInput>;

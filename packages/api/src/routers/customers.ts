@@ -50,11 +50,11 @@ const customerSelection = {
 };
 
 /**
- * The BINs of the assets this customer currently occupies, A–Z — what the
- * customer form lists as already attached. Read from the assets' live pointer,
- * the same one every notice is addressed through, and only within the
- * customer's own purveyor, so a corrupt cross-tenant pointer cannot surface
- * another WP's BIN here.
+ * The assets this customer currently occupies, as `{ id, bin }` pairs ordered
+ * by BIN — what the Customers screen lists one row per, and the id its De-link
+ * sends. Read from the assets' live pointer, the same one every notice is
+ * addressed through, and only within the customer's own purveyor, so a
+ * corrupt cross-tenant pointer cannot surface another WP's asset here.
  *
  * Written with explicit qualifiers rather than interpolated columns on
  * purpose. Drizzle renders a column unqualified in a single-table select, so
@@ -62,17 +62,31 @@ const customerSelection = {
  * to the *asset's* id, comparing the asset with itself and returning an empty
  * list for every customer.
  */
-// A no-BIN asset (0021) reads as "No BIN": it is still an asset the customer
-// holds, which is what the list and the form's "holds an asset" rule ask.
-const heldBins = sql<string[]>`coalesce((
-	select array_agg(coalesce(held.bin, 'No BIN') order by held.bin nulls last)
+const heldAssets = sql<{ id: string; bin: string | null }[]>`coalesce((
+	select json_agg(json_build_object('id', held.id, 'bin', held.bin) order by held.bin nulls last, held.id)
 	from bfa_assets held
 	where held.current_customer_id = "customers"."id"
 	  and held.water_purveyor_id = "customers"."water_purveyor_id"
-), '{}')`;
+), '[]'::json)`;
 
-/** What every procedure returns: the row plus the BINs attached to it. */
-const customerWithBinsSelection = { ...customerSelection, bins: heldBins };
+/** What every procedure selects: the row plus the assets attached to it. */
+const customerWithAssetsSelection = {
+	...customerSelection,
+	assets: heldAssets,
+};
+
+/**
+ * A selected row with `bins`, the held BINs in the same order — what the
+ * customer form lists as already attached. Derived from `assets` rather than
+ * a second subquery, so the two can never disagree. A no-BIN asset (0021)
+ * reads as "No BIN": it is still an asset the customer holds, which is what
+ * the form's "holds an asset" rule asks.
+ */
+function withBins<Row extends { assets: { bin: string | null }[] }>(
+	row: Row,
+): Row & { bins: string[] } {
+	return { ...row, bins: row.assets.map((asset) => asset.bin ?? "No BIN") };
+}
 
 /**
  * Customers are managed entirely by their water purveyor — they never sign in,
@@ -89,15 +103,15 @@ const customerWithBinsSelection = { ...customerSelection, bins: heldBins };
 export const customersRouter = router({
 	/** Every customer belonging to the caller's purveyor, A–Z. */
 	listCustomers: wpProcedure.query(async ({ ctx }) => {
-		return (
-			db
-				.select(customerWithBinsSelection)
-				.from(customers)
-				.where(eq(customers.waterPurveyorId, ctx.caller.waterPurveyorId))
-				// `id` breaks the tie so two customers with the same name keep a stable
-				// order between renders rather than swapping places on refetch.
-				.orderBy(asc(customers.name), asc(customers.id))
-		);
+		const rows = await db
+			.select(customerWithAssetsSelection)
+			.from(customers)
+			.where(eq(customers.waterPurveyorId, ctx.caller.waterPurveyorId))
+			// `id` breaks the tie so two customers with the same name keep a stable
+			// order between renders rather than swapping places on refetch.
+			.orderBy(asc(customers.name), asc(customers.id));
+
+		return rows.map(withBins);
 	}),
 
 	/**
@@ -380,7 +394,7 @@ export const customersRouter = router({
  */
 async function readCustomer(waterPurveyorId: string, customerId: string) {
 	const [row] = await db
-		.select(customerWithBinsSelection)
+		.select(customerWithAssetsSelection)
 		.from(customers)
 		.where(
 			and(
@@ -394,7 +408,7 @@ async function readCustomer(waterPurveyorId: string, customerId: string) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
 	}
 
-	return row;
+	return withBins(row);
 }
 
 /** What an attachment did, for its audit line. */
