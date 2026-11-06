@@ -4,21 +4,17 @@
  *
  * A customer is tied to an assembly by the BIN — the asset's
  * `current_customer_id` is what every automated notice is addressed through
- * (PRD § 9), so a customer who holds no asset is a record no notice can ever
- * reach. The customer form therefore asks for a BIN, and saving it attaches the
+ * (PRD § 9). The customer form offers a BIN, and saving one attaches the
  * customer to that asset exactly the way `assets.assignCustomer` does.
  *
- * The rule is "after this save, the customer holds at least one asset": a new
- * customer must name one, and an existing customer must name one only while
- * they hold none.
+ * The BIN is optional. Purveyors keep their own BIN-to-customer lists and
+ * match them up later, so a customer may be saved holding no asset — knowing
+ * that no automated notice reaches them until one is attached.
  *
  * Import-free on purpose, like `email-uniqueness.ts`: the web app routes these
  * refusals to the BIN field by comparing the message, and it must be able to do
  * that without pulling a router — and its database — into the browser bundle.
  */
-
-export const CUSTOMER_BIN_REQUIRED_MESSAGE =
-	"Enter the BIN of an assembly this customer occupies — notices reach a customer only through an asset.";
 
 export const CUSTOMER_BIN_NOT_FOUND_MESSAGE =
 	"No assembly in this water purveyor has this BIN. Register the asset first, then attach the customer to it.";
@@ -40,7 +36,6 @@ type MutationError = {
 /** Whether a failed save belongs under the BIN field rather than the form-wide banner. */
 export function isCustomerBinError(error: MutationError): boolean {
 	return (
-		error.message === CUSTOMER_BIN_REQUIRED_MESSAGE ||
 		error.message === CUSTOMER_BIN_NOT_FOUND_MESSAGE ||
 		isCustomerBinReassignError(error)
 	);

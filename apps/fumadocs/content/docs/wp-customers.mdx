@@ -38,17 +38,20 @@ and **de-link**, which closes one occupancy and leaves the asset unassigned. See
 
 Every automated notice is addressed through an asset's current customer
 ([PRD § 9](/docs/prd#9-confirmed-decisions-client-qa-log)), so a customer who
-occupies no asset is a record no notice can reach. The client asked for the BIN
-on this form for exactly that reason, and the rule is: **after a save, the
-customer holds at least one asset.**
+occupies no asset is a record no notice can reach. **The BIN is optional all
+the same** (client request, 2026-11-02): every purveyor keeps its own
+BIN-to-customer list and matches them up later, so a customer may be saved
+holding no asset — the form says that no automated notices reach them until one
+is attached.
 
-- **Add customer** asks for a BIN, required. The customer is inserted and
-  attached in one transaction, so a BIN that cannot be honoured leaves no
-  customer behind.
+- **Add customer** offers a BIN, optional. When one is given, the customer is
+  inserted and attached in one transaction, so a BIN that cannot be honoured
+  leaves no customer behind.
 - **Edit customer** lists the BINs the customer already holds (*Attached
   BINs*, read from `bfa_assets.current_customer_id` within the purveyor) and
-  offers *Attach another BIN*, optional. A customer who holds none — a row saved
-  before the rule — sees a required *BIN* field instead.
+  offers *Attach another BIN*, optional. A customer who holds none sees an
+  optional *BIN* field.
+- **Removing a BIN** is the table's *De-link*, below — the form only attaches.
 - The table lists **one line per BIN**: a customer holding three assets is
   three lines, each with its own *De-link*. A customer holding nothing still
   gets a line, with a *No asset* warning badge rather than a dash. (A held
