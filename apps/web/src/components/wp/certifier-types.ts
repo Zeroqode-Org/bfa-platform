@@ -39,12 +39,11 @@ export const CERTIFIER_TYPE_LABELS: Record<CertifierType, string> = {
  * What blocking actually does. Shown wherever a certifier can be blocked, from
  * here, so the table and the confirmation cannot describe it differently.
  *
- * Blocking writes `certifiers.status`, which is a single global column — not a
- * per-purveyor one. A certifier holds one account across every purveyor that
- * authorized them, so blocking from this screen removes their access to the
- * whole platform, including the work they do for purveyors this WP has nothing
- * to do with. That is the specified behaviour, and it is severe enough that the
- * dialog states it outright rather than leaving "blocked" to be interpreted.
+ * Blocking revokes this purveyor's own authorization of the certifier — it is
+ * per purveyor, not account-wide. A certifier holds one account across every
+ * purveyor that authorized them, and blocking here ends only this purveyor's
+ * relationship: they can no longer pick this purveyor or submit tests to it,
+ * and keep signing in for the others.
  *
  * The wording is unconditional — it does not say whether *this* certifier works
  * for anyone else. It could: `wp_certifier_authorizations` has the count. But
@@ -54,15 +53,15 @@ export const CERTIFIER_TYPE_LABELS: Record<CertifierType, string> = {
  * the rule is honest and leaks nothing.
  */
 export const BLOCK_WARNING =
-	"Blocking removes this certifier's access to the whole platform, not just to your dashboard.";
+	"Blocking removes this certifier's access to your water purveyor: they can no longer select it or submit tests to it.";
 
 /**
- * The half of the warning that says why the sentence above is wider than this
- * purveyor. Split out so the table's confirmation can lead with the effect and
- * follow with the reason.
+ * The half of the warning that says what the block does not reach. Split out
+ * so the table's confirmation can lead with the effect and follow with the
+ * limit.
  */
 export const BLOCK_SCOPE_NOTE =
-	"A certifier has one account for every water purveyor they work for, so if this one also works for others, they lose access to those too.";
+	"If they also work for other water purveyors, that work is unaffected — their account stays active.";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
 	year: "numeric",

@@ -10,12 +10,13 @@ import { requireGlobalRole } from "@/lib/auth";
  * transparency boundary only; every procedure still checks the role itself.
  *
  * The role gate resolves the account first, so a valid Supabase session is still
- * not enough to be inside this shell. A certifier a water purveyor has blocked
- * still holds working credentials — `setCertifierStatus` writes
- * `certifiers.status` and nothing in `auth.users` — so the flag has to be read
- * where the caller is resolved, and this is the gate that reads it. Without it
- * a blocked certifier would land on their dashboard and watch every query
- * behind it fail.
+ * not enough to be inside this shell. A certifier whose account is switched
+ * off (`certifiers.status`) still holds working credentials — nothing is
+ * written to `auth.users` — so the flag has to be read where the caller is
+ * resolved, and this is the gate that reads it. Without it such a certifier
+ * would land on their dashboard and watch every query behind it fail. A water
+ * purveyor's own block is narrower: it revokes one authorization and leaves the
+ * account, and this gate, alone.
  *
  * This covers a full load and a refresh, and nothing else. A client-side
  * navigation re-renders only the changed page on the server and reuses this

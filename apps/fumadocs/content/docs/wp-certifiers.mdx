@@ -11,7 +11,7 @@ purveyors they work for, and the relationship lives in
 
 That one fact shapes everything on this page. A water purveyor manages its
 certifiers from `/wp/certifiers`, but what it owns there is the *relationship*
-and one column — `certifiers.status` — not the person's record.
+and its own authorization row — not the person's record.
 
 This page describes the screen as built. It covers *WP dashboard — certifiers*
 in the [build plan](/docs/build-plan) and PRD § 6.6.3.
@@ -29,10 +29,9 @@ Three consequences follow, and the screen is built around all three:
 - **A certifier authorized by two purveyors appears on both screens.** One row,
   two authorizations. `listWpCertifiers` returns one row per certifier, not one
   per authorization.
-- **Blocking is not a local setting.** There is one `status` column, so blocking
-  from one purveyor's screen blocks the person everywhere — see
-  [Blocking is global, and that is a product decision](#blocking-is-global-and-that-is-a-product-decision)
-  below, which is the most consequential thing on this page.
+- **Blocking is a local setting.** It revokes this purveyor's authorization
+  row only, so a certifier blocked by one purveyor keeps working for the others —
+  see [Blocking is per purveyor](#blocking-is-per-purveyor) below.
 - **The certifier's own record is not the purveyor's to edit.** Name, company,
   certifier ID and licence expiry belong to the person who entered them at
   redemption. A purveyor that could rewrite them could rewrite the identity that
@@ -79,7 +78,7 @@ selector treat internal and external certifiers the same.
 
 Two things are annotated rather than left to be interpreted:
 
-- a blocked row carries *Cannot sign in* under its badge,
+- a blocked row carries *Cannot submit tests to you* under its badge,
 - a licence expiry already in the past is shown in the danger colour with
   *License expired* under it. That is a fact about the licence, not a status the
   purveyor set, so it is a note rather than a badge — but it is the main reason a
@@ -127,7 +126,7 @@ instead of inheriting one by accident.
 | Procedure | Does |
 |---|---|
 | `listWpCertifiers` | Every certifier authorized for the caller's purveyor, by name, both statuses, with this purveyor's `certifierType` |
-| `setCertifierStatus` | Writes `certifiers.status` and nothing else |
+| `setCertifierStatus` | Writes `authorization_status` (`revoked` ⇄ `active`) on the caller's own authorization row and nothing else |
 | `setCertifierType` | Writes `certifier_type` on the caller's own authorization row and nothing else; strict `{ id, certifierType }`, a no-op when unchanged, `certifier_type_changed` audit line otherwise |
 
 The list is ordered by `profiles.full_name` then `certifiers.id`. The tie-break
@@ -141,8 +140,8 @@ client that sends `company` alongside `status` is refused with a validation
 error rather than having the field quietly dropped — a silently ignored field
 looks like a successful edit to whatever sent it.
 
-The write itself names one column, and no procedure on this screen writes any
-other column of `certifiers`. That is the boundary for the privileged Drizzle
+The write itself names one column of the caller's own authorization row, and
+no procedure on this screen writes `certifiers` at all. That is the boundary for the privileged Drizzle
 connection the application uses. The matching boundary for a client reaching the
 table through PostgREST is the trigger in `0007` — see
 [Column permissions](#column-permissions-why-a-trigger). Neither substitutes for
@@ -153,15 +152,12 @@ the other.
 The tenant is never an input. There is no `waterPurveyorId` field on either
 procedure's schema, so a client has nowhere to ask for somebody else's.
 
-Because `certifiers` has no tenant column, the scope is a subquery over the
-caller's own authorizations — used for the read *and* for the write:
+Because `certifiers` has no tenant column, the scope is the caller's own
+authorization row — used for the read *and* for the write:
 
 ```
-certifiers.id = :id
-AND certifiers.id IN (
-  SELECT certifier_id FROM wp_certifier_authorizations
-  WHERE water_purveyor_id = <caller's purveyor>
-)
+wp_certifier_authorizations.certifier_id = :id
+AND wp_certifier_authorizations.water_purveyor_id = <caller's purveyor>
 ```
 
 A certifier id from a purveyor the caller does not work with therefore matches no
@@ -175,11 +171,9 @@ Blocking a certifier who is already blocked is not a change.
 `setCertifierStatus` compares the incoming status against the row it just read
 and, when they match, returns that row without touching the table.
 
-Writing anyway would make two records lie. `certifiers` carries the shared
-`set_updated_at` trigger, so *any* UPDATE moves `updated_at` — the only way to
-keep it meaning "when this row last changed" is to issue no UPDATE. And the
-audit trail would carry a `certifier_status_changed` line whose `from` equalled
-its `to`, which is the one thing an audit trail must not do.
+Writing anyway would put a `certifier_status_changed` line whose `from`
+equalled its `to` in the audit trail, which is the one thing an audit trail must
+not do.
 
 ## Inviting a certifier
 
@@ -223,79 +217,64 @@ certifier who is never asked for a profile reads as expected rather than as a bu
 An invitation does not put a row on this screen. The certifier appears when the
 link is redeemed, because that is when the authorization exists.
 
-## Blocking is global, and that is a product decision
+## Blocking is per purveyor
 
-**One water purveyor blocking a certifier removes that certifier's access to the
-platform for every purveyor they work for.**
+**One water purveyor blocking a certifier ends that purveyor's relationship
+with them and nothing else** (client, 2026-11-02). The certifier keeps their
+account, keeps signing in, and keeps working for every other purveyor that
+authorized them.
 
-`certifiers.status` is a single column on a single row. A certifier has one
-account and one `certifiers` record no matter how many purveyors authorized them,
-so there is nowhere for a per-purveyor block to live on this table. If Riverside
-blocks Ada, Ada also stops being able to file tests for Kaneohe and Waimea, who
-were not consulted and are not told.
+`setCertifierStatus` revokes the caller's own `wp_certifier_authorizations`
+row (`active` → `revoked`); unblocking sets it back. The screen's *Blocked*
+status is that row: `listWpCertifiers` reports `blocked` for a revoked
+authorization and `active` otherwise.
 
-### Why it is built this way
+A revoked row is enough to close this purveyor's door, because everything a
+certifier does for a purveyor already requires an `active` authorization:
 
-This is the specified behaviour, not an accident of the schema. Four sources say
-so independently:
+- the WP selector, `certifier.listAuthorizedWps`;
+- `assertAuthorizedWp`, behind the wizard's save and submit;
+- the reminder workflow's tester list, which filters on
+  `authorization_status = 'active'` — see
+  [Notice Workflow & Scheduler](/docs/notice-workflow#the-certifier-list-on-the-reminder).
 
-| Source | Says |
-|---|---|
-| `packages/db/src/schema/certifiers.ts` | `// blocked prevents login`, on the column itself |
-| [Build plan](/docs/build-plan), *WP dashboard — certifiers* | **Done when:** "blocking a certifier prevents their login" |
-| [PRD](/docs/prd) § 5, `certifiers` | WP Admin and SubAdmin "update `status` only" — the global column is the one handed to the WP |
-| [Notice Workflow & Scheduler](/docs/notice-workflow#the-certifier-list-on-the-reminder) | The shipped reminder filters on `authorization_status = 'active'` **and** `certifiers.status = 'active'` — two columns, deliberately distinct, resolved at send time |
+A certifier every purveyor has blocked still has an account: they sign in to an
+empty WP selector, with their past submissions still readable.
 
-That last row is the important one. The per-purveyor alternative already exists:
-`wp_certifier_authorizations.authorization_status` has `pending`, `active` and
-`revoked`. Revoking it would end one relationship and leave the account intact —
-which is a different, narrower product action, listed under a different feature
-(*Certifier WP selector* / authorization management), and not yet built.
+Re-inviting does not undo a block. The second-purveyor path inserts its
+authorization with `ON CONFLICT DO NOTHING`, so a revoked row stays revoked
+until the purveyor presses *Unblock*.
 
-So the schema carries both concepts on purpose, and this screen ships the global
-one because that is what § 6.6.3 and the build plan's acceptance criterion
-describe. `setCertifierStatus` writes `certifiers.status` and nothing else.
+### What it replaced
 
-### If that is wrong, here is what changes
+Until November 2026 blocking wrote `certifiers.status`, the account-wide switch,
+so one purveyor's block took the certifier off the platform for everyone.
+Migration `0023_per_wp_certifier_block` carried those blocks over
+conservatively — the purveyor that set each one is only in the audit log, so
+every active authorization of a blocked certifier was revoked — and cleared the
+account switch. `certifiers.status` is no longer written by any procedure; it
+remains the account-wide switch the login gate reads, described next.
 
-This has not been through the client Q&A log — it is not in
-[Confirmed Decisions](/docs/prd) — and for a platform whose whole premise is that
-"a certifier can work for more than one WP", one tenant being able to revoke
-another tenant's labour is worth a deliberate answer rather than an inherited
-one. It is now carried as an open question in the PRD.
+Still to do: the `certifiers` UPDATE grant and the WP branch of
+`private.enforce_certifier_column_permissions()` (0006/0007) still let a WP
+Admin set `certifiers.status` through PostgREST. The app never does, but the
+grant should move to `wp_certifier_authorizations` with its own policies.
 
-If the answer comes back "per-WP", the change is contained and known:
+### What the dialog says
 
-1. `setCertifierStatus` writes `wp_certifier_authorizations.authorization_status`
-   (`active` ⇄ `revoked`) for the caller's own purveyor, instead of
-   `certifiers.status`.
-2. `listWpCertifiers` returns that per-purveyor status instead of the global one.
-3. The `certifiers` UPDATE grant and the WP branch of
-   `private.enforce_certifier_column_permissions()` go away; the WP write moves
-   to `wp_certifier_authorizations`, which needs its own policies.
-4. `resolveCaller` stops reading `certifiers.status` for the login gate; what
-   replaces it is a narrower question — a certifier with every authorization
-   revoked still has an account, and the WP selector simply has nothing in it.
-5. `certifiers.status` stays as the Super-Admin's platform-wide switch, which is
-   what it would then mean.
+The confirmation states the rule unconditionally — the block removes access to
+this purveyor, and work for other purveyors is unaffected. It deliberately does
+**not** say whether *this* certifier works for anyone else, or how many. That
+count sits in `wp_certifier_authorizations` and belongs to the other tenants; a
+dialog reading "also works for 2 other water purveyors" would leak the existence
+of those purveyors across the boundary the rest of this feature exists to hold.
+A test asserts both halves.
 
-Nothing outside those five points depends on the choice. The screen, the table,
-the invite path, the audit line and the tenant scoping are all the same either
-way — and the reminder's tester list needs no change at all, because it already
-requires both columns.
+## How the account switch is enforced
 
-### What the screen does about it meanwhile
-
-The confirmation dialog states the consequence unconditionally — that a certifier
-has one account for every purveyor they work for, and that blocking removes
-access to all of them. It deliberately does **not** say whether *this* certifier
-works for anyone else, or how many. That count sits in
-`wp_certifier_authorizations` and belongs to the other tenants; a dialog reading
-"also works for 2 other water purveyors" would leak the existence of those
-purveyors across the boundary the rest of this feature exists to hold. Stating
-the rule is honest and leaks nothing. A test asserts both halves.
-
-## How blocking is enforced
+This section is about `certifiers.status`, the account-wide switch — which no
+purveyor sets any more (see [What it replaced](#what-it-replaced)). A
+purveyor's own block is enforced by the authorization checks above.
 
 
 This is the part that has to be true rather than merely displayed.
