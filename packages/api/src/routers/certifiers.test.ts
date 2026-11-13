@@ -83,6 +83,9 @@ let callerFor: (profileId: string) => {
 			certifierType: "internal" | "external";
 		}) => Promise<CertifierTypeRow>;
 	};
+	certifier: {
+		listAuthorizedWps: () => Promise<{ id: string }[]>;
+	};
 	whoami: () => Promise<unknown>;
 };
 
@@ -95,13 +98,22 @@ function captureLogs() {
 	return lines;
 }
 
-async function statusOf(certifierId: string) {
+/**
+ * A certifier as one purveyor sees them: `status` is that purveyor's block
+ * (its authorization row), `accountStatus` the account-wide switch the login
+ * gate reads — which a purveyor's block must never touch.
+ */
+async function statusOf(certifierId: string, waterPurveyorId = wpA) {
 	const { rows } = await pool.query(
-		"select status, updated_at from certifiers where id = $1",
-		[certifierId],
+		`select case when a.authorization_status = 'revoked' then 'blocked' else 'active' end as status,
+		        c.status as "accountStatus"
+		   from wp_certifier_authorizations a
+		   join certifiers c on c.id = a.certifier_id
+		  where a.certifier_id = $1 and a.water_purveyor_id = $2`,
+		[certifierId, waterPurveyorId],
 	);
 
-	return rows[0] as { status: string; updated_at: Date };
+	return rows[0] as { status: string; accountStatus: string };
 }
 
 describeDb("WP certifier procedures", () => {
@@ -184,7 +196,7 @@ describeDb("WP certifier procedures", () => {
 			[[certifierA, certifierB, certifierShared]],
 		);
 		await pool.query(
-			"update wp_certifier_authorizations set certifier_type = 'external' where certifier_id = any($1::uuid[])",
+			"update wp_certifier_authorizations set certifier_type = 'external', authorization_status = 'active' where certifier_id = any($1::uuid[])",
 			[[certifierA, certifierB, certifierShared]],
 		);
 	});
@@ -359,6 +371,49 @@ describeDb("WP certifier procedures", () => {
 	});
 
 	describe("setCertifierStatus", () => {
+		it("closes only the blocking purveyor's door, and keeps the certifier signed in", async () => {
+			await callerFor(ids.adminB).certifiers.setCertifierStatus({
+				id: certifierShared,
+				status: "blocked",
+			});
+
+			// The certifier still resolves — the account is untouched — and their
+			// WP selector drops the purveyor that blocked them, keeping the other.
+			const wps = await callerFor(
+				ids.certifierSharedProfile,
+			).certifier.listAuthorizedWps();
+			expect(wps.map((wp) => wp.id)).toEqual([wpA]);
+
+			await callerFor(ids.adminB).certifiers.setCertifierStatus({
+				id: certifierShared,
+				status: "active",
+			});
+			const restored = await callerFor(
+				ids.certifierSharedProfile,
+			).certifier.listAuthorizedWps();
+			expect(restored.map((wp) => wp.id).sort()).toEqual([wpA, wpB].sort());
+		});
+
+		it("refuses to block a pending authorization rather than activating it later", async () => {
+			await pool.query(
+				"update wp_certifier_authorizations set authorization_status = 'pending' where certifier_id = $1 and water_purveyor_id = $2",
+				[certifierA, wpA],
+			);
+
+			await expect(
+				callerFor(ids.adminA).certifiers.setCertifierStatus({
+					id: certifierA,
+					status: "blocked",
+				}),
+			).rejects.toThrow(/not accepted their invitation/i);
+
+			const { rows } = await pool.query(
+				"select authorization_status from wp_certifier_authorizations where certifier_id = $1 and water_purveyor_id = $2",
+				[certifierA, wpA],
+			);
+			expect(rows[0]?.authorization_status).toBe("pending");
+		});
+
 		it("blocks and unblocks a certifier in the caller's own purveyor", async () => {
 			const blocked = await callerFor(ids.adminA).certifiers.setCertifierStatus(
 				{
@@ -368,7 +423,11 @@ describeDb("WP certifier procedures", () => {
 			);
 
 			expect(blocked.status).toBe("blocked");
-			expect((await statusOf(certifierA)).status).toBe("blocked");
+			// This purveyor's authorization is revoked; the account is not.
+			expect(await statusOf(certifierA)).toEqual({
+				status: "blocked",
+				accountStatus: "active",
+			});
 
 			const unblocked = await callerFor(
 				ids.adminA,
@@ -390,7 +449,10 @@ describeDb("WP certifier procedures", () => {
 			).rejects.toThrow(/not found/i);
 
 			// Not found, not merely refused: the other tenant's row is unchanged.
-			expect((await statusOf(certifierB)).status).toBe("active");
+			expect(await statusOf(certifierB, wpB)).toEqual({
+				status: "active",
+				accountStatus: "active",
+			});
 		});
 
 		it("refuses an id that belongs to nobody", async () => {
@@ -454,7 +516,6 @@ describeDb("WP certifier procedures", () => {
 		});
 
 		it("writes nothing when the status is already what was asked for", async () => {
-			const before = await statusOf(certifierA);
 			const lines = captureLogs();
 
 			const returned = await callerFor(
@@ -464,14 +525,9 @@ describeDb("WP certifier procedures", () => {
 				status: "active",
 			});
 
-			const after = await statusOf(certifierA);
-
 			// The row comes back, so the client has nothing to handle differently.
 			expect(returned).toMatchObject({ id: certifierA, status: "active" });
-			// But `updated_at` still means "when this row last changed" — the
-			// `set_updated_at` trigger moves it on any UPDATE at all, so the only
-			// way to keep it honest is to issue no UPDATE.
-			expect(after.updated_at.getTime()).toBe(before.updated_at.getTime());
+			expect((await statusOf(certifierA)).status).toBe("active");
 			// …and the audit trail carries no line for a change that never happened.
 			expect(
 				lines.some((line) => line.event === "certifier_status_changed"),
@@ -519,13 +575,25 @@ describeDb("WP certifier procedures", () => {
 			).toMatchObject({ from: "blocked", to: "active" });
 		});
 
-		it("lets either purveyor block a certifier they share", async () => {
+		it("blocks a shared certifier for the blocking purveyor only", async () => {
 			await callerFor(ids.adminB).certifiers.setCertifierStatus({
 				id: certifierShared,
 				status: "blocked",
 			});
 
-			expect((await statusOf(certifierShared)).status).toBe("blocked");
+			expect(await statusOf(certifierShared, wpB)).toEqual({
+				status: "blocked",
+				accountStatus: "active",
+			});
+			// The other purveyor still works with them, and sees them as active.
+			expect(await statusOf(certifierShared, wpA)).toEqual({
+				status: "active",
+				accountStatus: "active",
+			});
+			const fromA = await callerFor(ids.adminA).certifiers.listWpCertifiers();
+			expect(fromA.find((row) => row.id === certifierShared)?.status).toBe(
+				"active",
+			);
 		});
 	});
 

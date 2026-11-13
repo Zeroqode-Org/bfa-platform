@@ -162,6 +162,13 @@
 			"when": 1792900000000,
 			"tag": "0022_certifier_type",
 			"breakpoints": true
+		},
+		{
+			"idx": 23,
+			"version": "7",
+			"when": 1793000000000,
+			"tag": "0023_per_wp_certifier_block",
+			"breakpoints": true
 		}
 	]
 }

@@ -110,7 +110,7 @@ export function CertifiersTable({ canManage }: { canManage: boolean }) {
 				const name = row.fullName ?? "Certifier";
 				toast.success(
 					row.status === "blocked"
-						? `${name} blocked — they can no longer sign in`
+						? `${name} blocked — they can no longer submit tests to you`
 						: `${name} unblocked`,
 				);
 				await invalidateList();
@@ -322,7 +322,7 @@ export function CertifiersTable({ canManage }: { canManage: boolean }) {
 												    leaving "blocked" to be interpreted. */}
 												{blocked ? (
 													<span className="text-[11px] text-muted-foreground">
-														Cannot sign in
+														Cannot submit tests to you
 													</span>
 												) : null}
 											</div>

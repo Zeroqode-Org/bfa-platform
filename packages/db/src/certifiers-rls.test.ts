@@ -260,18 +260,21 @@ describeDb("RLS — certifiers", () => {
 		const blockA =
 			"update certifiers set status = 'blocked' where id = $1 returning status";
 
-		it("lets a WP Admin and SubAdmin block a certifier in their own purveyor", async () => {
+		it("refuses a WP Admin and SubAdmin the account-wide status (0023)", async () => {
+			// A purveyor's block is its own authorization row now. Writing
+			// `certifiers.status` would lock the certifier out of every other
+			// purveyor, so no WP UPDATE policy exists and the write matches nothing.
 			for (const writer of [ids.adminA, ids.subAdminA]) {
 				const rows = await rowsFor(writer, blockA, [certifierA]);
 
-				expect(rows).toEqual([{ status: "blocked" }]);
+				expect(rows).toHaveLength(0);
 			}
 		});
 
 		it("refuses a WP Employee the status write, while still letting them read", async () => {
-			// `certifiers_select_own_wp` covers all three roles;
-			// `certifiers_update_status_own_wp` covers two. The row is visible, so
-			// the update matches it under no policy and writes nothing.
+			// `certifiers_select_own_wp` covers all three roles, and no WP role has
+			// an UPDATE policy. The row is visible, so the update matches it under
+			// no policy and writes nothing.
 			const read = await rowsFor(
 				ids.employeeA,
 				"select id from certifiers where id = $1",
@@ -292,11 +295,11 @@ describeDb("RLS — certifiers", () => {
 			expect(rows).toHaveLength(0);
 		});
 
-		it("lets either purveyor block a certifier they share", async () => {
+		it("does not let either purveyor block a certifier they share account-wide", async () => {
 			for (const writer of [ids.adminA, ids.adminB]) {
 				const rows = await rowsFor(writer, blockA, [certifierShared]);
 
-				expect(rows).toEqual([{ status: "blocked" }]);
+				expect(rows).toHaveLength(0);
 			}
 		});
 
@@ -353,29 +356,19 @@ describeDb("RLS — certifiers", () => {
 			"update certifiers set license_expiration_date = '2099-01-01' where id = $1 returning license_expiration_date";
 		const PROFILE_WRITES = [setCompany, setIdNumber, setExpiry];
 
-		describe("WP Admin and SubAdmin — status and nothing else", () => {
-			it("refuses every professional column, though the grant now allows it", async () => {
-				// The regression this migration exists for. Before `0007` a missing
-				// grant refused these; now the grant is there and the trigger is what
-				// refuses, so the assertion has to be on the trigger.
+		describe("WP Admin and SubAdmin — no column at all (0023)", () => {
+			it("refuses every professional column and the status", async () => {
+				// 0023 dropped the WP UPDATE policy, so these match no row before
+				// the 0007 trigger is ever reached.
 				for (const writer of [ids.adminA, ids.subAdminA]) {
-					for (const statement of PROFILE_WRITES) {
-						await expect(
-							rowsFor(writer, statement, [certifierA]),
-						).rejects.toThrow(/may change only certifiers\.status/i);
-					}
-				}
-			});
-
-			it("still lets them set the status they do own", async () => {
-				for (const writer of [ids.adminA, ids.subAdminA]) {
-					const rows = await rowsFor(
-						writer,
+					for (const statement of [
+						...PROFILE_WRITES,
 						"update certifiers set status = 'blocked' where id = $1 returning status",
-						[certifierA],
-					);
-
-					expect(rows).toEqual([{ status: "blocked" }]);
+					]) {
+						expect(await rowsFor(writer, statement, [certifierA])).toHaveLength(
+							0,
+						);
+					}
 				}
 			});
 

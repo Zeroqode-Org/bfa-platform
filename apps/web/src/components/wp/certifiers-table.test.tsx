@@ -15,7 +15,7 @@ import type { WpCertifier } from "./certifier-types";
 
 /**
  * The certifiers table's block and unblock controls — the two actions that
- * decide whether a certifier can sign in to the platform at all.
+ * decide whether a certifier can work for this water purveyor.
  *
  * The tRPC module is mocked because importing it for real would give the
  * queries a live HTTP link. `queryOptions`/`mutationOptions` are thin
@@ -168,7 +168,7 @@ describe("CertifiersTable", () => {
 
 		await screen.findByText("Blocked");
 		// "Blocked" on its own leaves the consequence to be guessed at.
-		expect(screen.getByText("Cannot sign in")).toBeTruthy();
+		expect(screen.getByText("Cannot submit tests to you")).toBeTruthy();
 	});
 
 	it("shows a dash rather than a blank cell for a missing detail", async () => {
@@ -199,7 +199,7 @@ describe("CertifiersTable", () => {
 		expect(screen.queryByRole("button", { name: /^edit/i })).toBeNull();
 	});
 
-	it("asks before blocking, and says that access to the whole platform goes", async () => {
+	it("asks before blocking, and says that access to this purveyor goes", async () => {
 		renderTable();
 
 		fireEvent.click(
@@ -207,25 +207,22 @@ describe("CertifiersTable", () => {
 		);
 
 		expect(
-			await screen.findByText(/access to the whole platform/i),
+			await screen.findByText(/access to your water purveyor/i),
 		).toBeTruthy();
 		// Nothing has been sent yet — the dialog is a question, not a progress bar.
 		expect(setStatusFn).not.toHaveBeenCalled();
 	});
 
-	it("spells out that blocking reaches the other purveyors this certifier works for", async () => {
-		// `certifiers.status` is one global column, not a per-purveyor one. A clerk
-		// who reads "block" as "remove from my list" would be taking somebody off
-		// another purveyor's jobs without knowing it, so the dialog says so.
+	it("spells out that blocking leaves the certifier's other purveyors alone", async () => {
+		// The block revokes this purveyor's authorization only. A clerk who
+		// expects "block" to ban the person outright should be told it does not.
 		renderTable();
 
 		fireEvent.click(
 			await screen.findByRole("button", { name: "Block Ada Tester" }),
 		);
 
-		expect(
-			await screen.findByText(/one account for every water purveyor/i),
-		).toBeTruthy();
+		expect(await screen.findByText(/that work is unaffected/i)).toBeTruthy();
 	});
 
 	it("does not reveal whether this certifier works for anyone else", async () => {
@@ -244,10 +241,10 @@ describe("CertifiersTable", () => {
 		);
 
 		const dialogCopy = (
-			await screen.findByText(/access to the whole platform/i)
+			await screen.findByText(/access to your water purveyor/i)
 		).parentElement?.textContent;
 
-		expect(dialogCopy).toMatch(/if this one also works for others/i);
+		expect(dialogCopy).toMatch(/if they also work for other water purveyors/i);
 		expect(dialogCopy).not.toMatch(/\d+\s+other/i);
 		expect(dialogCopy).not.toMatch(/(currently|already) works for/i);
 		expect(dialogCopy).not.toMatch(/is authorized by/i);
