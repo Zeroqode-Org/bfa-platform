@@ -238,8 +238,15 @@ certifier does for a purveyor already requires an `active` authorization:
   `authorization_status = 'active'` — see
   [Notice Workflow & Scheduler](/docs/notice-workflow#the-certifier-list-on-the-reminder).
 
-A certifier every purveyor has blocked still has an account: they sign in to an
-empty WP selector, with their past submissions still readable.
+A blocked purveyor disappears from the certifier's side entirely: every
+certifier screen is scoped to one authorized purveyor, so its drafts, submitted
+tests and their PDFs are out of reach until it unblocks them. The purveyor keeps
+the submitted tests. A certifier every purveyor has blocked still has an
+account and signs in to an empty WP selector.
+
+Only an `active` authorization can be blocked, and only a `revoked` one
+unblocked; a `pending` row is refused with `CONFLICT` rather than turned into an
+active one by a block and an unblock.
 
 Re-inviting does not undo a block. The second-purveyor path inserts its
 authorization with `ON CONFLICT DO NOTHING`, so a revoked row stays revoked
@@ -255,10 +262,10 @@ every active authorization of a blocked certifier was revoked — and cleared th
 account switch. `certifiers.status` is no longer written by any procedure; it
 remains the account-wide switch the login gate reads, described next.
 
-Still to do: the `certifiers` UPDATE grant and the WP branch of
-`private.enforce_certifier_column_permissions()` (0006/0007) still let a WP
-Admin set `certifiers.status` through PostgREST. The app never does, but the
-grant should move to `wp_certifier_authorizations` with its own policies.
+The same migration drops the `certifiers_update_status_own_wp` policy, so a
+WP Admin cannot set `certifiers.status` through PostgREST either. The WP branch
+of `private.enforce_certifier_column_permissions()` (0007) is left in place and
+is simply never reached.
 
 ### What the dialog says
 
@@ -400,7 +407,7 @@ reaching the table through PostgREST could see a row.
 | `certifiers_all_super_admin` | `super_admin` | Read and update, in every tenant |
 | `certifiers_select_self` | anyone | Read their own row, keyed on `auth.uid()` |
 | `certifiers_select_own_wp` | all three WP roles | Read certifiers authorized for their own purveyor |
-| `certifiers_update_status_own_wp` | WP Admin, WP SubAdmin | Update those rows |
+| ~~`certifiers_update_status_own_wp`~~ | WP Admin, WP SubAdmin | Dropped in `0023`: a WP no longer writes `certifiers` at all |
 | `certifiers_update_self` | certifier | Update their own row (added in `0007`) |
 
 Four deliberate decisions:

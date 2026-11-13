@@ -15,7 +15,7 @@
 -- active afterwards; each can now unblock for itself.
 --
 -- Runs as the migration owner, so the `certifiers` column trigger from 0007
--- (which judges PostgREST callers) passes it through. Access is unchanged.
+-- (which judges PostgREST callers) passes it through.
 -- ---------------------------------------------------------------------------
 UPDATE public.wp_certifier_authorizations AS auth
    SET authorization_status = 'revoked'
@@ -27,3 +27,10 @@ UPDATE public.wp_certifier_authorizations AS auth
 UPDATE public.certifiers
    SET status = 'active'
  WHERE status = 'blocked';
+--> statement-breakpoint
+-- And the PostgREST path to the old block goes with it: without this policy a
+-- WP Admin could still PATCH `certifiers.status` directly and lock a certifier
+-- out of every other purveyor, a block no screen can lift any more. The column
+-- grant from 0006/0017 stays — the Super-Admin and the certifier's own policies
+-- still use it — and the trigger's WP branch is simply never reached.
+DROP POLICY "certifiers_update_status_own_wp" ON public.certifiers;

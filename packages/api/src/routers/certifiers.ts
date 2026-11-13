@@ -173,58 +173,79 @@ export const certifiersRouter = router({
 				),
 			);
 
-			// Read first, for the previous status. It is what the audit line needs,
-			// and it is what tells a real transition from a request that asks for
-			// the value the row already holds.
-			const [existing] = await db
-				.select(certifierSelection)
-				.from(certifiers)
-				.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
-				.innerJoin(
-					wpCertifierAuthorizations,
-					eq(wpCertifierAuthorizations.certifierId, certifiers.id),
-				)
-				.where(ownAuthorization)
-				.limit(1);
+			// Read and write in one transaction, with the authorization row
+			// locked, so two admins pressing Block at once serialise: the second
+			// reads the first one's result and is a no-op instead of a second
+			// audit line for the same transition.
+			const result = await db.transaction(async (tx) => {
+				// Read first, for the previous status. It is what the audit line
+				// needs, and it is what tells a real transition from a request that
+				// asks for the value the row already holds.
+				const [existing] = await tx
+					.select({
+						...certifierSelection,
+						authorizationStatus: wpCertifierAuthorizations.authorizationStatus,
+					})
+					.from(certifiers)
+					.innerJoin(profiles, eq(profiles.id, certifiers.profileId))
+					.innerJoin(
+						wpCertifierAuthorizations,
+						eq(wpCertifierAuthorizations.certifierId, certifiers.id),
+					)
+					.where(ownAuthorization)
+					.limit(1)
+					.for("update", { of: wpCertifierAuthorizations });
 
-			if (!existing) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Certifier not found",
-				});
-			}
+				if (!existing) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Certifier not found",
+					});
+				}
 
-			// Blocking a certifier who is already blocked is not a change. Writing
-			// anyway would put a `certifier_status_changed` line with `from` equal
-			// to `to` in the audit trail, which is the one thing an audit trail
-			// must not do.
-			//
-			// Returning `existing` is honest: it is what the row holds, and it is
-			// what the caller asked for.
-			if (existing.status === input.status) {
-				return existing;
-			}
+				const { authorizationStatus, ...row } = existing;
 
-			const [updated] = await db
-				.update(wpCertifierAuthorizations)
-				.set({
-					authorizationStatus:
-						input.status === "blocked" ? "revoked" : "active",
-				})
-				.where(ownAuthorization)
-				.returning({ id: wpCertifierAuthorizations.id });
+				// Blocking a certifier who is already blocked is not a change.
+				// Writing anyway would put a `certifier_status_changed` line with
+				// `from` equal to `to` in the audit trail, which is the one thing an
+				// audit trail must not do.
+				//
+				// Returning the row is honest: it is what the row holds, and it is
+				// what the caller asked for.
+				if (row.status === input.status) {
+					return { row, changed: false };
+				}
 
-			if (!updated) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Certifier not found",
-				});
-			}
+				// Only `active` ⇄ `revoked`. A `pending` authorization reads as
+				// active on this screen, and blocking then unblocking it would
+				// otherwise promote it to `active` without the invitation ever being
+				// accepted.
+				if (authorizationStatus === "pending") {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message:
+							"This certifier has not accepted their invitation yet, so there is nothing to block.",
+					});
+				}
+
+				await tx
+					.update(wpCertifierAuthorizations)
+					.set({
+						authorizationStatus:
+							input.status === "blocked" ? "revoked" : "active",
+					})
+					.where(ownAuthorization);
+
+				return { row, changed: true };
+			});
+
+			if (!result.changed) return result.row;
+
+			const existing = result.row;
 
 			// One structured JSON line per status change, in the same shape as
 			// `repair_company_status_changed` and `caller_resolved`. A string log
-			// would not be greppable by tenant, which is the whole point of `wp_id`
-			// — and this is the event that takes somebody's platform access away.
+			// would not be greppable by tenant, which is the whole point of `wp_id`.
 			console.log(
 				JSON.stringify({
 					event: "certifier_status_changed",

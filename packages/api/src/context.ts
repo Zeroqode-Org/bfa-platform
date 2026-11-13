@@ -108,8 +108,8 @@ export type Caller = {
  *
  * Two switches can block an account, not one. `profiles.status` is the
  * platform-wide one a Super-Admin sets. `certifiers.status` is the certifier
- * account's own switch — a water purveyor's block from `/wp/certifiers` no
- * longer touches it, it revokes one authorization — and it is checked here for the same
+ * account's own switch; a water purveyor's block from `/wp/certifiers` revokes
+ * one authorization and leaves it alone. It is checked here for the same
  * reason the first one is: this function is the only gate between a valid
  * Supabase session and every protected procedure, so a flag that is not read
  * here is a flag the application does not act on. The row policies enforce the

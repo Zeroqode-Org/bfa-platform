@@ -83,6 +83,9 @@ let callerFor: (profileId: string) => {
 			certifierType: "internal" | "external";
 		}) => Promise<CertifierTypeRow>;
 	};
+	certifier: {
+		listAuthorizedWps: () => Promise<{ id: string }[]>;
+	};
 	whoami: () => Promise<unknown>;
 };
 
@@ -368,6 +371,49 @@ describeDb("WP certifier procedures", () => {
 	});
 
 	describe("setCertifierStatus", () => {
+		it("closes only the blocking purveyor's door, and keeps the certifier signed in", async () => {
+			await callerFor(ids.adminB).certifiers.setCertifierStatus({
+				id: certifierShared,
+				status: "blocked",
+			});
+
+			// The certifier still resolves — the account is untouched — and their
+			// WP selector drops the purveyor that blocked them, keeping the other.
+			const wps = await callerFor(
+				ids.certifierSharedProfile,
+			).certifier.listAuthorizedWps();
+			expect(wps.map((wp) => wp.id)).toEqual([wpA]);
+
+			await callerFor(ids.adminB).certifiers.setCertifierStatus({
+				id: certifierShared,
+				status: "active",
+			});
+			const restored = await callerFor(
+				ids.certifierSharedProfile,
+			).certifier.listAuthorizedWps();
+			expect(restored.map((wp) => wp.id).sort()).toEqual([wpA, wpB].sort());
+		});
+
+		it("refuses to block a pending authorization rather than activating it later", async () => {
+			await pool.query(
+				"update wp_certifier_authorizations set authorization_status = 'pending' where certifier_id = $1 and water_purveyor_id = $2",
+				[certifierA, wpA],
+			);
+
+			await expect(
+				callerFor(ids.adminA).certifiers.setCertifierStatus({
+					id: certifierA,
+					status: "blocked",
+				}),
+			).rejects.toThrow(/not accepted their invitation/i);
+
+			const { rows } = await pool.query(
+				"select authorization_status from wp_certifier_authorizations where certifier_id = $1 and water_purveyor_id = $2",
+				[certifierA, wpA],
+			);
+			expect(rows[0]?.authorization_status).toBe("pending");
+		});
+
 		it("blocks and unblocks a certifier in the caller's own purveyor", async () => {
 			const blocked = await callerFor(ids.adminA).certifiers.setCertifierStatus(
 				{
