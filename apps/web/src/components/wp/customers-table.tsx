@@ -345,10 +345,11 @@ export function CustomersTable() {
 										<TableCell className="font-semibold">
 											{customer.name}
 										</TableCell>
-										{/* A customer holding nothing is one no notice can
-										    reach, so the gap is flagged ("No asset") rather
-										    than left as a dash that reads like an optional
-										    field. A held asset without a BIN is attached, so
+										{/* A customer holding nothing gets no test
+										    reminders, so the gap is named ("No asset")
+										    rather than left as a dash — in a neutral badge,
+										    since the BIN is optional and this is a normal
+										    state. A held asset without a BIN is attached, so
 										    it reads plainly as "No BIN". */}
 										<TableCell className="tabular-nums">
 											{asset ? (
@@ -358,7 +359,7 @@ export function CustomersTable() {
 													asset.bin
 												)
 											) : (
-												<Badge variant="warning">No asset</Badge>
+												<Badge variant="neutral">No asset</Badge>
 											)}
 										</TableCell>
 										<TableCell className="text-muted-foreground tabular-nums">

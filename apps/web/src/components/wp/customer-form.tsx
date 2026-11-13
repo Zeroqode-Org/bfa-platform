@@ -383,8 +383,8 @@ export function CustomerForm({
 							Saving makes this customer the assembly&rsquo;s current occupant —
 							its reminders and notices go to them from then on.
 							{holdsAsset
-								? null
-								: " Leave it empty to attach one later; until then no automated notices reach this customer."}
+								? " To remove a BIN, use De-link on the Customers table."
+								: " Leave it empty to attach one later; until then this customer gets no test reminders or failure notices."}
 						</p>
 					)}
 				</div>

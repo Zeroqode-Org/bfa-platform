@@ -131,7 +131,7 @@ export const customersRouter = router({
 	createCustomer: wpProcedure
 		.input(createCustomerInput)
 		.mutation(async ({ ctx, input }) => {
-			const attachBin = input.attachBin;
+			const attachBin = input.attachBin ?? null;
 
 			const { row, attached } = await db.transaction(async (tx) => {
 				// No "is this address taken?" read first: the unique index decides, so
@@ -166,16 +166,14 @@ export const customersRouter = router({
 					});
 				}
 
-				const attachment = attachBin
-					? await attachByBin({
-							executor: tx,
-							waterPurveyorId: ctx.caller.waterPurveyorId,
-							customer: inserted,
-							bin: attachBin,
-							acknowledgeReassign: input.acknowledgeReassign ?? false,
-							actor: auditActor(ctx),
-						})
-					: null;
+				const attachment = await attachByBin({
+					executor: tx,
+					waterPurveyorId: ctx.caller.waterPurveyorId,
+					customer: inserted,
+					bin: attachBin,
+					acknowledgeReassign: input.acknowledgeReassign ?? false,
+					actor: auditActor(ctx),
+				});
 
 				return { row: inserted, attached: attachment };
 			});
@@ -260,17 +258,14 @@ export const customersRouter = router({
 
 				const next = customerColumns(input);
 
-				const attachBin = input.attachBin;
-				const attachment = attachBin
-					? await attachByBin({
-							executor: tx,
-							waterPurveyorId: ctx.caller.waterPurveyorId,
-							customer: current,
-							bin: attachBin,
-							acknowledgeReassign: input.acknowledgeReassign ?? false,
-							actor: auditActor(ctx),
-						})
-					: null;
+				const attachment = await attachByBin({
+					executor: tx,
+					waterPurveyorId: ctx.caller.waterPurveyorId,
+					customer: current,
+					bin: input.attachBin,
+					acknowledgeReassign: input.acknowledgeReassign ?? false,
+					actor: auditActor(ctx),
+				});
 
 				// Opening the edit dialog and pressing save without touching a field
 				// is not an update, and writing one anyway would make two records
@@ -408,7 +403,8 @@ type Attachment = { assetId: string; bin: string; from: string | null };
 
 /**
  * Attaches the customer to the caller's own asset with this BIN, inside the
- * caller's transaction.
+ * caller's transaction. No BIN — the field is optional — attaches nothing and
+ * returns null.
  *
  * The asset is looked up inside the caller's purveyor and locked, so a BIN
  * from another WP is simply not found, and two saves naming the same BIN at
@@ -437,10 +433,12 @@ async function attachByBin({
 	executor: JobExecutor;
 	waterPurveyorId: string;
 	customer: { id: string; status: "active" | "suspended" };
-	bin: string;
+	bin: string | null | undefined;
 	acknowledgeReassign: boolean;
 	actor: AuditActor;
 }): Promise<Attachment | null> {
+	if (!bin) return null;
+
 	const [asset] = await executor
 		.select({
 			id: bfaAssets.id,

@@ -358,10 +358,12 @@ describe("CustomerForm", () => {
 		).toBeNull();
 	});
 
-	it("creates a customer with the BIN left empty", () => {
+	it("creates a customer with the BIN cleared back to empty", () => {
 		const { onSubmit } = renderForm();
 
-		fillNewCustomer({ bin: "" });
+		// Typed, then cleared to whitespace: a real edit, not the untouched default.
+		fillNewCustomer({ bin: "1201" });
+		fireEvent.change(screen.getByLabelText("BIN"), { target: { value: "  " } });
 		submit();
 
 		expect(onSubmit).toHaveBeenCalledWith(
@@ -594,7 +596,9 @@ describe("CustomerForm — the BIN", () => {
 		const bin = screen.getByLabelText("BIN");
 		expect(bin.getAttribute("aria-required")).toBeNull();
 		expect(bin.getAttribute("placeholder")).toBe("Optional");
-		expect(screen.getByText(/Leave it empty to attach one later/)).toBeTruthy();
+		expect(
+			screen.getByText(/no test reminders or failure notices/),
+		).toBeTruthy();
 		expect(screen.queryByText("Attached BINs")).toBeNull();
 	});
 

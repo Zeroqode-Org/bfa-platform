@@ -41,8 +41,9 @@ Every automated notice is addressed through an asset's current customer
 occupies no asset is a record no notice can reach. **The BIN is optional all
 the same** (client request, 2026-11-02): every purveyor keeps its own
 BIN-to-customer list and matches them up later, so a customer may be saved
-holding no asset — the form says that no automated notices reach them until one
-is attached.
+holding no asset — the form says they get no test reminders or failure notices
+until one is attached. (The AG renewal notice and General Info broadcasts go to
+the customer's own email, so those still reach them.)
 
 - **Add customer** offers a BIN, optional. When one is given, the customer is
   inserted and attached in one transaction, so a BIN that cannot be honoured
@@ -51,10 +52,11 @@ is attached.
   BINs*, read from `bfa_assets.current_customer_id` within the purveyor) and
   offers *Attach another BIN*, optional. A customer who holds none sees an
   optional *BIN* field.
-- **Removing a BIN** is the table's *De-link*, below — the form only attaches.
+- **Removing a BIN** is the table's *De-link*, below — the form only attaches,
+  and its hint says so for a customer who holds one.
 - The table lists **one line per BIN**: a customer holding three assets is
   three lines, each with its own *De-link*. A customer holding nothing still
-  gets a line, with a *No asset* warning badge rather than a dash. (A held
+  gets a line, with a *No asset* neutral badge rather than a dash. (A held
   asset without a BIN reads *No BIN* in muted text — a different thing: it is
   attached, and has its own *De-link*.)
 
@@ -125,9 +127,9 @@ same email, not a new one (see [Workflow 1](/docs/notice-workflow)).
 The AG renewal notice is about the customer's rate, not an asset, so de-linking
 a BIN does not touch it.
 
-A customer de-linked from their last asset is a record no notice can reach, so
-the line shows the *No asset* badge and the edit form asks for a BIN again on the
-next save.
+A customer de-linked from their last asset gets no test reminders or failure
+notices, so the line shows the *No asset* badge. The edit form offers an
+optional BIN again; it does not require one.
 
 ### Why the AG renewal date is conditional
 
