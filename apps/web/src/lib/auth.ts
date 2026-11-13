@@ -21,7 +21,10 @@ import "server-only";
 
 import { callerRefusal } from "@bfa-platform/api/caller-refusal";
 import { type Caller, resolveEffectiveCaller } from "@bfa-platform/api/context";
-import { readVerifiedAuthSession } from "@bfa-platform/api/lib/auth-session";
+import {
+	readVerifiedAuthSession,
+	type VerifiedAuthSession,
+} from "@bfa-platform/api/lib/auth-session";
 import { IMPERSONATION_COOKIE_NAME } from "@bfa-platform/api/lib/impersonation-cookie";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -63,6 +66,37 @@ export async function requireAccount(): Promise<Account> {
 
 	if (!user) redirect("/login");
 
+	return resolveAccount(supabase, user, sessionId);
+}
+
+/**
+ * The signed-in account, or `null` for a visitor — without redirecting a
+ * visitor anywhere. For the one public page that changes with it: `/` shows
+ * the landing page to a visitor and forwards an account to its dashboard.
+ *
+ * One verified session read, the same as {@link requireAccount}: `getUser(jwt)`,
+ * not a bare cookie read, so a forged cookie gets the landing page rather than
+ * a redirect loop. A signed-in account with no usable profile is still sent to
+ * the sign-in notice, exactly as every gate does.
+ */
+export async function optionalAccount(): Promise<Account | null> {
+	const supabase = await createClient();
+	const { user, sessionId } = await readVerifiedAuthSession(supabase);
+
+	if (!user) return null;
+
+	return resolveAccount(supabase, user, sessionId);
+}
+
+/**
+ * The effective account for a verified user, or a redirect to the sign-in
+ * notice when the profile cannot be used.
+ */
+async function resolveAccount(
+	supabase: Awaited<ReturnType<typeof createClient>>,
+	user: NonNullable<VerifiedAuthSession["user"]>,
+	sessionId: string | null,
+): Promise<Account> {
 	const cookieStore = await cookies();
 
 	try {

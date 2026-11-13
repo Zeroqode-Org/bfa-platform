@@ -1,23 +1,29 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
-import { requireCaller } from "@/lib/auth";
+import { LandingPage } from "@/components/landing/landing-page";
+import { optionalAccount } from "@/lib/auth";
 import { landingRouteFor } from "@/lib/landing-route";
 
+export const metadata: Metadata = {
+	title: "Backflow Reporter.io — Cross-connection control & backflow tracking",
+	description:
+		"The cloud platform for water purveyors to track backflow assemblies, accept digital test reports from certified testers, and automate customer notices.",
+};
+
 /**
- * The front door. Renders nothing — it resolves who the caller is and sends
- * them to their own dashboard.
+ * The front door. A visitor without a session sees the public landing page; a
+ * signed-in account is resolved and sent to its own dashboard, as before.
  *
- * This replaces the workspace picker, which let anyone walk into any of the
- * three shells. It was a development shortcut from before roles were resolved
- * server-side; now that they are, asking people which role they are is both
- * pointless and misleading, since the sections enforce the answer anyway.
- *
- * The route itself stays, rather than being deleted: it is where the sign-in
- * screen sends people, what the sidebar logo links to, and the one place that
- * knows a role without being told one.
+ * The route stays the one place that knows a role without being told one: it
+ * is where the sign-in screen sends people and what the sidebar logo links to.
+ * There is no sign-up — accounts exist only through invitations — so the
+ * landing page offers sign-in and a contact form, nothing more.
  */
 export default async function Home() {
-	const caller = await requireCaller();
+	const account = await optionalAccount();
 
-	redirect(landingRouteFor(caller.globalRole));
+	if (!account) return <LandingPage />;
+
+	redirect(landingRouteFor(account.globalRole));
 }
