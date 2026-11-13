@@ -16,7 +16,6 @@ import {
 
 import {
 	CUSTOMER_BIN_NOT_FOUND_MESSAGE,
-	CUSTOMER_BIN_REQUIRED_MESSAGE,
 	customerBinReassignMessage,
 } from "../lib/customer-bin";
 import { CUSTOMER_STALE_MESSAGE } from "../lib/customer-revision";
@@ -937,23 +936,22 @@ describeDb("customers procedures", () => {
 	});
 
 	describe("the BIN", () => {
-		it("refuses a new customer with no BIN, and leaves no customer behind", async () => {
+		it("creates a customer with no BIN, attached to nothing", async () => {
 			const email = `no.bin.${randomUUID().slice(0, 6)}@example.com`;
 
-			await expect(
-				rawCallerFor(ids.adminA).customers.createCustomer({
-					name: "No BIN Given",
-					email,
-					address: FIXTURE_ADDRESS,
-					rateCategory: "standard",
-				}),
-			).rejects.toThrow(CUSTOMER_BIN_REQUIRED_MESSAGE);
+			const created = await rawCallerFor(ids.adminA).customers.createCustomer({
+				name: "No BIN Given",
+				email,
+				address: FIXTURE_ADDRESS,
+				rateCategory: "standard",
+			});
 
+			expect(created.bins).toEqual([]);
 			const { rows } = await pool.query(
 				"select 1 from customers where email = $1",
 				[email],
 			);
-			expect(rows).toHaveLength(0);
+			expect(rows).toHaveLength(1);
 		});
 
 		it("refuses a BIN no asset of this purveyor has — another purveyor's included", async () => {
@@ -1073,7 +1071,7 @@ describeDb("customers procedures", () => {
 			expect(updated.revision).toBe(created.revision);
 		});
 
-		it("requires a BIN from an existing customer who holds no asset", async () => {
+		it("saves an existing customer who holds no asset, and attaches one when named", async () => {
 			// The seeded fixture customer was written straight into the table and
 			// occupies nothing.
 			const update = {
@@ -1086,13 +1084,15 @@ describeDb("customers procedures", () => {
 				status: "active" as const,
 			};
 
-			await expect(
-				rawCallerFor(ids.adminA).customers.updateCustomer(update),
-			).rejects.toThrow(CUSTOMER_BIN_REQUIRED_MESSAGE);
+			const unchanged = await rawCallerFor(ids.adminA).customers.updateCustomer(
+				update,
+			);
+			expect(unchanged.bins).toEqual([]);
 
 			const bin = await seedAsset(wpA);
 			const updated = await rawCallerFor(ids.adminA).customers.updateCustomer({
 				...update,
+				expectedRevision: unchanged.revision,
 				attachBin: bin,
 			});
 

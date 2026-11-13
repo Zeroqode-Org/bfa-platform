@@ -267,14 +267,9 @@ export function CustomerForm({
 	const validation = useFormValidation({
 		values,
 		rules: {
-			// A customer reaches notices only through an asset, so one who holds
-			// none must name one. Once they hold one, another is optional.
-			attachBin: holdsAsset
-				? maxLength(ASSET_FIELD_LIMITS.bin)
-				: composeRules(
-						required("Enter the BIN of the assembly this customer occupies."),
-						maxLength(ASSET_FIELD_LIMITS.bin),
-					),
+			// Optional: purveyors match BINs to customers from their own lists
+			// and may attach one later. See `customer-bin.ts`.
+			attachBin: maxLength(ASSET_FIELD_LIMITS.bin),
 			name: composeRules(
 				required("Name is required."),
 				maxLength(CUSTOMER_FIELD_LIMITS.name),
@@ -359,10 +354,9 @@ export function CustomerForm({
 						name="attachBin"
 						value={values.attachBin}
 						onChange={(event) => update("attachBin", event.target.value)}
-						placeholder={holdsAsset ? "Optional" : "BIN-10041"}
+						placeholder="Optional"
 						autoComplete="off"
 						disabled={pending}
-						aria-required={holdsAsset ? undefined : "true"}
 					/>
 					<FieldError {...validation.errorProps("attachBin")} />
 					{reassignQuestion ? (
@@ -388,6 +382,9 @@ export function CustomerForm({
 						<p className="text-[12px] text-muted-foreground">
 							Saving makes this customer the assembly&rsquo;s current occupant —
 							its reminders and notices go to them from then on.
+							{holdsAsset
+								? " To remove a BIN, use De-link on the Customers table."
+								: " Leave it empty to attach one later; until then this customer gets no test reminders or failure notices."}
 						</p>
 					)}
 				</div>

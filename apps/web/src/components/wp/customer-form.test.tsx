@@ -2,7 +2,6 @@
 
 import {
 	CUSTOMER_BIN_NOT_FOUND_MESSAGE,
-	CUSTOMER_BIN_REQUIRED_MESSAGE,
 	customerBinReassignMessage,
 } from "@bfa-platform/api/lib/customer-bin";
 import { CUSTOMER_STALE_MESSAGE } from "@bfa-platform/api/lib/customer-revision";
@@ -31,11 +30,9 @@ import type { Customer } from "./customer-types";
  * on the client, and that rule has to hold whichever control set it.
  *
  * The BIN is the field that ties a customer to an asset — and so to every
- * notice — so a customer holding none must name one, and one who holds some
- * sees them listed and may attach another.
+ * notice. It is optional: a customer may be saved holding none, and one who
+ * holds some sees them listed and may attach another.
  */
-
-const BIN_REQUIRED = "Enter the BIN of the assembly this customer occupies.";
 
 function customer(overrides: Partial<Customer> = {}): Customer {
 	return {
@@ -250,15 +247,13 @@ describe("customerFormErrors", () => {
 		).toEqual({ errorMessage: CUSTOMER_STALE_MESSAGE });
 	});
 
-	it("routes a missing or unknown BIN to the BIN field", () => {
-		for (const message of [
-			CUSTOMER_BIN_REQUIRED_MESSAGE,
-			CUSTOMER_BIN_NOT_FOUND_MESSAGE,
-		]) {
-			expect(
-				customerFormErrors({ message, data: { code: "NOT_FOUND" } }),
-			).toEqual({ binErrorMessage: message });
-		}
+	it("routes an unknown BIN to the BIN field", () => {
+		expect(
+			customerFormErrors({
+				message: CUSTOMER_BIN_NOT_FOUND_MESSAGE,
+				data: { code: "NOT_FOUND" },
+			}),
+		).toEqual({ binErrorMessage: CUSTOMER_BIN_NOT_FOUND_MESSAGE });
 	});
 
 	it("routes a BIN held by somebody else to the reassignment question", () => {
@@ -345,7 +340,6 @@ describe("CustomerForm", () => {
 		expect(
 			screen.getAllByRole("alert").map((node) => node.textContent),
 		).toEqual([
-			BIN_REQUIRED,
 			"Name is required.",
 			"Email is required.",
 			"Address is required.",
@@ -353,11 +347,27 @@ describe("CustomerForm", () => {
 			"Select a status.",
 		]);
 
-		const bin = screen.getByLabelText("BIN");
-		expect(document.activeElement).toBe(bin);
-		expect(bin.getAttribute("aria-invalid")).toBe("true");
-		expect(bin.getAttribute("aria-describedby")).toBe(
-			screen.getByText(BIN_REQUIRED).id,
+		const name = screen.getByLabelText("Name");
+		expect(document.activeElement).toBe(name);
+		expect(name.getAttribute("aria-invalid")).toBe("true");
+		expect(name.getAttribute("aria-describedby")).toBe(
+			screen.getByText("Name is required.").id,
+		);
+		expect(
+			screen.getByLabelText("BIN").getAttribute("aria-invalid"),
+		).toBeNull();
+	});
+
+	it("creates a customer with the BIN cleared back to empty", () => {
+		const { onSubmit } = renderForm();
+
+		// Typed, then cleared to whitespace: a real edit, not the untouched default.
+		fillNewCustomer({ bin: "1201" });
+		fireEvent.change(screen.getByLabelText("BIN"), { target: { value: "  " } });
+		submit();
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ attachBin: null, name: "Marta Ellison" }),
 		);
 	});
 
@@ -580,11 +590,15 @@ describe("CustomerForm — duplicate email refusal", () => {
 });
 
 describe("CustomerForm — the BIN", () => {
-	it("asks a new customer for a BIN, and marks it required", () => {
+	it("offers a new customer an optional BIN", () => {
 		renderForm();
 
 		const bin = screen.getByLabelText("BIN");
-		expect(bin.getAttribute("aria-required")).toBe("true");
+		expect(bin.getAttribute("aria-required")).toBeNull();
+		expect(bin.getAttribute("placeholder")).toBe("Optional");
+		expect(
+			screen.getByText(/no test reminders or failure notices/),
+		).toBeTruthy();
 		expect(screen.queryByText("Attached BINs")).toBeNull();
 	});
 
@@ -626,7 +640,7 @@ describe("CustomerForm — the BIN", () => {
 		);
 	});
 
-	it("requires a BIN from an existing customer who holds none", () => {
+	it("saves an existing customer who holds no BIN without asking for one", () => {
 		const { onSubmit } = renderForm({
 			initialValues: customerToFormValues(customer({ bins: [] })),
 			heldBins: [],
@@ -635,8 +649,9 @@ describe("CustomerForm — the BIN", () => {
 
 		submit("Save changes");
 
-		expect(onSubmit).not.toHaveBeenCalled();
-		expect(screen.getByText(BIN_REQUIRED)).toBeTruthy();
+		expect(onSubmit).toHaveBeenLastCalledWith(
+			expect.objectContaining({ attachBin: null }),
+		);
 	});
 
 	it("shows an unknown BIN under the BIN field until the BIN changes", () => {

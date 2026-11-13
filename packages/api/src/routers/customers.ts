@@ -11,7 +11,6 @@ import {
 import { attachCustomerToAsset } from "../lib/customer-assignment";
 import {
 	CUSTOMER_BIN_NOT_FOUND_MESSAGE,
-	CUSTOMER_BIN_REQUIRED_MESSAGE,
 	customerBinReassignMessage,
 } from "../lib/customer-bin";
 import {
@@ -125,22 +124,14 @@ export const customersRouter = router({
 	 * same transaction as the insert, so a customer that fails to save never
 	 * leaves a job behind to mail them.
 	 *
-	 * A new customer must name the BIN of an asset to occupy — a customer
-	 * attached to nothing is a record no notice can reach — and the attachment
-	 * shares the insert's transaction, so a BIN that cannot be honoured leaves
-	 * no customer behind either.
+	 * The BIN of an asset to occupy is optional — see `customer-bin.ts`. When
+	 * one is named, the attachment shares the insert's transaction, so a BIN
+	 * that cannot be honoured leaves no customer behind either.
 	 */
 	createCustomer: wpProcedure
 		.input(createCustomerInput)
 		.mutation(async ({ ctx, input }) => {
-			const attachBin = input.attachBin;
-
-			if (!attachBin) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: CUSTOMER_BIN_REQUIRED_MESSAGE,
-				});
-			}
+			const attachBin = input.attachBin ?? null;
 
 			const { row, attached } = await db.transaction(async (tx) => {
 				// No "is this address taken?" read first: the unique index decides, so
@@ -234,9 +225,8 @@ export const customersRouter = router({
 	 * `attachBin` rides in the same transaction. Attaching is not a change to
 	 * the customer row — it moves an asset's pointer — so it neither needs the
 	 * revision check nor bumps the revision, and a save that only attaches a
-	 * BIN is still a no-op for the row itself. A customer who holds no asset
-	 * must name one, so a record no notice can reach is not saved as though it
-	 * were complete.
+	 * BIN is still a no-op for the row itself. Leaving it empty attaches
+	 * nothing, whether or not the customer already holds an asset.
 	 */
 	updateCustomer: wpProcedure
 		.input(updateCustomerInput)
@@ -268,17 +258,14 @@ export const customersRouter = router({
 
 				const next = customerColumns(input);
 
-				const attachBin = input.attachBin;
-				const attachment = attachBin
-					? await attachByBin({
-							executor: tx,
-							waterPurveyorId: ctx.caller.waterPurveyorId,
-							customer: current,
-							bin: attachBin,
-							acknowledgeReassign: input.acknowledgeReassign ?? false,
-							actor: auditActor(ctx),
-						})
-					: await requireHeldAsset(tx, current.id, ctx.caller.waterPurveyorId);
+				const attachment = await attachByBin({
+					executor: tx,
+					waterPurveyorId: ctx.caller.waterPurveyorId,
+					customer: current,
+					bin: input.attachBin,
+					acknowledgeReassign: input.acknowledgeReassign ?? false,
+					actor: auditActor(ctx),
+				});
 
 				// Opening the edit dialog and pressing save without touching a field
 				// is not an update, and writing one anyway would make two records
@@ -416,7 +403,8 @@ type Attachment = { assetId: string; bin: string; from: string | null };
 
 /**
  * Attaches the customer to the caller's own asset with this BIN, inside the
- * caller's transaction.
+ * caller's transaction. No BIN — the field is optional — attaches nothing and
+ * returns null.
  *
  * The asset is looked up inside the caller's purveyor and locked, so a BIN
  * from another WP is simply not found, and two saves naming the same BIN at
@@ -445,10 +433,12 @@ async function attachByBin({
 	executor: JobExecutor;
 	waterPurveyorId: string;
 	customer: { id: string; status: "active" | "suspended" };
-	bin: string;
+	bin: string | null | undefined;
 	acknowledgeReassign: boolean;
 	actor: AuditActor;
 }): Promise<Attachment | null> {
+	if (!bin) return null;
+
 	const [asset] = await executor
 		.select({
 			id: bfaAssets.id,
@@ -509,37 +499,6 @@ async function attachByBin({
 	});
 
 	return { assetId: asset.id, bin, from: asset.currentCustomerId };
-}
-
-/**
- * Refuses a save that would leave the customer attached to nothing. Returns
- * null — nothing was attached — so it reads the same as `attachByBin` where
- * the two are chosen between.
- */
-async function requireHeldAsset(
-	executor: JobExecutor,
-	customerId: string,
-	waterPurveyorId: string,
-): Promise<null> {
-	const [held] = await executor
-		.select({ id: bfaAssets.id })
-		.from(bfaAssets)
-		.where(
-			and(
-				eq(bfaAssets.currentCustomerId, customerId),
-				eq(bfaAssets.waterPurveyorId, waterPurveyorId),
-			),
-		)
-		.limit(1);
-
-	if (!held) {
-		throw new TRPCError({
-			code: "BAD_REQUEST",
-			message: CUSTOMER_BIN_REQUIRED_MESSAGE,
-		});
-	}
-
-	return null;
 }
 
 /**
