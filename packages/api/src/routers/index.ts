@@ -3,6 +3,7 @@ import { assetsRouter } from "./assets";
 import { certifierRouter } from "./certifier";
 import { certifierWizardRouter } from "./certifier-wizard";
 import { certifiersRouter } from "./certifiers";
+import { contactRouter } from "./contact";
 import { customersRouter } from "./customers";
 import { dashboardRouter } from "./dashboard";
 import { invitationsRouter } from "./invitations";
@@ -25,6 +26,7 @@ export const appRouter = router({
 	notices: noticesRouter,
 	submittedTests: submittedTestsRouter,
 	session: sessionRouter,
+	contact: contactRouter,
 	healthCheck: publicProcedure.query(() => {
 		return "OK";
 	}),
