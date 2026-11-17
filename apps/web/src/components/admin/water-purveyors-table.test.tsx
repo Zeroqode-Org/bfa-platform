@@ -25,6 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listFn = vi.fn();
 const setStatusFn = vi.fn();
+const setFlagFn = vi.fn();
+const toastSuccess = vi.fn();
 const startFn = vi.fn();
 const hardNavigate = vi.fn();
 const toastError = vi.fn();
@@ -46,6 +48,13 @@ vi.mock("@/utils/trpc", () => ({
 					mutationFn: (input: unknown) => setStatusFn(input),
 				}),
 			},
+			setFeatureFlag: {
+				mutationOptions: (options: Record<string, unknown>) => ({
+					...options,
+					mutationKey: ["superAdmin", "setFeatureFlag"],
+					mutationFn: (input: unknown) => setFlagFn(input),
+				}),
+			},
 			startImpersonation: {
 				mutationOptions: (options: Record<string, unknown>) => ({
 					...options,
@@ -62,7 +71,7 @@ vi.mock("@/lib/hard-navigate", () => ({
 }));
 
 vi.mock("sonner", () => ({
-	toast: { success: vi.fn(), error: toastError },
+	toast: { success: toastSuccess, error: toastError },
 }));
 
 const { WaterPurveyorsTable } = await import("./water-purveyors-table");
@@ -77,6 +86,18 @@ const riverside = {
 	certifiers: 3,
 	submissions: 7,
 	contact: "Riley Purveyor",
+	features: {
+		automated_notices: {
+			isEnabled: false,
+			updatedAt: null,
+			updatedByName: null,
+		},
+		ag_renewal_notice: {
+			isEnabled: false,
+			updatedAt: null,
+			updatedByName: null,
+		},
+	},
 };
 
 const lakeside = {
@@ -84,6 +105,14 @@ const lakeside = {
 	id: "1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9",
 	companyName: "Lakeside Utilities",
 	contact: null,
+	features: {
+		...riverside.features,
+		automated_notices: {
+			isEnabled: true,
+			updatedAt: new Date("2026-11-02T12:00:00Z"),
+			updatedByName: "Sam Super",
+		},
+	},
 };
 
 const blockedWp = {
@@ -122,6 +151,8 @@ function impersonateButtonIn(companyName: string) {
 beforeEach(() => {
 	listFn.mockReset();
 	setStatusFn.mockReset();
+	setFlagFn.mockReset();
+	toastSuccess.mockReset();
 	startFn.mockReset();
 	hardNavigate.mockReset();
 	toastError.mockReset();
@@ -224,5 +255,76 @@ describe("WaterPurveyorsTable impersonation", () => {
 		await screen.findByText(blockedWp.companyName);
 
 		expect(impersonateButtonIn(blockedWp.companyName).disabled).toBe(true);
+	});
+});
+
+function ensSwitchIn(companyName: string) {
+	return within(rowFor(companyName)).getByRole("switch", {
+		name: `Email notifications for ${companyName}`,
+	});
+}
+
+describe("WaterPurveyorsTable ENS switch", () => {
+	it("shows each purveyor's state explicitly, off by default", async () => {
+		renderTable();
+		await screen.findByText(riverside.companyName);
+
+		expect(
+			ensSwitchIn(riverside.companyName).getAttribute("aria-checked"),
+		).toBe("false");
+		expect(within(rowFor(riverside.companyName)).getByText("Off")).toBeTruthy();
+		expect(ensSwitchIn(riverside.companyName).getAttribute("title")).toBe(
+			"Never changed",
+		);
+
+		expect(ensSwitchIn(lakeside.companyName).getAttribute("aria-checked")).toBe(
+			"true",
+		);
+		expect(ensSwitchIn(lakeside.companyName).getAttribute("title")).toBe(
+			"Last changed by Sam Super on Nov 2, 2026",
+		);
+	});
+
+	it("turns notices on for that row only and says how many were rescheduled", async () => {
+		setFlagFn.mockResolvedValue({
+			waterPurveyorId: riverside.id,
+			feature: "automated_notices",
+			isEnabled: true,
+			restored: 15,
+		});
+
+		renderTable();
+		await screen.findByText(riverside.companyName);
+
+		fireEvent.click(ensSwitchIn(riverside.companyName));
+
+		await waitFor(() =>
+			expect(toastSuccess).toHaveBeenCalledWith(
+				"Email notifications on for Riverside Water District — 15 skipped notices rescheduled",
+			),
+		);
+		expect(setFlagFn).toHaveBeenCalledWith({
+			waterPurveyorId: riverside.id,
+			feature: "automated_notices",
+			isEnabled: true,
+		});
+	});
+
+	it("turns notices off and shows the server's refusal", async () => {
+		setFlagFn.mockRejectedValue(new Error("Water purveyor not found"));
+
+		renderTable();
+		await screen.findByText(lakeside.companyName);
+
+		fireEvent.click(ensSwitchIn(lakeside.companyName));
+
+		await waitFor(() =>
+			expect(toastError).toHaveBeenCalledWith("Water purveyor not found"),
+		);
+		expect(setFlagFn).toHaveBeenCalledWith({
+			waterPurveyorId: lakeside.id,
+			feature: "automated_notices",
+			isEnabled: false,
+		});
 	});
 });

@@ -389,8 +389,22 @@ reason in `last_error` — deliberately not `failed`, because switching off a pa
 add-on is not a delivery problem and must not be retried as one.
 
 Scheduling therefore does not consult the flag at all. That costs one row that
-will cancel itself for a purveyor without the add-on, and buys the property that
-switching the flag *on* needs no backfill.
+will cancel itself for a purveyor without the add-on.
+
+A cancellation is final, so a purveyor whose reminders came due while the
+add-on was off would stay silent after it is switched back on. Switching the
+flag on (`superAdmin.setFeatureFlag`, the **ENS** switch on the
+Super-Admin's purveyor list) therefore restores them in the same transaction:
+for every asset whose *newest* notice job was cancelled for the flag and that
+has nothing live, the chain resumes from the asset's current date with **one
+email for where the calendar is now**. If the cancelled stage is still ahead it
+keeps its own day. If the calendar has moved past it, the restore skips to the
+latest stage already due (a long-overdue assembly gets the final notice alone)
+and sends it on the next tick; the stages it missed are not replayed, so a
+customer never gets a reminder about a long-passed deadline followed by a burst
+of late notices. Nothing earlier than the cancelled stage is chosen, and
+anything a passing test, a date change or a completed chain settled is left
+alone. See `scheduler/feature-restore.ts`.
 
 ### 3. The recipient, through the asset's current customer
 
@@ -778,8 +792,9 @@ is confirmed ([the annual cycle](#the-annual-cycle)). Code:
 — the same rule as `automated_notices`, and independent of it. A missing row is
 off. Off cancels the job (`cancelled`, reason in `last_error`) without sending,
 without spending an attempt, and without moving the date or queueing next
-year's, so switching the add-on on later needs no backfill for dates still
-ahead, and switching it off stops notices already queued.
+year's, and switching it off stops notices already queued. Switching it back
+on restores each renewal the switch-off cancelled, for customers still on the
+agricultural rate with a renewal date — the same rule as the notice chain.
 
 ### When it is due
 

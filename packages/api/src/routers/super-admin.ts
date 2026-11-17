@@ -5,6 +5,7 @@ import {
 	testSubmissions,
 	waterPurveyors,
 	wpCertifierAuthorizations,
+	wpFeatureFlags,
 } from "@bfa-platform/db/schema";
 import { and, asc, count, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -23,6 +24,36 @@ import {
 	serializeClearedImpersonationCookie,
 	serializeImpersonationCookie,
 } from "../lib/impersonation-cookie";
+import {
+	restoreAgRenewalsForPurveyor,
+	restoreNoticeChainsForPurveyor,
+} from "../scheduler/feature-restore";
+
+/**
+ * The optional features a Super-Admin switches per purveyor, in the order the
+ * admin screen lists them. Mirrors the `feature_flag` enum.
+ */
+export const OPTIONAL_FEATURES = [
+	"automated_notices",
+	"ag_renewal_notice",
+] as const;
+
+export type OptionalFeature = (typeof OPTIONAL_FEATURES)[number];
+
+/** One feature switch as the admin screen shows it. A missing row is off. */
+export type FeatureFlagState = {
+	isEnabled: boolean;
+	/** When it was last switched; null when it never was. */
+	updatedAt: Date | null;
+	/** Who last switched it; null when never switched, or set outside the app. */
+	updatedByName: string | null;
+};
+
+const FEATURE_OFF: FeatureFlagState = {
+	isEnabled: false,
+	updatedAt: null,
+	updatedByName: null,
+};
 
 /** Rows of `{ wpId, value }` into a lookup, so the merge below stays O(n). */
 function toCountMap(rows: { wpId: string; value: number }[]) {
@@ -46,58 +77,77 @@ export const superAdminRouter = router({
 	 * is the authorization boundary, not a row policy.
 	 */
 	listWaterPurveyors: superAdminProcedure.query(async () => {
-		const [purveyors, assetRows, certifierRows, submissionRows, adminRows] =
-			await Promise.all([
-				db
-					.select({
-						id: waterPurveyors.id,
-						companyName: waterPurveyors.companyName,
-						pwsid: waterPurveyors.pwsid,
-						status: waterPurveyors.status,
-						createdAt: waterPurveyors.createdAt,
-					})
-					.from(waterPurveyors)
-					.orderBy(asc(waterPurveyors.companyName)),
+		const [
+			purveyors,
+			assetRows,
+			certifierRows,
+			submissionRows,
+			adminRows,
+			flagRows,
+		] = await Promise.all([
+			db
+				.select({
+					id: waterPurveyors.id,
+					companyName: waterPurveyors.companyName,
+					pwsid: waterPurveyors.pwsid,
+					status: waterPurveyors.status,
+					createdAt: waterPurveyors.createdAt,
+				})
+				.from(waterPurveyors)
+				.orderBy(asc(waterPurveyors.companyName)),
 
-				db
-					.select({ wpId: bfaAssets.waterPurveyorId, value: count() })
-					.from(bfaAssets)
-					.groupBy(bfaAssets.waterPurveyorId),
+			db
+				.select({ wpId: bfaAssets.waterPurveyorId, value: count() })
+				.from(bfaAssets)
+				.groupBy(bfaAssets.waterPurveyorId),
 
-				db
-					.select({
-						wpId: wpCertifierAuthorizations.waterPurveyorId,
-						value: count(),
-					})
-					.from(wpCertifierAuthorizations)
-					.where(eq(wpCertifierAuthorizations.authorizationStatus, "active"))
-					.groupBy(wpCertifierAuthorizations.waterPurveyorId),
+			db
+				.select({
+					wpId: wpCertifierAuthorizations.waterPurveyorId,
+					value: count(),
+				})
+				.from(wpCertifierAuthorizations)
+				.where(eq(wpCertifierAuthorizations.authorizationStatus, "active"))
+				.groupBy(wpCertifierAuthorizations.waterPurveyorId),
 
-				db
-					.select({ wpId: testSubmissions.waterPurveyorId, value: count() })
-					.from(testSubmissions)
-					.where(eq(testSubmissions.status, "submitted"))
-					.groupBy(testSubmissions.waterPurveyorId),
+			db
+				.select({ wpId: testSubmissions.waterPurveyorId, value: count() })
+				.from(testSubmissions)
+				.where(eq(testSubmissions.status, "submitted"))
+				.groupBy(testSubmissions.waterPurveyorId),
 
-				// The contact shown per purveyor. `water_purveyors` carries no
-				// contact column and `profiles` holds no email — that lives in
-				// auth.users — so the WP's own admin is the only name available
-				// without a schema change. Blocked admins are skipped: the column
-				// answers "who do I reach out to".
-				db
-					.select({
-						wpId: profiles.waterPurveyorId,
-						fullName: profiles.fullName,
-					})
-					.from(profiles)
-					.where(
-						and(
-							eq(profiles.globalRole, "wp_admin"),
-							eq(profiles.status, "active"),
-						),
-					)
-					.orderBy(asc(profiles.createdAt), asc(profiles.id)),
-			]);
+			// The contact shown per purveyor. `water_purveyors` carries no
+			// contact column and `profiles` holds no email — that lives in
+			// auth.users — so the WP's own admin is the only name available
+			// without a schema change. Blocked admins are skipped: the column
+			// answers "who do I reach out to".
+			db
+				.select({
+					wpId: profiles.waterPurveyorId,
+					fullName: profiles.fullName,
+				})
+				.from(profiles)
+				.where(
+					and(
+						eq(profiles.globalRole, "wp_admin"),
+						eq(profiles.status, "active"),
+					),
+				)
+				.orderBy(asc(profiles.createdAt), asc(profiles.id)),
+
+			// Every flag row on the platform, with the name of who last
+			// switched it. A few rows per purveyor at most.
+			db
+				.select({
+					wpId: wpFeatureFlags.waterPurveyorId,
+					feature: wpFeatureFlags.feature,
+					isEnabled: wpFeatureFlags.isEnabled,
+					updatedAt: wpFeatureFlags.updatedAt,
+					updatedByName: profiles.fullName,
+				})
+				.from(wpFeatureFlags)
+				.leftJoin(profiles, eq(profiles.id, wpFeatureFlags.updatedByProfileId)),
+		]);
 
 		const assets = toCountMap(assetRows);
 		const certifiers = toCountMap(certifierRows);
@@ -111,6 +161,15 @@ export const superAdminRouter = router({
 			if (!contacts.has(row.wpId)) contacts.set(row.wpId, row.fullName);
 		}
 
+		const flags = new Map<string, FeatureFlagState>();
+		for (const row of flagRows) {
+			flags.set(`${row.wpId}:${row.feature}`, {
+				isEnabled: row.isEnabled,
+				updatedAt: row.updatedAt,
+				updatedByName: row.updatedByName,
+			});
+		}
+
 		return purveyors.map((purveyor) => ({
 			...purveyor,
 			// A purveyor with nothing counted has no row in its aggregate.
@@ -119,6 +178,14 @@ export const superAdminRouter = router({
 			submissions: submissions.get(purveyor.id) ?? 0,
 			// null when the WP has no active admin, or the admin has no name set.
 			contact: contacts.get(purveyor.id) ?? null,
+			// Every optional feature, present whether or not a row exists, so the
+			// screen shows an explicit "off" rather than nothing.
+			features: Object.fromEntries(
+				OPTIONAL_FEATURES.map((feature) => [
+					feature,
+					flags.get(`${purveyor.id}:${feature}`) ?? FEATURE_OFF,
+				]),
+			) as Record<OptionalFeature, FeatureFlagState>,
 		}));
 	}),
 
@@ -168,6 +235,135 @@ export const superAdminRouter = router({
 			);
 
 			return row;
+		}),
+
+	/**
+	 * Switches one optional feature on or off for one water purveyor.
+	 *
+	 * Upserts the purveyor's single row for that feature and records who did it.
+	 * Super-Admin only, enforced here: a purveyor cannot switch its own paid
+	 * add-ons, and the privileged connection means no row policy would stop it.
+	 *
+	 * Switching **on** also restores what the switch-off cancelled — see
+	 * `scheduler/feature-restore.ts`. The handlers cancel a job that runs while
+	 * its feature is off, so without this the assemblies whose reminders came due
+	 * in the meantime would stay silent. Flag and restored jobs commit in one
+	 * transaction. Switching **off** writes only the flag: live jobs cancel
+	 * themselves when they run.
+	 *
+	 * Switching on a flag that is already on writes and logs no flag change, but
+	 * still runs the restore: it touches only assets the switch-off stranded and
+	 * that have nothing live, so a second "on" is safe and is the way to pick up
+	 * anything a first one missed.
+	 */
+	setFeatureFlag: superAdminProcedure
+		.input(
+			z.object({
+				waterPurveyorId: z.uuid(),
+				feature: z.enum(OPTIONAL_FEATURES),
+				isEnabled: z.boolean(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const actor = auditActor(ctx);
+
+			const result = await db.transaction(async (tx) => {
+				// Locks the purveyor row, so two admins switching the same flag
+				// serialise, and so does a handler cancelling a job for the flag
+				// being off (`cancelRunningJobWhileFeatureOff` takes FOR SHARE on
+				// it) — the restore below then sees that cancellation, or the
+				// handler sees the flag on. NO KEY UPDATE rather than UPDATE: it
+				// does not block the FK KEY SHARE every scheduled_jobs, asset or
+				// customer insert for this purveyor takes, including a handler's
+				// successor insert made while it holds an asset lock this restore
+				// is waiting for.
+				const [purveyor] = await tx
+					.select({ id: waterPurveyors.id })
+					.from(waterPurveyors)
+					.where(eq(waterPurveyors.id, input.waterPurveyorId))
+					.for("no key update")
+					.limit(1);
+
+				if (!purveyor) return null;
+
+				const [existing] = await tx
+					.select({ isEnabled: wpFeatureFlags.isEnabled })
+					.from(wpFeatureFlags)
+					.where(
+						and(
+							eq(wpFeatureFlags.waterPurveyorId, input.waterPurveyorId),
+							eq(wpFeatureFlags.feature, input.feature),
+						),
+					)
+					.limit(1);
+
+				const changed = (existing?.isEnabled ?? false) !== input.isEnabled;
+
+				if (changed) {
+					await tx
+						.insert(wpFeatureFlags)
+						.values({
+							waterPurveyorId: input.waterPurveyorId,
+							feature: input.feature,
+							isEnabled: input.isEnabled,
+							updatedByProfileId: ctx.actor.profileId,
+						})
+						.onConflictDoUpdate({
+							target: [wpFeatureFlags.waterPurveyorId, wpFeatureFlags.feature],
+							set: {
+								isEnabled: input.isEnabled,
+								updatedByProfileId: ctx.actor.profileId,
+								updatedAt: new Date(),
+							},
+						});
+				}
+
+				let restored = 0;
+
+				if (input.isEnabled) {
+					const restore =
+						input.feature === "automated_notices"
+							? restoreNoticeChainsForPurveyor
+							: restoreAgRenewalsForPurveyor;
+
+					restored = await restore({
+						executor: tx,
+						waterPurveyorId: input.waterPurveyorId,
+						actor,
+					});
+				}
+
+				return { changed, restored };
+			});
+
+			if (!result) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Water purveyor not found",
+				});
+			}
+
+			if (result.changed) {
+				console.log(
+					JSON.stringify({
+						event: "feature_flag_changed",
+						...auditActorFields(actor),
+						wp_id: input.waterPurveyorId,
+						feature: input.feature,
+						is_enabled: input.isEnabled,
+						restored_jobs: result.restored,
+						timestamp: new Date().toISOString(),
+					}),
+				);
+			}
+
+			return {
+				waterPurveyorId: input.waterPurveyorId,
+				feature: input.feature,
+				isEnabled: input.isEnabled,
+				changed: result.changed,
+				restored: result.restored,
+			};
 		}),
 
 	/**

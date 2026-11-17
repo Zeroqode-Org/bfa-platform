@@ -19,6 +19,7 @@ import {
 	EmptyTitle,
 } from "@bfa-platform/ui/components/empty";
 import { Skeleton } from "@bfa-platform/ui/components/skeleton";
+import { Switch } from "@bfa-platform/ui/components/switch";
 import {
 	Table,
 	TableBody,
@@ -40,7 +41,7 @@ type BlockTarget = { id: string; companyName: string };
 
 const countFormatter = new Intl.NumberFormat("en-US");
 
-const COLUMN_COUNT = 7;
+const COLUMN_COUNT = 8;
 const SKELETON_ROWS = 4;
 
 /**
@@ -69,6 +70,31 @@ export function WaterPurveyorsTable() {
 	// screen through the dialog's closing animation instead of blanking out.
 	const [blockTarget, setBlockTarget] = useState<BlockTarget | null>(null);
 	const [isBlockDialogOpen, setIsBlockDialogOpen] = useState(false);
+
+	// ENS — the purveyor's automated email notices, a paid add-on switched per
+	// row. Turning it on also reschedules the notices skipped while it was off,
+	// and the toast says how many. Refetched rather than patched, because the
+	// list also carries who changed it and when.
+	const setEns = useMutation(
+		trpc.superAdmin.setFeatureFlag.mutationOptions({
+			onSuccess: (result) => {
+				const name =
+					data?.find((wp) => wp.id === result.waterPurveyorId)?.companyName ??
+					"Water purveyor";
+
+				toast.success(
+					result.isEnabled
+						? `Email notifications on for ${name}${rescheduledSuffix(result.restored)}`
+						: `Email notifications off for ${name}`,
+				);
+
+				return queryClient.invalidateQueries({
+					queryKey: trpc.superAdmin.listWaterPurveyors.queryKey(),
+				});
+			},
+			onError: (mutationError) => toast.error(mutationError.message),
+		}),
+	);
 
 	const setStatus = useMutation(
 		trpc.superAdmin.setWaterPurveyorStatus.mutationOptions({
@@ -111,6 +137,11 @@ export function WaterPurveyorsTable() {
 							<TableHead>Certifiers</TableHead>
 							<TableHead>Submissions</TableHead>
 							<TableHead>Status</TableHead>
+							<TableHead>
+								<span title="Email Notification System — automated reminder and late notices to this purveyor's customers">
+									ENS
+								</span>
+							</TableHead>
 							<TableHead>
 								<span className="sr-only">Actions</span>
 							</TableHead>
@@ -163,6 +194,12 @@ export function WaterPurveyorsTable() {
 								const statusPending =
 									setStatus.isPending &&
 									setStatus.variables?.waterPurveyorId === wp.id;
+								const ens = wp.features.automated_notices;
+								// One switch at a time across the table: the mutation holds only
+								// the latest call, so a second row would release the first.
+								const ensPending =
+									setEns.isPending &&
+									setEns.variables?.waterPurveyorId === wp.id;
 
 								return (
 									<TableRow key={wp.id}>
@@ -187,6 +224,27 @@ export function WaterPurveyorsTable() {
 											) : (
 												<Badge variant="danger">Blocked</Badge>
 											)}
+										</TableCell>
+										<TableCell>
+											<div className="flex items-center gap-2">
+												<Switch
+													checked={ens.isEnabled}
+													disabled={setEns.isPending}
+													aria-busy={ensPending}
+													aria-label={`Email notifications for ${wp.companyName}`}
+													title={lastChanged(ens)}
+													onCheckedChange={(checked) =>
+														setEns.mutate({
+															waterPurveyorId: wp.id,
+															feature: "automated_notices",
+															isEnabled: checked,
+														})
+													}
+												/>
+												<span className="text-[12px] text-muted-foreground">
+													{ens.isEnabled ? "On" : "Off"}
+												</span>
+											</div>
 										</TableCell>
 										<TableCell className="text-right">
 											<div className="flex items-center justify-end gap-2">
@@ -305,4 +363,29 @@ function LoadingRows() {
 			))}
 		</TableRow>
 	));
+}
+
+const changedFormatter = new Intl.DateTimeFormat("en-US", {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+});
+
+function rescheduledSuffix(restored: number) {
+	if (restored === 0) return "";
+	return ` — ${restored} skipped ${restored === 1 ? "notice" : "notices"} rescheduled`;
+}
+
+/** Hover text on the ENS switch: who last changed it, and when. */
+function lastChanged(state: {
+	updatedAt: Date | string | null;
+	updatedByName: string | null;
+}) {
+	if (!state.updatedAt) return "Never changed";
+
+	const when = changedFormatter.format(new Date(state.updatedAt));
+
+	return state.updatedByName
+		? `Last changed by ${state.updatedByName} on ${when}`
+		: `Last changed on ${when}`;
 }
