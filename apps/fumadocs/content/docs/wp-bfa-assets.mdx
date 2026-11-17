@@ -49,6 +49,7 @@ mispointed row.
 | `assembly_location` | yes | Where on the property the assembly sits |
 | `make`, `model`, `serial_number`, `size` | yes | Assembly details. Required on every WP save (WP/Admin feedback); the columns stay nullable, so a row saved before the rule — or built from a certifier submission — still reads, and editing it means filling them in |
 | `annual_test_date` | yes on this screen | What the reminder workflow schedules against |
+| `account_number` | no | The water purveyor's customer account number for this location (0025). Per BIN, not per customer: one customer may hold several accounts and meters. Also set from the customer form, beside the BIN it attaches. Blank is NULL |
 | `asset_status` | — | Computed by the scheduler; not editable by anyone |
 | `current_customer_id` | no | Not on either form. Moves through the customer form's BIN or `assignCustomer` — see below |
 | `water_purveyor_id` | — | Never sent by the client; derived from the caller |

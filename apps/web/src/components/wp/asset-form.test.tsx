@@ -110,6 +110,7 @@ describe("buildAssetPayload", () => {
 			make: "Watts",
 			model: "909",
 			annualTestDate: "2027-04-01",
+			accountNumber: null,
 		});
 	});
 
@@ -171,6 +172,7 @@ describe("AddAssetForm", () => {
 			serialNumber: "SN-88120",
 			size: "2 in",
 			annualTestDate: "2027-04-01",
+			accountNumber: null,
 		});
 	});
 

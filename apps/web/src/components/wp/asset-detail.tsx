@@ -200,6 +200,7 @@ function LoadedAsset({
 						<Fact label="Size" value={asset.size} />
 						<Fact label="Service address" value={asset.serviceAddress} />
 						<Fact label="Assembly location" value={asset.assemblyLocation} />
+						<Fact label="Account number" value={asset.accountNumber} />
 					</dl>
 					{/* The status is read-only everywhere, so the one place it is
 					    explained is next to where it is shown. */}
@@ -360,7 +361,7 @@ function TestCustomerSuggestion({
 	onAttach: (customerId: string) => void;
 	onCreate: () => void;
 }) {
-	const { name, email, match } = suggestion;
+	const { name, email, match, sharedWith } = suggestion;
 
 	return (
 		<div className="flex flex-col gap-2 rounded-md bg-accent px-3 py-2.5 text-[12px] text-accent-foreground">
@@ -377,6 +378,34 @@ function TestCustomerSuggestion({
 					<Button size="sm" onClick={() => onAttach(match.id)}>
 						Attach {match.name}
 					</Button>
+				</>
+			) : sharedWith.length > 0 ? (
+				// A shared inbox, and the test's name matches none of the customers
+				// on it: offer each rather than guess, and a new one only if the
+				// asset can take it.
+				<>
+					<p>
+						{sharedWith.length} customers use this email. Attach the right one
+						{assetHasBin ? ", or create a new customer" : ""}.
+					</p>
+					<div className="flex flex-wrap gap-2">
+						{sharedWith.map((candidate) => (
+							<Button
+								key={candidate.id}
+								size="sm"
+								variant="secondary"
+								onClick={() => onAttach(candidate.id)}
+							>
+								Attach {candidate.name}
+								{candidate.status === "suspended" ? " (suspended)" : ""}
+							</Button>
+						))}
+						{assetHasBin ? (
+							<Button size="sm" onClick={onCreate}>
+								Create customer from test
+							</Button>
+						) : null}
+					</div>
 				</>
 			) : assetHasBin ? (
 				<>

@@ -76,6 +76,7 @@ const TABLE_GRANTS: Record<string, string[]> = {
 const COLUMN_GRANTS: Record<string, string[]> = {
 	"profiles.UPDATE": ["full_name"],
 	"bfa_assets.INSERT": [
+		"account_number",
 		"annual_test_date",
 		"assembly_location",
 		"bfa_type",
@@ -89,6 +90,7 @@ const COLUMN_GRANTS: Record<string, string[]> = {
 		"water_purveyor_id",
 	],
 	"bfa_assets.UPDATE": [
+		"account_number",
 		"annual_test_date",
 		"assembly_location",
 		"bfa_type",

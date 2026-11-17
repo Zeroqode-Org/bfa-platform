@@ -42,9 +42,35 @@ export const BROADCAST_FILTER_DESCRIPTIONS: Record<
 	string
 > = {
 	all_customers:
-		"Every active customer in your purveyor. Suspended customers are not included.",
+		"Every active customer in your purveyor. Suspended customers are not included. Customers who share an email address get one copy between them.",
 	agricultural_only:
-		"Active customers on the agricultural rate category only. Suspended customers are not included.",
+		"Active customers on the agricultural rate category only. Suspended customers are not included. Customers who share an email address get one copy between them.",
 	past_due_only:
-		"Active customers who own at least one assembly whose annual test date has passed. Each customer is written to once, however many past-due assemblies they own.",
+		"Active customers who own at least one assembly whose annual test date has passed. Each customer is written to once, however many past-due assemblies they own. Customers who share an email address get one copy between them.",
 };
+
+/**
+ * One recipient per inbox, the first in the given order.
+ *
+ * Since 0024 several customers may share an address — every store of one
+ * chain on its main-office inbox. A broadcast is the same message for
+ * everybody, so writing to that inbox once per customer would deliver the
+ * same email five times. Addresses are compared the way they are stored:
+ * trimmed and lowercased.
+ *
+ * The send's delivery line therefore names the kept customer (the first by
+ * name) for that inbox; the others on the address received the same message
+ * through it and have no line of their own.
+ */
+export function oneRecipientPerInbox<Row extends { email: string }>(
+	rows: readonly Row[],
+): Row[] {
+	const seen = new Set<string>();
+
+	return rows.filter((row) => {
+		const inbox = row.email.trim().toLowerCase();
+		if (seen.has(inbox)) return false;
+		seen.add(inbox);
+		return true;
+	});
+}

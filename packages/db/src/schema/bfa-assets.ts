@@ -30,6 +30,10 @@ export const bfaAssets = pgTable(
 			.notNull()
 			.references(() => waterPurveyors.id),
 		bin: text("bin"),
+		// The water purveyor's customer account number for this assembly's
+		// location (0025). Per BIN, not per customer: one customer may hold
+		// several utility accounts and meters with the same purveyor.
+		accountNumber: text("account_number"),
 		// live pointer; occupancy history lives in customer_assignments
 		currentCustomerId: uuid("current_customer_id").references(
 			() => customers.id,

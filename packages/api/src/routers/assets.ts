@@ -32,6 +32,7 @@ import {
 	attachCustomerToAsset,
 	detachCustomerFromAsset,
 } from "../lib/customer-assignment";
+import { customersWithEmail, pickCustomer } from "../lib/customer-match";
 import { CUSTOMER_EMAIL_KEY, CUSTOMER_NAME_KEY } from "../lib/wizard-input";
 import { reconcileAssetNoticeChain } from "../scheduler/notice-chain";
 import { activateAssetWithBin } from "../scheduler/submission-lifecycle";
@@ -55,6 +56,7 @@ const assetColumnSelection = {
 	serviceAddress: bfaAssets.serviceAddress,
 	assemblyLocation: bfaAssets.assemblyLocation,
 	annualTestDate: bfaAssets.annualTestDate,
+	accountNumber: bfaAssets.accountNumber,
 	assetStatus: bfaAssets.assetStatus,
 	currentCustomerId: bfaAssets.currentCustomerId,
 	createdAt: bfaAssets.createdAt,
@@ -696,9 +698,12 @@ async function readAssetDetail(waterPurveyorId: string, assetId: string) {
  *
  * Whenever nobody is attached — with or without a BIN, since assigning the BIN
  * first is the usual order and the asset still needs its customer after.
- * From the latest submitted test. `match` is this purveyor's customer with that email, if
- * there is one: then the WP attaches them; without one, the WP creates a
- * customer from these details, checking them first.
+ * From the latest submitted test, resolved by the rule in `customer-match.ts`:
+ * `match` is the customer the email (and, on a shared inbox, the name) points
+ * at — the WP attaches them. When several customers share the email and the
+ * name singles out none, `match` is null and `sharedWith` lists them all, so
+ * the WP picks one rather than creating a copy. Nobody on the email: the WP
+ * creates a customer from these details, checking them first.
  */
 async function testCustomerSuggestion(
 	waterPurveyorId: string,
@@ -729,24 +734,21 @@ async function testCustomerSuggestion(
 
 	if (!email && !name) return null;
 
-	const [match] = email
-		? await db
-				.select({
-					id: customers.id,
-					name: customers.name,
-					status: customers.status,
-				})
-				.from(customers)
-				.where(
-					and(
-						eq(customers.waterPurveyorId, waterPurveyorId),
-						sql`lower(btrim(${customers.email})) = ${email}`,
-					),
-				)
-				.limit(1)
+	// The same rule the test itself attaches by (`customer-match.ts`). When
+	// several customers share the address and the name does not single one
+	// out, they are all offered instead of one guessed — so the WP picks, and
+	// is not nudged into creating a copy of a customer who already exists.
+	const candidates = email
+		? await customersWithEmail(db, waterPurveyorId, email)
 		: [];
+	const picked = pickCustomer(candidates, name || null);
 
-	return { name, email, match: match ?? null };
+	return {
+		name,
+		email,
+		match: picked.kind === "match" ? picked.customer : null,
+		sharedWith: picked.kind === "ambiguous" ? candidates : [],
+	};
 }
 
 /**

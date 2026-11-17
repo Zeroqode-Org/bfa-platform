@@ -57,6 +57,7 @@ export type AssetFormValues = {
 	serialNumber: string;
 	size: string;
 	annualTestDate: string;
+	accountNumber: string;
 };
 
 /** Form values in which the BFA type holds a real choice — the only kind that is sent. */
@@ -81,6 +82,7 @@ export const emptyAssetValues: AssetFormValues = {
 	serialNumber: "",
 	size: "",
 	annualTestDate: "",
+	accountNumber: "",
 };
 
 /**
@@ -115,6 +117,7 @@ export function assetToFormValues(asset: Asset): CompletedAssetFormValues {
 		serialNumber: asset.serialNumber ?? "",
 		size: asset.size ?? "",
 		annualTestDate: isoToUsDate(asset.annualTestDate),
+		accountNumber: asset.accountNumber ?? "",
 	};
 }
 
@@ -141,6 +144,7 @@ export function buildAssetPayload(
 		serialNumber: values.serialNumber.trim(),
 		size: values.size.trim(),
 		annualTestDate: usDateToIso(values.annualTestDate) ?? values.annualTestDate,
+		accountNumber: values.accountNumber.trim() || null,
 	};
 }
 
@@ -185,6 +189,7 @@ export const assetFormRules = {
 		required("An annual test date is required."),
 		usDate(),
 	),
+	accountNumber: maxLength(ASSET_FIELD_LIMITS.accountNumber),
 };
 
 /**
@@ -406,6 +411,24 @@ export function AssetForm({
 					{requiredTextField("model", "Model", "LF909")}
 					{requiredTextField("serialNumber", "Serial number", "AB12345")}
 					{requiredTextField("size", "Size", '3/4"')}
+				</div>
+
+				{/* The purveyor's account for this location — per BIN, since one
+				    customer may hold several accounts and meters (0025). */}
+				<div className="flex flex-col gap-1.5">
+					<Label htmlFor={validation.fieldId("accountNumber")}>
+						Account number
+					</Label>
+					<Input
+						{...validation.controlProps("accountNumber")}
+						name="accountNumber"
+						value={values.accountNumber}
+						onChange={(event) => update("accountNumber", event.target.value)}
+						placeholder="Optional"
+						autoComplete="off"
+						disabled={pending}
+					/>
+					<FieldError {...validation.errorProps("accountNumber")} />
 				</div>
 
 				<div className="flex flex-col gap-1.5">

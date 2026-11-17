@@ -41,6 +41,16 @@ function requiredText(message: string, max: number) {
 	return z.string().trim().min(1, message).max(max);
 }
 
+/** Optional free text: blank — including a cleared field's `""` — is NULL. */
+function optionalText(max: number) {
+	return z
+		.string()
+		.trim()
+		.max(max)
+		.nullish()
+		.transform((value) => value || null);
+}
+
 const assetFields = {
 	/**
 	 * The BIN. Unique per purveyor (`bfa_assets_water_purveyor_id_bin_key`), and
@@ -86,6 +96,12 @@ const assetFields = {
 	 * The column stays nullable for rows that reach the table another way.
 	 */
 	annualTestDate: z.iso.date("An annual test date is required"),
+	/**
+	 * The water purveyor's customer account number for this location (0025).
+	 * Per BIN rather than per customer: one customer may hold several utility
+	 * accounts and meters with the same purveyor (client, November 2026).
+	 */
+	accountNumber: optionalText(ASSET_FIELD_LIMITS.accountNumber),
 };
 
 /** The columns both mutations write, without the fields only one of them takes. */
@@ -140,6 +156,18 @@ export const createAssetInput = assetFieldsInput.extend({
 export const updateAssetInput = assetFieldsInput.extend({
 	id: z.uuid(),
 	expectedAnnualTestDate: z.iso.date().nullable().optional(),
+	/**
+	 * Absent means "keep": a browser still holding the form from before 0025
+	 * sends no account number, and a whole-record save must not wipe the one
+	 * the migration carried over. `null` or a blank value still clears it.
+	 */
+	accountNumber: z
+		.string()
+		.trim()
+		.max(ASSET_FIELD_LIMITS.accountNumber)
+		.nullable()
+		.optional()
+		.transform((value) => (value === undefined ? undefined : value || null)),
 });
 
 /**
@@ -212,8 +240,12 @@ export type ListAssetsInput = z.infer<typeof listAssetsInput>;
  * names its first occupant. Letting these columns move the pointer on their own
  * would be the one way to change an occupant without recording it.
  */
-export function assetColumns(input: AssetFieldsInput) {
-	return {
+export function assetColumns(
+	input: Omit<AssetFieldsInput, "accountNumber"> & {
+		accountNumber?: string | null;
+	},
+) {
+	const columns = {
 		bin: input.bin,
 		bfaType: input.bfaType,
 		serviceAddress: input.serviceAddress,
@@ -223,5 +255,14 @@ export function assetColumns(input: AssetFieldsInput) {
 		size: input.size,
 		assemblyLocation: input.assemblyLocation,
 		annualTestDate: input.annualTestDate,
+	};
+
+	// Left out when the request did not carry it (see `updateAssetInput`), so
+	// neither the write nor the unchanged-save check touches the column.
+	return {
+		...columns,
+		...(input.accountNumber === undefined
+			? {}
+			: { accountNumber: input.accountNumber }),
 	};
 }

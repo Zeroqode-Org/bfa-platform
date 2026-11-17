@@ -6,7 +6,6 @@ import {
 	isCustomerBinReassignError,
 } from "@bfa-platform/api/lib/customer-bin";
 import { CUSTOMER_FIELD_LIMITS } from "@bfa-platform/api/lib/customer-field-limits";
-import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { Badge } from "@bfa-platform/ui/components/badge";
 import { Button } from "@bfa-platform/ui/components/button";
 import { DateInput } from "@bfa-platform/ui/components/date-input";
@@ -70,8 +69,9 @@ export const STATUS_LABELS = {
  */
 export type CustomerFormValues = {
 	attachBin: string;
+	/** The account number for `attachBin`'s asset — saved onto that BIN (0025). */
+	attachAccountNumber: string;
 	name: string;
-	accountNumber: string;
 	email: string;
 	address: string;
 	rateCategory: Customer["rateCategory"] | "";
@@ -87,8 +87,8 @@ export type CompletedCustomerFormValues = CustomerFormValues & {
 
 export const emptyCustomerValues: CustomerFormValues = {
 	attachBin: "",
+	attachAccountNumber: "",
 	name: "",
-	accountNumber: "",
 	email: "",
 	address: "",
 	rateCategory: "",
@@ -102,8 +102,8 @@ export function customerToFormValues(
 ): CompletedCustomerFormValues {
 	return {
 		attachBin: "",
+		attachAccountNumber: "",
 		name: customer.name,
-		accountNumber: customer.accountNumber ?? "",
 		email: customer.email,
 		address: customer.address ?? "",
 		rateCategory: customer.rateCategory,
@@ -141,10 +141,14 @@ export function buildCustomerPayload(
 	const shared = {
 		name: values.name.trim(),
 		email: values.email.trim(),
-		accountNumber: values.accountNumber.trim() || null,
 		address: values.address.trim(),
 		status: values.status,
 		attachBin: values.attachBin.trim() || null,
+		// Only with a BIN: it is that asset's number, and there is no asset
+		// to put it on without one.
+		attachAccountNumber: values.attachBin.trim()
+			? values.attachAccountNumber.trim() || null
+			: null,
 	};
 
 	return values.rateCategory === "agricultural"
@@ -183,20 +187,12 @@ export function customerFormErrors(
 	}
 	if (isCustomerBinError(error)) return { binErrorMessage: error.message };
 
-	return error.data?.code === "CONFLICT" &&
-		error.message === CUSTOMER_EMAIL_TAKEN_MESSAGE
-		? { emailErrorMessage: error.message }
-		: { errorMessage: error.message };
+	return { errorMessage: error.message };
 }
 
 /** The spelling the server matches a BIN in: trimmed, otherwise exact. */
 function normalizedBin(value: string) {
 	return value.trim();
-}
-
-/** The spelling the server compares addresses in: trimmed and lowercased. */
-function normalizedEmail(value: string) {
-	return value.trim().toLowerCase();
 }
 
 const agRenewalDateRule = composeRules(
@@ -217,7 +213,6 @@ export function CustomerForm({
 	heldBins = [],
 	pending = false,
 	errorMessage,
-	emailErrorMessage,
 	binErrorMessage,
 	binReassignMessage,
 	submitLabel,
@@ -231,8 +226,6 @@ export function CustomerForm({
 	pending?: boolean;
 	/** A server refusal with no field of its own. */
 	errorMessage?: string;
-	/** A server refusal about the email address — shown under that input. */
-	emailErrorMessage?: string;
 	/** A missing or unknown BIN — shown under the BIN input. */
 	binErrorMessage?: string;
 	/** The BIN belongs to another customer — asked under the BIN input. */
@@ -243,9 +236,8 @@ export function CustomerForm({
 	onCancel: () => void;
 }) {
 	const [values, setValues] = useState<CustomerFormValues>(initialValues);
-	// Which BIN the rejected request carried, for the same reason as the email
-	// below: the server's answer is about that BIN and stops applying the moment
-	// the field holds a different one.
+	// Which BIN the rejected request carried: the server's answer is about that
+	// BIN and stops applying the moment the field holds a different one.
 	const [rejectedBin, setRejectedBin] = useState<string | null>(null);
 	const binAnswerApplies = rejectedBin === normalizedBin(values.attachBin);
 	const binRefusal =
@@ -253,16 +245,6 @@ export function CustomerForm({
 	const reassignQuestion =
 		binReassignMessage && binAnswerApplies ? binReassignMessage : undefined;
 	const holdsAsset = heldBins.length > 0;
-	// Which address the rejected request carried. The server's "already used"
-	// answer is about that exact address, so it stops applying the moment the
-	// field holds a different one — and comes back if the same address is typed
-	// again in another spelling, because the server would refuse that too.
-	const [rejectedEmail, setRejectedEmail] = useState<string | null>(null);
-
-	const emailTaken =
-		emailErrorMessage && rejectedEmail === normalizedEmail(values.email)
-			? emailErrorMessage
-			: undefined;
 
 	const validation = useFormValidation({
 		values,
@@ -279,7 +261,7 @@ export function CustomerForm({
 				email(),
 				maxLength(CUSTOMER_FIELD_LIMITS.email),
 			),
-			accountNumber: maxLength(CUSTOMER_FIELD_LIMITS.accountNumber),
+			attachAccountNumber: maxLength(ASSET_FIELD_LIMITS.accountNumber),
 			address: composeRules(
 				required("Address is required."),
 				maxLength(CUSTOMER_FIELD_LIMITS.address),
@@ -293,7 +275,7 @@ export function CustomerForm({
 					: undefined,
 			status: required("Select a status."),
 		},
-		externalErrors: { email: emailTaken, attachBin: binRefusal },
+		externalErrors: { attachBin: binRefusal },
 	});
 
 	function update<Field extends keyof CustomerFormValues>(
@@ -308,7 +290,6 @@ export function CustomerForm({
 	function submit({ acknowledgeReassign }: { acknowledgeReassign: boolean }) {
 		if (!validation.validate() || !isCompletedCustomer(values)) return;
 
-		setRejectedEmail(normalizedEmail(values.email));
 		setRejectedBin(normalizedBin(values.attachBin));
 		onSubmit({
 			...buildCustomerPayload(values),
@@ -346,19 +327,45 @@ export function CustomerForm({
 							</ul>
 						</div>
 					) : null}
-					<Label htmlFor={validation.fieldId("attachBin")}>
-						{holdsAsset ? "Attach another BIN" : "BIN"}
-					</Label>
-					<Input
-						{...validation.controlProps("attachBin")}
-						name="attachBin"
-						value={values.attachBin}
-						onChange={(event) => update("attachBin", event.target.value)}
-						placeholder="Optional"
-						autoComplete="off"
-						disabled={pending}
-					/>
-					<FieldError {...validation.errorProps("attachBin")} />
+					<div className="grid gap-4 sm:grid-cols-2">
+						<div className="flex flex-col gap-1.5">
+							<Label htmlFor={validation.fieldId("attachBin")}>
+								{holdsAsset ? "Attach another BIN" : "BIN"}
+							</Label>
+							<Input
+								{...validation.controlProps("attachBin")}
+								name="attachBin"
+								value={values.attachBin}
+								onChange={(event) => update("attachBin", event.target.value)}
+								placeholder="Optional"
+								autoComplete="off"
+								disabled={pending}
+							/>
+							<FieldError {...validation.errorProps("attachBin")} />
+						</div>
+						{/* The account number belongs to the BIN (0025), so it is asked
+						    for beside the BIN it will be saved on — and only once there
+						    is one. An attached BIN's number is changed on its asset. */}
+						<div className="flex flex-col gap-1.5">
+							<Label htmlFor={validation.fieldId("attachAccountNumber")}>
+								Account number
+							</Label>
+							<Input
+								{...validation.controlProps("attachAccountNumber")}
+								name="attachAccountNumber"
+								value={values.attachAccountNumber}
+								onChange={(event) =>
+									update("attachAccountNumber", event.target.value)
+								}
+								placeholder={
+									values.attachBin.trim() ? "Optional" : "Enter a BIN first"
+								}
+								autoComplete="off"
+								disabled={pending || !values.attachBin.trim()}
+							/>
+							<FieldError {...validation.errorProps("attachAccountNumber")} />
+						</div>
+					</div>
 					{reassignQuestion ? (
 						<div className="flex flex-col items-start gap-2 rounded-md bg-warning-bg px-3 py-2 text-[13px] text-warning">
 							<p className="flex items-start gap-1.5">
@@ -403,23 +410,7 @@ export function CustomerForm({
 					<FieldError {...validation.errorProps("name")} />
 				</div>
 
-				<div className="grid gap-4 sm:grid-cols-2">
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor={validation.fieldId("accountNumber")}>
-							Account number
-						</Label>
-						<Input
-							{...validation.controlProps("accountNumber")}
-							name="accountNumber"
-							value={values.accountNumber}
-							onChange={(event) => update("accountNumber", event.target.value)}
-							placeholder="Optional"
-							autoComplete="off"
-							disabled={pending}
-						/>
-						<FieldError {...validation.errorProps("accountNumber")} />
-					</div>
-
+				<div className="grid gap-4">
 					<div className="flex flex-col gap-1.5">
 						<Label htmlFor={validation.fieldId("email")}>Email</Label>
 						<Input

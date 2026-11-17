@@ -5,7 +5,6 @@ import {
 	customerBinReassignMessage,
 } from "@bfa-platform/api/lib/customer-bin";
 import { CUSTOMER_STALE_MESSAGE } from "@bfa-platform/api/lib/customer-revision";
-import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
@@ -83,7 +82,6 @@ const { CustomersTable } = await import("./customers-table");
 const active: Customer = {
 	id: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
 	name: "Marta Ellison",
-	accountNumber: "AC-4471",
 	email: "marta@example.com",
 	address: "12 Canal Road",
 	rateCategory: "standard",
@@ -100,7 +98,6 @@ const suspendedAgricultural: Customer = {
 	...active,
 	id: "1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9",
 	name: "Ridgeline Orchards",
-	accountNumber: null,
 	email: "billing@ridgeline.example",
 	address: null,
 	rateCategory: "agricultural",
@@ -226,13 +223,13 @@ describe("CustomersTable", () => {
 			expectedRevision: active.revision,
 			name: active.name,
 			email: active.email,
-			accountNumber: active.accountNumber,
 			address: active.address,
 			rateCategory: "standard",
 			agRenewalDate: null,
 			status: "suspended",
 			// A status flip attaches nothing.
 			attachBin: null,
+			attachAccountNumber: null,
 		});
 	});
 
@@ -446,12 +443,13 @@ describe("CustomersTable", () => {
 		expect(dialog.textContent).toContain("Edit customer");
 	});
 
-	it("shows a duplicate email refusal under Email in the open dialog, never as a toast", async () => {
+	it("shows a server refusal in the open dialog, never as a toast", async () => {
+		const REFUSAL = "Something on the server refused this save.";
 		const { toast } = await import("sonner");
 		vi.mocked(toast.error).mockClear();
 		createFn.mockRejectedValue(
-			Object.assign(new Error(CUSTOMER_EMAIL_TAKEN_MESSAGE), {
-				data: { code: "CONFLICT" },
+			Object.assign(new Error(REFUSAL), {
+				data: { code: "BAD_REQUEST" },
 			}),
 		);
 		renderTable();
@@ -471,15 +469,17 @@ describe("CustomersTable", () => {
 		}
 		fireEvent.click(screen.getByRole("button", { name: "Add customer" }));
 
-		const message = await screen.findByText(CUSTOMER_EMAIL_TAKEN_MESSAGE);
-		const email = screen.getByLabelText("Email");
+		const message = await screen.findByText(REFUSAL);
 
 		expect(createFn).toHaveBeenCalledWith(
 			expect.objectContaining({ rateCategory: "standard", status: "active" }),
 		);
-		expect(message.getAttribute("data-slot")).toBe("field-error");
-		expect(email.getAttribute("aria-invalid")).toBe("true");
-		expect(email.getAttribute("aria-describedby")).toContain(message.id);
+		// The form-wide message: no field is to blame, and since 0024 a shared
+		// email is not a refusal at all.
+		expect(message.closest('[data-slot="form-error"]')).toBeTruthy();
+		expect(
+			screen.getByLabelText("Email").getAttribute("aria-invalid"),
+		).toBeNull();
 		// Still open, still correctable, and nothing popped up somewhere else.
 		expect(screen.getByRole("dialog")).toBeTruthy();
 		expect(toast.error).not.toHaveBeenCalled();

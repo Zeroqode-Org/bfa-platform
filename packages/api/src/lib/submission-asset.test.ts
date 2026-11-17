@@ -51,6 +51,8 @@ describe("newAssetFromSubmission", () => {
 			size: "1.5",
 			assemblyLocation: "Front yard",
 			annualTestDate: "2027-10-07",
+			// A test does not know the purveyor's account number for the location.
+			accountNumber: null,
 			currentCustomerId: null,
 		});
 	});

@@ -363,7 +363,7 @@ export function CustomersTable() {
 											)}
 										</TableCell>
 										<TableCell className="text-muted-foreground tabular-nums">
-											{customer.accountNumber ?? "—"}
+											{asset?.accountNumber ?? "—"}
 										</TableCell>
 										<TableCell className="text-muted-foreground">
 											{customer.email}
@@ -481,8 +481,8 @@ export function CustomersTable() {
 							}
 							heldBins={isEditing ? formTarget.customer.bins : []}
 							pending={formMutation.isPending}
-							// A duplicate email goes under the Email field; anything else
-							// is the form-wide message. Never a toast.
+							// A BIN refusal goes under the BIN field; anything else is the
+							// form-wide message. Never a toast.
 							{...customerFormErrors(
 								formMutation.isError ? formMutation.error : null,
 							)}

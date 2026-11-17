@@ -46,7 +46,6 @@ const customerFields = {
 		.trim()
 		.toLowerCase()
 		.pipe(z.email().max(CUSTOMER_FIELD_LIMITS.email)),
-	accountNumber: optionalText(CUSTOMER_FIELD_LIMITS.accountNumber),
 	// Required: the address is what the notices are written about, and a
 	// customer record without one is incomplete (WP/Admin feedback). The column
 	// stays nullable — rows saved before the rule keep reading — but no save
@@ -67,6 +66,14 @@ const customerFields = {
 	 * hold no asset. The procedures decide that, with one message for both.
 	 */
 	attachBin: optionalText(ASSET_FIELD_LIMITS.bin),
+	/**
+	 * The water purveyor's account number for the assembly `attachBin` names —
+	 * not a column of the customer. Since 0025 the account number belongs to
+	 * the BIN, so the customer form asks for it beside the BIN it attaches and
+	 * saves it onto that asset. Blank leaves the asset's number as it is;
+	 * clearing one is done on the asset's own form.
+	 */
+	attachAccountNumber: optionalText(ASSET_FIELD_LIMITS.accountNumber),
 	/**
 	 * The caller has seen that the BIN belongs to another occupant and wants it
 	 * moved anyway. Without it, such a save is refused with the question.
@@ -148,7 +155,6 @@ export function customerColumns(input: CreateCustomerInput) {
 	return {
 		name: input.name,
 		email: input.email,
-		accountNumber: input.accountNumber,
 		address: input.address,
 		rateCategory: input.rateCategory,
 		agRenewalDate:
