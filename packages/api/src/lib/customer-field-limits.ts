@@ -11,6 +11,5 @@
 export const CUSTOMER_FIELD_LIMITS = {
 	name: 200,
 	email: 254,
-	accountNumber: 100,
 	address: 500,
 } as const;

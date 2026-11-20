@@ -21,4 +21,5 @@ export const ASSET_FIELD_LIMITS = {
 	model: 200,
 	serialNumber: 200,
 	size: 100,
+	accountNumber: 100,
 } as const;

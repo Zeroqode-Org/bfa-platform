@@ -19,11 +19,6 @@ import {
 	updateCustomerInput,
 } from "../lib/customer-input";
 import { CUSTOMER_STALE_MESSAGE } from "../lib/customer-revision";
-import {
-	CUSTOMER_EMAIL_TAKEN_MESSAGE,
-	CUSTOMER_EMAIL_UNIQUE_INDEX,
-} from "../lib/email-uniqueness";
-import { isUniqueViolation } from "../lib/unique-violation";
 import { reconcileAgRenewalNotice } from "../scheduler/ag-renewal";
 import type { JobExecutor } from "../scheduler/jobs";
 
@@ -34,7 +29,6 @@ import type { JobExecutor } from "../scheduler/jobs";
  */
 const customerSelection = {
 	id: customers.id,
-	accountNumber: customers.accountNumber,
 	name: customers.name,
 	address: customers.address,
 	email: customers.email,
@@ -61,8 +55,10 @@ const customerSelection = {
  * to the *asset's* id, comparing the asset with itself and returning an empty
  * list for every customer.
  */
-const heldAssets = sql<{ id: string; bin: string | null }[]>`coalesce((
-	select json_agg(json_build_object('id', held.id, 'bin', held.bin) order by held.bin nulls last, held.id)
+const heldAssets = sql<
+	{ id: string; bin: string | null; accountNumber: string | null }[]
+>`coalesce((
+	select json_agg(json_build_object('id', held.id, 'bin', held.bin, 'accountNumber', held.account_number) order by held.bin nulls last, held.id)
 	from bfa_assets held
 	where held.current_customer_id = "customers"."id"
 	  and held.water_purveyor_id = "customers"."water_purveyor_id"
@@ -134,18 +130,13 @@ export const customersRouter = router({
 			const attachBin = input.attachBin ?? null;
 
 			const { row, attached } = await db.transaction(async (tx) => {
-				// No "is this address taken?" read first: the unique index decides, so
-				// two clerks adding the same address at once cannot both succeed.
 				const [inserted] = await tx
 					.insert(customers)
 					.values({
 						...customerColumns(input),
 						waterPurveyorId: ctx.caller.waterPurveyorId,
 					})
-					.returning(customerSelection)
-					.catch((error: unknown) => {
-						throw duplicateEmailError(error);
-					});
+					.returning(customerSelection);
 
 				if (!inserted) {
 					throw new TRPCError({
@@ -171,6 +162,7 @@ export const customersRouter = router({
 					waterPurveyorId: ctx.caller.waterPurveyorId,
 					customer: inserted,
 					bin: attachBin,
+					accountNumber: input.attachAccountNumber ?? null,
 					acknowledgeReassign: input.acknowledgeReassign ?? false,
 					actor: auditActor(ctx),
 				});
@@ -263,6 +255,7 @@ export const customersRouter = router({
 					waterPurveyorId: ctx.caller.waterPurveyorId,
 					customer: current,
 					bin: input.attachBin,
+					accountNumber: input.attachAccountNumber ?? null,
 					acknowledgeReassign: input.acknowledgeReassign ?? false,
 					actor: auditActor(ctx),
 				});
@@ -291,9 +284,6 @@ export const customersRouter = router({
 					});
 				}
 
-				// An edit onto another customer's address is refused by the same
-				// index. The record's own address never collides with itself, so
-				// saving a customer without changing their email is unaffected.
 				const [updated] = await tx
 					.update(customers)
 					.set({
@@ -309,10 +299,7 @@ export const customersRouter = router({
 							eq(customers.revision, input.expectedRevision),
 						),
 					)
-					.returning(customerSelection)
-					.catch((error: unknown) => {
-						throw duplicateEmailError(error);
-					});
+					.returning(customerSelection);
 
 				if (!updated) {
 					throw new TRPCError({
@@ -427,6 +414,7 @@ async function attachByBin({
 	waterPurveyorId,
 	customer,
 	bin,
+	accountNumber,
 	acknowledgeReassign,
 	actor,
 }: {
@@ -434,6 +422,8 @@ async function attachByBin({
 	waterPurveyorId: string;
 	customer: { id: string; status: "active" | "suspended" };
 	bin: string | null | undefined;
+	/** The account number to store on that asset; null leaves it alone. */
+	accountNumber: string | null;
 	acknowledgeReassign: boolean;
 	actor: AuditActor;
 }): Promise<Attachment | null> {
@@ -444,6 +434,7 @@ async function attachByBin({
 			id: bfaAssets.id,
 			bin: bfaAssets.bin,
 			currentCustomerId: bfaAssets.currentCustomerId,
+			accountNumber: bfaAssets.accountNumber,
 		})
 		.from(bfaAssets)
 		.where(
@@ -462,7 +453,16 @@ async function attachByBin({
 		});
 	}
 
-	if (asset.currentCustomerId === customer.id) return null;
+	if (asset.currentCustomerId === customer.id) {
+		await storeAccountNumber(
+			executor,
+			waterPurveyorId,
+			asset,
+			accountNumber,
+			actor,
+		);
+		return null;
+	}
 
 	if (asset.currentCustomerId && !acknowledgeReassign) {
 		// Named only from the caller's own purveyor. A pointer at a foreign
@@ -489,6 +489,14 @@ async function attachByBin({
 		});
 	}
 
+	await storeAccountNumber(
+		executor,
+		waterPurveyorId,
+		asset,
+		accountNumber,
+		actor,
+	);
+
 	await attachCustomerToAsset({
 		executor,
 		assetId: asset.id,
@@ -499,6 +507,45 @@ async function attachByBin({
 	});
 
 	return { assetId: asset.id, bin, from: asset.currentCustomerId };
+}
+
+/**
+ * The account number the customer form gave for the BIN it attaches, onto
+ * that asset (0025). Written only when one was given and it differs, so a
+ * save that leaves the field blank keeps whatever the asset holds.
+ */
+async function storeAccountNumber(
+	executor: JobExecutor,
+	waterPurveyorId: string,
+	asset: { id: string; bin: string | null; accountNumber: string | null },
+	accountNumber: string | null,
+	actor: AuditActor,
+) {
+	if (!accountNumber || accountNumber === asset.accountNumber) return;
+
+	await executor
+		.update(bfaAssets)
+		.set({ accountNumber, updatedAt: new Date() })
+		.where(
+			and(
+				eq(bfaAssets.id, asset.id),
+				eq(bfaAssets.waterPurveyorId, waterPurveyorId),
+			),
+		);
+
+	// The same event an asset-form save writes: an asset column changed.
+	console.log(
+		JSON.stringify({
+			event: "bfa_asset_updated",
+			...auditActorFields(actor),
+			asset_id: asset.id,
+			wp_id: waterPurveyorId,
+			bin: asset.bin,
+			changed_fields: ["account_number"],
+			source: "customer_form",
+			timestamp: new Date().toISOString(),
+		}),
+	);
 }
 
 /**
@@ -524,23 +571,6 @@ function logAssignment(
 			timestamp: new Date().toISOString(),
 		}),
 	);
-}
-
-/**
- * A duplicate email, as the Email field's error.
- *
- * `CONFLICT` is the one code these procedures raise for a field, so the form
- * can route it by code rather than by matching the sentence. Only a violation
- * of the email index is translated; anything else is rethrown untouched.
- */
-function duplicateEmailError(error: unknown) {
-	if (!isUniqueViolation(error, CUSTOMER_EMAIL_UNIQUE_INDEX)) return error;
-
-	return new TRPCError({
-		code: "CONFLICT",
-		message: CUSTOMER_EMAIL_TAKEN_MESSAGE,
-		cause: error,
-	});
 }
 
 /**

@@ -6,7 +6,6 @@ import {
 	pgTable,
 	text,
 	timestamp,
-	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core";
 
@@ -20,6 +19,9 @@ export const customers = pgTable(
 		waterPurveyorId: uuid("water_purveyor_id")
 			.notNull()
 			.references(() => waterPurveyors.id),
+		// Deprecated (0025): the account number moved to `bfa_assets`, one per
+		// BIN. Nothing reads or writes this column; a later migration copies any
+		// value left here onto the assets and drops it.
 		accountNumber: text("account_number"),
 		name: text("name").notNull(),
 		address: text("address"),
@@ -42,10 +44,11 @@ export const customers = pgTable(
 	},
 	(table) => [
 		index("customers_water_purveyor_id_idx").on(table.waterPurveyorId),
-		// One email address per purveyor, compared the way the application stores
-		// it (trimmed, lowercased) so no second spelling can slip past. Added in
-		// 0011; the procedures turn a violation into an inline Email error.
-		uniqueIndex("customers_water_purveyor_id_email_key").on(
+		// The email lookup — not unique. Several of a purveyor's customers may
+		// share one address (0024, replacing 0011's unique index); the wizard
+		// and register-from-test flows still find customers by it, compared the
+		// way the application stores it (trimmed, lowercased).
+		index("customers_water_purveyor_id_email_idx").on(
 			table.waterPurveyorId,
 			sql`lower(btrim(${table.email}))`,
 		),

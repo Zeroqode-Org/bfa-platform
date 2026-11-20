@@ -169,6 +169,20 @@
 			"when": 1793000000000,
 			"tag": "0023_per_wp_certifier_block",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "7",
+			"when": 1793100000000,
+			"tag": "0024_shared_customer_email",
+			"breakpoints": true
+		},
+		{
+			"idx": 25,
+			"version": "7",
+			"when": 1793200000000,
+			"tag": "0025_asset_account_number",
+			"breakpoints": true
 		}
 	]
 }

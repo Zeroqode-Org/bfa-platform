@@ -19,7 +19,6 @@ import {
 	customerBinReassignMessage,
 } from "../lib/customer-bin";
 import { CUSTOMER_STALE_MESSAGE } from "../lib/customer-revision";
-import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "../lib/email-uniqueness";
 
 /**
  * The customer procedures against real Postgres: who may call them, what they
@@ -64,24 +63,23 @@ type CustomerRow = {
 	id: string;
 	name: string;
 	email: string;
-	accountNumber: string | null;
 	address: string | null;
 	rateCategory: "standard" | "agricultural";
 	agRenewalDate: string | null;
 	status: "active" | "suspended";
 	revision: number;
 	bins: string[];
-	assets: { id: string; bin: string | null }[];
+	assets: { id: string; bin: string | null; accountNumber: string | null }[];
 	createdAt: Date;
 	updatedAt: Date;
 };
 type CustomerInput = {
 	name: string;
 	email: string;
-	accountNumber?: string | null;
 	address?: string | null;
 	status?: "active" | "suspended";
 	attachBin?: string | null;
+	attachAccountNumber?: string | null;
 	acknowledgeReassign?: boolean;
 } & (
 	| { rateCategory: "standard"; agRenewalDate?: null }
@@ -373,32 +371,22 @@ describeDb("customers procedures", () => {
 		});
 	});
 
-	describe("email uniqueness within a purveyor", () => {
-		it("refuses a second customer with the same address, however it is spelled", async () => {
+	describe("shared email within a purveyor (0024)", () => {
+		it("lets several customers use one address, however it is spelled", async () => {
 			const first = await callerFor(ids.adminA).customers.createCustomer({
-				name: "Unique Email First",
-				email: "unique.customer@example.com",
+				name: "Shared Inbox Store 1",
+				email: "shared.customer@example.com",
 				rateCategory: "standard",
 			});
-			expect(first.email).toBe("unique.customer@example.com");
-
-			await expect(
-				callerFor(ids.employeeA).customers.createCustomer({
-					name: "Unique Email Second",
-					email: "  Unique.Customer@EXAMPLE.com ",
-					rateCategory: "standard",
-				}),
-			).rejects.toMatchObject({
-				code: "CONFLICT",
-				message: CUSTOMER_EMAIL_TAKEN_MESSAGE,
+			const second = await callerFor(ids.employeeA).customers.createCustomer({
+				name: "Shared Inbox Store 2",
+				email: "  Shared.Customer@EXAMPLE.com ",
+				rateCategory: "standard",
 			});
 
-			const { rows } = await pool.query(
-				`select count(*)::int as count from customers
-				 where water_purveyor_id = $1 and lower(btrim(email)) = 'unique.customer@example.com'`,
-				[wpA],
-			);
-			expect(rows[0]?.count).toBe(1);
+			expect(first.email).toBe("shared.customer@example.com");
+			expect(second.email).toBe("shared.customer@example.com");
+			expect(second.id).not.toBe(first.id);
 		});
 
 		it("allows the same address in a different purveyor", async () => {
@@ -417,43 +405,30 @@ describeDb("customers procedures", () => {
 			expect(other.email).toBe("cross.tenant.customer@example.com");
 		});
 
-		it("refuses an edit onto another customer's address and leaves the row untouched", async () => {
+		it("saves an edit onto another customer's address", async () => {
 			await callerFor(ids.adminA).customers.createCustomer({
 				name: "Holds The Address",
 				email: "held.customer@example.com",
 				rateCategory: "standard",
 			});
 			const mover = await callerFor(ids.adminA).customers.createCustomer({
-				name: "Wants The Address",
+				name: "Joins The Address",
 				email: "own.customer@example.com",
 				rateCategory: "standard",
 			});
 
-			await expect(
-				callerFor(ids.adminA).customers.updateCustomer({
-					id: mover.id,
-					expectedRevision: mover.revision,
-					name: mover.name,
-					email: "HELD.customer@example.com",
-					accountNumber: mover.accountNumber,
-					address: mover.address,
-					rateCategory: "standard",
-					agRenewalDate: null,
-					status: mover.status,
-				}),
-			).rejects.toMatchObject({
-				code: "CONFLICT",
-				message: CUSTOMER_EMAIL_TAKEN_MESSAGE,
+			const moved = await callerFor(ids.adminA).customers.updateCustomer({
+				id: mover.id,
+				expectedRevision: mover.revision,
+				name: mover.name,
+				email: "HELD.customer@example.com",
+				address: mover.address,
+				rateCategory: "standard",
+				agRenewalDate: null,
+				status: mover.status,
 			});
 
-			const { rows } = await pool.query(
-				"select email, updated_at from customers where id = $1",
-				[mover.id],
-			);
-			expect(rows[0]?.email).toBe("own.customer@example.com");
-			expect(new Date(rows[0]?.updated_at).getTime()).toBe(
-				mover.updatedAt.getTime(),
-			);
+			expect(moved.email).toBe("held.customer@example.com");
 		});
 
 		it("saves an edit that keeps the customer's own address", async () => {
@@ -469,7 +444,6 @@ describeDb("customers procedures", () => {
 				name: "Keeps Its Address, Renamed",
 				// Its own address in another spelling is still its own address.
 				email: " Keeps.Customer@Example.com ",
-				accountNumber: created.accountNumber,
 				address: created.address,
 				rateCategory: "standard",
 				agRenewalDate: null,
@@ -480,44 +454,20 @@ describeDb("customers procedures", () => {
 			expect(renamed.email).toBe("keeps.customer@example.com");
 		});
 
-		it("enforces the rule in the database, not only in the procedure", async () => {
+		it("has no unique rule on the address in the database", async () => {
 			await pool.query(
 				`insert into customers (water_purveyor_id, name, email, rate_category, status)
-				 values ($1, 'Raw Constraint First', 'raw.customer@example.com', 'standard', 'active')`,
+				 values ($1, 'Raw Shared First', 'raw.customer@example.com', 'standard', 'active'),
+				        ($1, 'Raw Shared Second', '  RAW.Customer@example.com', 'standard', 'active')`,
 				[wpA],
 			);
 
-			await expect(
-				pool.query(
-					`insert into customers (water_purveyor_id, name, email, rate_category, status)
-					 values ($1, 'Raw Constraint Second', '  RAW.Customer@example.com', 'standard', 'active')`,
-					[wpA],
-				),
-			).rejects.toMatchObject({
-				code: "23505",
-				constraint: "customers_water_purveyor_id_email_key",
-			});
-		});
-
-		it("lets exactly one of two concurrent creates take an address", async () => {
-			const results = await Promise.allSettled(
-				["Race Left", "Race Right"].map((name) =>
-					callerFor(ids.adminA).customers.createCustomer({
-						name,
-						email: "race.customer@example.com",
-						rateCategory: "standard",
-					}),
-				),
+			const { rows } = await pool.query(
+				`select count(*)::int as count from customers
+				 where water_purveyor_id = $1 and lower(btrim(email)) = 'raw.customer@example.com'`,
+				[wpA],
 			);
-
-			expect(
-				results.filter((result) => result.status === "fulfilled"),
-			).toHaveLength(1);
-			const [refused] = results.filter(
-				(result): result is PromiseRejectedResult =>
-					result.status === "rejected",
-			);
-			expect(refused?.reason).toMatchObject({ code: "CONFLICT" });
+			expect(rows[0]?.count).toBe(2);
 		});
 	});
 
@@ -588,7 +538,6 @@ describeDb("customers procedures", () => {
 		it("writes nothing when the save changed nothing", async () => {
 			const created = await callerFor(ids.adminA).customers.createCustomer({
 				...standardCustomer("Saved Without Editing"),
-				accountNumber: "AC-9001",
 				address: "3 Reservoir Lane",
 			});
 
@@ -601,7 +550,6 @@ describeDb("customers procedures", () => {
 				expectedRevision: created.revision,
 				name: created.name,
 				email: created.email,
-				accountNumber: created.accountNumber,
 				address: created.address,
 				rateCategory: "standard",
 				status: "active",
@@ -633,46 +581,22 @@ describeDb("customers procedures", () => {
 		it("still writes when only one field moved", async () => {
 			// The guard above must not swallow a real edit — a single changed
 			// character is an update.
-			const created = await callerFor(ids.adminA).customers.createCustomer({
-				...standardCustomer("One Field Moves"),
-				accountNumber: "AC-9002",
-			});
+			const created = await callerFor(ids.adminA).customers.createCustomer(
+				standardCustomer("One Field Moves"),
+			);
 
 			const updated = await callerFor(ids.adminA).customers.updateCustomer({
 				id: created.id,
 				expectedRevision: created.revision,
 				name: created.name,
 				email: created.email,
-				accountNumber: "AC-9003",
-				address: created.address,
+				address: "4 Moved Lane",
 				rateCategory: "standard",
 				status: "active",
 			});
 
-			expect(updated.accountNumber).toBe("AC-9003");
+			expect(updated.address).toBe("4 Moved Lane");
 			expect(updated.updatedAt.getTime()).not.toBe(created.updatedAt.getTime());
-		});
-
-		it("treats clearing an optional field as a real change", async () => {
-			// `null` and the value it replaces are both "sent every time", so the
-			// comparison has to tell them apart rather than reading both as absent.
-			const created = await callerFor(ids.adminA).customers.createCustomer({
-				...standardCustomer("Clears An Account Number"),
-				accountNumber: "AC-9004",
-			});
-
-			const updated = await callerFor(ids.adminA).customers.updateCustomer({
-				id: created.id,
-				expectedRevision: created.revision,
-				name: created.name,
-				email: created.email,
-				accountNumber: null,
-				address: created.address,
-				rateCategory: "standard",
-				status: "active",
-			});
-
-			expect(updated.accountNumber).toBeNull();
 		});
 
 		it("refuses to clear the address", async () => {
@@ -888,7 +812,6 @@ describeDb("customers procedures", () => {
 				expectedRevision: created.revision,
 				name: renamed.name,
 				email: renamed.email,
-				accountNumber: renamed.accountNumber,
 				address: renamed.address,
 				rateCategory: "standard",
 				status: "active",
@@ -976,6 +899,49 @@ describeDb("customers procedures", () => {
 			);
 			expect(rows).toHaveLength(0);
 			expect((await occupancy(foreignBin, wpB)).currentCustomerId).toBeNull();
+		});
+
+		it("saves the account number onto the BIN it attaches, and leaves it when blank", async () => {
+			const bin = await seedAsset(wpA);
+
+			const created = await rawCallerFor(ids.adminA).customers.createCustomer({
+				name: "Account On The BIN",
+				email: `account.bin.${randomUUID().slice(0, 6)}@example.com`,
+				address: FIXTURE_ADDRESS,
+				rateCategory: "standard",
+				attachBin: bin,
+				attachAccountNumber: " ACC-77 ",
+			});
+
+			const accountOf = async () =>
+				(
+					await pool.query<{ account_number: string | null }>(
+						"select account_number from bfa_assets where water_purveyor_id = $1 and bin = $2",
+						[wpA, bin],
+					)
+				).rows[0]?.account_number;
+
+			expect(await accountOf()).toBe("ACC-77");
+			expect(created.assets).toEqual([
+				expect.objectContaining({ bin, accountNumber: "ACC-77" }),
+			]);
+
+			// The customer's own record has no account number any more (0025).
+			expect(created).not.toHaveProperty("accountNumber");
+
+			// Re-sending the held BIN with a blank number keeps the asset's.
+			await rawCallerFor(ids.adminA).customers.updateCustomer({
+				id: created.id,
+				expectedRevision: created.revision,
+				name: created.name,
+				email: created.email,
+				address: created.address,
+				rateCategory: "standard",
+				status: "active",
+				attachBin: bin,
+				attachAccountNumber: null,
+			});
+			expect(await accountOf()).toBe("ACC-77");
 		});
 
 		it("makes the new customer the asset's occupant and returns the BIN", async () => {

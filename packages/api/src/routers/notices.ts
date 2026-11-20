@@ -33,7 +33,10 @@ import {
 	sendGeneralInfoBroadcastInput,
 	upsertNoticeTemplateInput,
 } from "../lib/notice-input";
-import type { BroadcastRecipientFilter } from "../lib/notice-recipients";
+import {
+	type BroadcastRecipientFilter,
+	oneRecipientPerInbox,
+} from "../lib/notice-recipients";
 import { sampleVariableValues } from "../lib/notice-variables";
 
 /**
@@ -481,6 +484,10 @@ type BroadcastRecipient = {
  * assemblies, and a customer with three past-due assemblies is still one person
  * with one inbox. `exists` answers it without producing a row per asset, so the
  * de-duplication is structural rather than a `distinct` somebody could drop.
+ *
+ * **Each inbox is written to once.** Customers sharing an address get one copy
+ * between them — see {@link oneRecipientPerInbox}. The count the composer
+ * shows is therefore inboxes, which is what "how many people read this" means.
  */
 async function recipientsFor(
 	waterPurveyorId: string,
@@ -519,18 +526,18 @@ async function recipientsFor(
 					)
 				: tenantAndActive;
 
-	return (
-		db
-			.select({
-				id: customers.id,
-				email: customers.email,
-			})
-			.from(customers)
-			.where(predicate)
-			// `id` breaks the tie so two customers with the same name keep a stable
-			// order between the count and the send.
-			.orderBy(asc(customers.name), asc(customers.id))
-	);
+	const rows = await db
+		.select({
+			id: customers.id,
+			email: customers.email,
+		})
+		.from(customers)
+		.where(predicate)
+		// `id` breaks the tie so two customers with the same name keep a stable
+		// order between the count and the send.
+		.orderBy(asc(customers.name), asc(customers.id));
+
+	return oneRecipientPerInbox(rows);
 }
 
 /**

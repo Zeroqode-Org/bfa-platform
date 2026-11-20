@@ -5,7 +5,6 @@ import {
 	customerBinReassignMessage,
 } from "@bfa-platform/api/lib/customer-bin";
 import { CUSTOMER_STALE_MESSAGE } from "@bfa-platform/api/lib/customer-revision";
-import { CUSTOMER_EMAIL_TAKEN_MESSAGE } from "@bfa-platform/api/lib/email-uniqueness";
 import { DATE_MESSAGE, EMAIL_MESSAGE } from "@bfa-platform/ui/lib/validation";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,7 +37,6 @@ function customer(overrides: Partial<Customer> = {}): Customer {
 	return {
 		id: "8f2b1c34-5d6e-4f70-8a91-b2c3d4e5f607",
 		name: "Marta Ellison",
-		accountNumber: "AC-4471",
 		email: "marta@example.com",
 		address: "12 Canal Road",
 		rateCategory: "standard",
@@ -154,7 +152,7 @@ describe("buildCustomerPayload", () => {
 				attachBin: "   ",
 				name: "  Marta Ellison  ",
 				email: "  marta@example.com ",
-				accountNumber: "   ",
+				attachAccountNumber: "   ",
 				address: "  12 Canal Road ",
 				rateCategory: "standard",
 				status: "active",
@@ -163,7 +161,7 @@ describe("buildCustomerPayload", () => {
 			attachBin: null,
 			name: "Marta Ellison",
 			email: "marta@example.com",
-			accountNumber: null,
+			attachAccountNumber: null,
 			address: "12 Canal Road",
 		});
 	});
@@ -210,10 +208,8 @@ describe("customerToFormValues", () => {
 
 	it("turns null columns into empty fields", () => {
 		expect(
-			customerToFormValues(
-				customer({ accountNumber: null, address: null, agRenewalDate: null }),
-			),
-		).toMatchObject({ accountNumber: "", address: "", agRenewalDate: "" });
+			customerToFormValues(customer({ address: null, agRenewalDate: null })),
+		).toMatchObject({ address: "", agRenewalDate: "" });
 	});
 
 	it("shows a stored renewal date as MM/DD/YYYY", () => {
@@ -226,15 +222,6 @@ describe("customerToFormValues", () => {
 });
 
 describe("customerFormErrors", () => {
-	it("routes a duplicate email to the Email field", () => {
-		expect(
-			customerFormErrors({
-				message: CUSTOMER_EMAIL_TAKEN_MESSAGE,
-				data: { code: "CONFLICT" },
-			}),
-		).toEqual({ emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE });
-	});
-
 	it("routes a stale record to the form-wide message, not to Email", () => {
 		// Same `CONFLICT` code, a different failure: the whole record moved on
 		// under the open form — most often the AG renewal notice's annual
@@ -321,7 +308,7 @@ describe("CustomerForm", () => {
 			attachBin: "1201",
 			name: "Marta Ellison",
 			email: "marta@example.com",
-			accountNumber: "AC-4471",
+			attachAccountNumber: "AC-4471",
 			address: "12 Canal Road",
 			rateCategory: "standard",
 			agRenewalDate: null,
@@ -540,52 +527,6 @@ describe("CustomerForm", () => {
 		expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
 			"Marta Ellison",
 		);
-	});
-});
-
-describe("CustomerForm — duplicate email refusal", () => {
-	it("shows the refusal under the Email field with the shared inline error, not the form banner", () => {
-		const { onSubmit } = renderForm({
-			initialValues: customerToFormValues(customer()),
-			heldBins: ["1201"],
-			submitLabel: "Save changes",
-			emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE,
-		});
-
-		// Nothing yet: the refusal is about an address that has been submitted.
-		expect(screen.queryByText(CUSTOMER_EMAIL_TAKEN_MESSAGE)).toBeNull();
-
-		submit("Save changes");
-		expect(onSubmit).toHaveBeenCalledTimes(1);
-
-		const email = screen.getByLabelText("Email");
-		const message = screen.getByText(CUSTOMER_EMAIL_TAKEN_MESSAGE);
-
-		expect(message.getAttribute("role")).toBe("alert");
-		expect(message.getAttribute("data-slot")).toBe("field-error");
-		expect(email.getAttribute("aria-invalid")).toBe("true");
-		expect(email.getAttribute("aria-describedby")).toBe(message.id);
-		expect(document.querySelector('[data-slot="form-error"]')).toBeNull();
-	});
-
-	it("clears when the address changes, and returns for the same address in another spelling", () => {
-		renderForm({
-			initialValues: customerToFormValues(customer()),
-			heldBins: ["1201"],
-			submitLabel: "Save changes",
-			emailErrorMessage: CUSTOMER_EMAIL_TAKEN_MESSAGE,
-		});
-
-		submit("Save changes");
-		const email = screen.getByLabelText("Email");
-
-		fireEvent.change(email, { target: { value: "marta.ellison@example.com" } });
-		expect(screen.queryByText(CUSTOMER_EMAIL_TAKEN_MESSAGE)).toBeNull();
-		expect(email.getAttribute("aria-invalid")).toBeNull();
-
-		// The server compares trimmed, lowercased addresses — so does the form.
-		fireEvent.change(email, { target: { value: "  MARTA@Example.com " } });
-		expect(screen.getByText(CUSTOMER_EMAIL_TAKEN_MESSAGE)).toBeTruthy();
 	});
 });
 

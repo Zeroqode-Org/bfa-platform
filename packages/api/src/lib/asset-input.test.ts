@@ -209,6 +209,7 @@ describe("assetColumns", () => {
 		);
 
 		expect(Object.keys(columns).sort()).toEqual([
+			"accountNumber",
 			"annualTestDate",
 			"assemblyLocation",
 			"bfaType",
@@ -223,6 +224,33 @@ describe("assetColumns", () => {
 });
 
 describe("updateAssetInput", () => {
+	const id = "1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9";
+
+	it("keeps the account number when an older form does not send one", () => {
+		// A browser still holding the form from before 0025: the number the
+		// migration carried over must not be wiped by its whole-record save.
+		const columns = assetColumns(updateAssetInput.parse({ ...asset, id }));
+
+		expect(columns).not.toHaveProperty("accountNumber");
+	});
+
+	it("writes a sent account number, and clears one sent blank", () => {
+		expect(
+			assetColumns(
+				updateAssetInput.parse({ ...asset, id, accountNumber: " AC-1 " }),
+			).accountNumber,
+		).toBe("AC-1");
+		expect(
+			assetColumns(updateAssetInput.parse({ ...asset, id, accountNumber: "" }))
+				.accountNumber,
+		).toBeNull();
+		expect(
+			assetColumns(
+				updateAssetInput.parse({ ...asset, id, accountNumber: null }),
+			).accountNumber,
+		).toBeNull();
+	});
+
 	it("takes the whole record plus the row id", () => {
 		const parsed = updateAssetInput.parse({
 			...asset,

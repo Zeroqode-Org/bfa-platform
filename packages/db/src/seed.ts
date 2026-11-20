@@ -404,6 +404,18 @@ async function seedDatabase(authUserIds: SeedUserIds) {
 			);
 		}
 
+		// The account number belongs to the BIN since 0025. The seed keeps one per
+		// customer above for readability and hands it to the assets they occupy,
+		// the same carry-over the migration did.
+		await client.query(
+			`update bfa_assets as asset set account_number = customer.account_number
+			 from customers as customer
+			 where customer.id = asset.current_customer_id
+			   and asset.account_number is null
+			   and asset.water_purveyor_id = any($1::uuid[])`,
+			[[ids.wpHarbor, ids.wpRidge]],
+		);
+
 		const assignments = [
 			[
 				"10000000-0000-4000-8000-000000000091",

@@ -14,6 +14,12 @@ import { ASSET_FIELD_LIMITS } from "./asset-field-limits";
 import { type AuditActor, auditActorFields } from "./audit-actor";
 import { CUSTOMER_FIELD_LIMITS } from "./customer-field-limits";
 import {
+	comparableName,
+	customersWithEmail,
+	lockCustomerEmail,
+	matchCustomer,
+} from "./customer-match";
+import {
 	ASSEMBLY_FIELD_KEYS,
 	CUSTOMER_EMAIL_KEY,
 	CUSTOMER_NAME_KEY,
@@ -323,48 +329,110 @@ export function changedWizardKeys(
 }
 
 /**
- * The purveyor's customer with this email, or a new one when there is none.
+ * The line for a test whose customer could not be told apart, so a save that
+ * changed nothing about the occupant is visible as such. Counts, never
+ * addresses.
+ */
+function unresolved(
+	asset: { id: string; bin: string | null },
+	customersOnEmail: number,
+	reason: "shared_email_name_unmatched" | "no_name",
+): AssetSyncLog {
+	return {
+		event: "customer_not_resolved_from_test",
+		extra: {
+			asset_id: asset.id,
+			bin: asset.bin,
+			customers_on_email: customersOnEmail,
+			reason,
+		},
+	};
+}
+
+/** Renames the asset's occupant to the test's name, and says so in the log. */
+async function renameCustomer(
+	executor: JobExecutor,
+	waterPurveyorId: string,
+	customerId: string,
+	name: string,
+): Promise<AssetSyncLog[]> {
+	await executor
+		.update(customers)
+		.set({
+			name,
+			// The customer form's optimistic lock: a form opened before this
+			// rename is refused rather than allowed to put the old name back.
+			revision: sql`${customers.revision} + 1`,
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(customers.id, customerId),
+				eq(customers.waterPurveyorId, waterPurveyorId),
+			),
+		);
+
+	return [
+		{
+			event: "customer_updated_from_test",
+			extra: { customer_id: customerId, changed_fields: ["name"] },
+		},
+	];
+}
+
+/**
+ * The purveyor's customer this email and name point at, or a new one when
+ * nobody uses the email yet. See `customer-match.ts` for the rule.
  *
- * Matched the way the per-purveyor unique index compares — `lower(btrim())` —
- * so it finds exactly the customer a duplicate insert would collide with. A
- * new customer needs a name; without one, nobody is returned.
+ * Returns null — nobody is attached — when several customers share the email
+ * and the name does not single one out (`ambiguous`), and when a new customer
+ * would be needed but the test gave no name to create it with. Both leave the
+ * asset as one registered before its occupant is known: the purveyor attaches
+ * the customer from the asset's page, where the test's details are suggested.
  *
- * `on conflict do nothing` then a re-read, rather than catching the violation:
- * inside a transaction a failed insert aborts everything after it, and a
- * second clerk creating the same customer a moment earlier is not an error
- * here — it is the customer to use.
+ * A create runs under `lockCustomerEmail`, so two saves of the same new
+ * customer at once create one: the second waits for the first and then finds
+ * it. A save that finds its customer takes no lock.
  */
 export async function findOrCreateCustomer(
-	executor: Pick<typeof db, "select" | "insert">,
+	executor: Pick<typeof db, "select" | "insert" | "execute">,
 	waterPurveyorId: string,
 	{ name, email }: { name: string | null; email: string },
 ) {
-	const findExisting = async () => {
-		const [row] = await executor
-			.select({ id: customers.id, status: customers.status })
-			.from(customers)
-			.where(
-				and(
-					eq(customers.waterPurveyorId, waterPurveyorId),
-					sql`lower(btrim(${customers.email})) = ${email}`,
-				),
-			)
-			.limit(1);
+	const found = await matchCustomer(executor, waterPurveyorId, { email, name });
 
-		return row ? { ...row, created: false } : null;
-	};
+	if (found.kind === "match") {
+		return {
+			id: found.customer.id,
+			status: found.customer.status,
+			created: false,
+		};
+	}
 
-	const found = await findExisting();
+	if (found.kind === "ambiguous" || !name) return null;
 
-	if (found || !name) return found;
+	// Only a save about to create takes the lock — and then asks again, since a
+	// concurrent save may have created this customer between the two reads.
+	await lockCustomerEmail(executor, waterPurveyorId, email);
+
+	const match = await matchCustomer(executor, waterPurveyorId, { email, name });
+
+	if (match.kind === "match") {
+		return {
+			id: match.customer.id,
+			status: match.customer.status,
+			created: false,
+		};
+	}
+
+	if (match.kind === "ambiguous") return null;
 
 	const [inserted] = await executor
 		.insert(customers)
 		.values({ waterPurveyorId, name, email })
-		.onConflictDoNothing()
 		.returning({ id: customers.id, status: customers.status });
 
-	return inserted ? { ...inserted, created: true } : findExisting();
+	return inserted ? { ...inserted, created: true } : null;
 }
 
 /** A wizard customer email, normalised as `customer-input.ts` stores one, or null. */
@@ -405,13 +473,31 @@ async function isLatestForAsset(
 }
 
 /**
- * The test's customer onto the asset. Same email as the current occupant:
- * rename them if the name changed (and the name was one of the fields being
- * carried). Different email: that customer — found or created — becomes the
- * occupant, with the occupancy history closed and opened as `assignCustomer`
- * does it, and a held notice chain resumed for an active one.
+ * The test's customer onto the asset.
+ *
+ * **Same email as the current occupant, a different name** (and the name was
+ * among the fields carried):
+ * - the occupant is the only customer on that email → they are renamed, as
+ *   before shared emails;
+ * - exactly one *other* customer on the email has that name → the asset moves
+ *   to them. Deliberately without the email key being carried: the test's
+ *   email is the occupant's own, so the test is about this occupancy, and on a
+ *   shared inbox the name is what tells its customers apart;
+ * - otherwise (a name nobody else on the shared inbox has, or several do) →
+ *   nothing changes, and a `customer_not_resolved_from_test` line says so.
+ *   Renaming there would rename one store of a chain after a typo or a
+ *   different business.
+ *
+ * **Different email** (and the email was carried): the customer found or
+ * created by `findOrCreateCustomer` becomes the occupant, with the occupancy
+ * history closed and opened as `assignCustomer` does it, and a held notice
+ * chain resumed for an active one. Nobody found — a shared inbox the name does
+ * not resolve, or no name to create with — changes nothing and is logged.
+ *
+ * Exported for the database suite; the procedures reach it only through
+ * `syncAssetFromSubmission`.
  */
-async function syncCustomer({
+export async function syncCustomer({
 	executor,
 	asset,
 	waterPurveyorId,
@@ -455,45 +541,62 @@ async function syncCustomer({
 				.limit(1)
 		: [];
 
+	let customer: Awaited<ReturnType<typeof findOrCreateCustomer>>;
+
 	if (current && current.email.trim().toLowerCase() === email) {
 		if (!renameAllowed || !name || name === current.name) return [];
 
-		await executor
-			.update(customers)
-			.set({
-				name,
-				// The customer form's optimistic lock: a form opened before this
-				// rename is refused rather than allowed to put the old name back.
-				revision: sql`${customers.revision} + 1`,
-				updatedAt: new Date(),
-			})
-			.where(
-				and(
-					eq(customers.id, current.id),
-					eq(customers.waterPurveyorId, waterPurveyorId),
-				),
+		// On a shared inbox, a changed name can mean a different customer rather
+		// than a renamed one: the test of Iolani School's valve that says
+		// "Punahou School", both on the management company's address. See the
+		// rule above.
+		const onEmail = await customersWithEmail(executor, waterPurveyorId, email);
+		const others = onEmail.filter(
+			(candidate) =>
+				candidate.id !== current.id &&
+				comparableName(candidate.name) === comparableName(name),
+		);
+
+		const [sibling] = others;
+
+		if (others.length === 1 && sibling) {
+			customer = { id: sibling.id, status: sibling.status, created: false };
+		} else if (onEmail.length === 1) {
+			return renameCustomer(executor, waterPurveyorId, current.id, name);
+		} else {
+			return [unresolved(asset, onEmail.length, "shared_email_name_unmatched")];
+		}
+	} else {
+		// Moving the asset to another customer takes a changed email. A save
+		// that only renamed carries the test's email unchanged — and if the
+		// asset has been moved to someone else on its own page since the test,
+		// that email is the *old* occupant's, so acting on it would move the
+		// asset back.
+		if (!reassignAllowed) return [];
+
+		customer = await findOrCreateCustomer(executor, waterPurveyorId, {
+			name,
+			email,
+		});
+
+		if (!customer) {
+			const onEmail = await customersWithEmail(
+				executor,
+				waterPurveyorId,
+				email,
 			);
 
-		return [
-			{
-				event: "customer_updated_from_test",
-				extra: { customer_id: current.id, changed_fields: ["name"] },
-			},
-		];
+			return [
+				unresolved(
+					asset,
+					onEmail.length,
+					onEmail.length > 1 ? "shared_email_name_unmatched" : "no_name",
+				),
+			];
+		}
 	}
 
-	// Moving the asset to another customer takes a changed email. A save that
-	// only renamed carries the test's email unchanged — and if the asset has
-	// been moved to someone else on its own page since the test, that email is
-	// the *old* occupant's, so acting on it would move the asset back.
-	if (!reassignAllowed) return [];
-
-	const customer = await findOrCreateCustomer(executor, waterPurveyorId, {
-		name,
-		email,
-	});
-
-	if (!customer || customer.id === asset.currentCustomerId) return [];
+	if (customer.id === asset.currentCustomerId) return [];
 
 	await executor
 		.update(customerAssignments)

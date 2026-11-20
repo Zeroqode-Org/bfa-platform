@@ -43,7 +43,7 @@ describe("createCustomerInput", () => {
 		});
 
 		expect(parsed.status).toBe("active");
-		expect(parsed.accountNumber).toBeNull();
+		expect(parsed.attachAccountNumber).toBeNull();
 		expect(parsed.attachBin).toBeNull();
 	});
 
@@ -117,10 +117,10 @@ describe("createCustomerInput", () => {
 	it("collapses a blank optional field to null rather than storing an empty string", () => {
 		const parsed = createCustomerInput.parse({
 			...standard,
-			accountNumber: "   ",
+			attachAccountNumber: "   ",
 		});
 
-		expect(parsed.accountNumber).toBeNull();
+		expect(parsed.attachAccountNumber).toBeNull();
 	});
 
 	it("requires an AG renewal date on the agricultural rate", () => {

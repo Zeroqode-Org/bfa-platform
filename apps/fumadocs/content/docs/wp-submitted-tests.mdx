@@ -295,7 +295,7 @@ What the new asset gets:
 | BFA type | The test's BFA type |
 | Service address, make, model, serial number, size, assembly location | The wizard's assembly answers (`assemblyServiceAddress`, `assemblyMake`, …) |
 | Annual test date | The test date plus one year (29 February clamps to the 28th) |
-| Customer | The wizard's customer, matched by email (`lower(btrim(email))`, as the unique index compares) to an existing customer of this purveyor; created when there is none. No usable email, or a new customer with no name, leaves the asset unassigned. |
+| Customer | The wizard's customer, matched to an existing customer of this purveyor by email and — when several share the address — by name (`lib/customer-match.ts`); created when nobody uses the email. No usable email, a new customer with no name, or a shared address the name does not resolve leaves the asset unassigned. |
 
 When an asset gets a customer, an occupancy row is opened for that customer from today, the same way `createAsset` does it.
 
