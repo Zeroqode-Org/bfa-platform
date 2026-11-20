@@ -16,8 +16,9 @@
  * flag is checked when a job *runs* (`notice-handler.ts`), not when it is
  * queued, because switching the feature off has to stop notices that are
  * already scheduled and not merely prevent new ones. Scheduling against a
- * purveyor whose flag is off therefore costs one row that will cancel itself,
- * and buys the property that switching the flag on needs no backfill.
+ * purveyor whose flag is off therefore costs one row that will cancel itself
+ * when its day comes. A stage cancelled that way is final, so switching the
+ * flag back on re-schedules it — see `feature-restore.ts`.
  */
 
 import { db } from "@bfa-platform/db";

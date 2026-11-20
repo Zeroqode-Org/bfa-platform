@@ -73,6 +73,7 @@ import { type DeliveryPassKind, settleJobDelivery } from "./delivery";
 import {
 	cancelAgRenewalJobs,
 	cancelRunningJob,
+	cancelRunningJobWhileFeatureOff,
 	completeRunningJob,
 	type JobExecutor,
 	liveAgRenewalJobsForCustomer,
@@ -191,8 +192,8 @@ export async function reconcileAgRenewalNotice({
 	rateCategory: "standard" | "agricultural";
 	agRenewalDate: CalendarDay | null;
 	actor?: AuditActor | null;
-	trigger: "customer_created" | "customer_updated";
-}): Promise<void> {
+	trigger: "customer_created" | "customer_updated" | "feature_enabled";
+}): Promise<boolean> {
 	await lockCustomerForAgRenewal(executor, customerId);
 
 	if (rateCategory !== "agricultural" || !agRenewalDate) {
@@ -208,14 +209,14 @@ export async function reconcileAgRenewalNotice({
 					: AG_RENEWAL_CANCEL_REASONS.noRenewalDate,
 		});
 
-		return;
+		return false;
 	}
 
 	const live = await liveAgRenewalJobsForCustomer({ executor, customerId });
 
 	const [only] = live;
 	if (live.length === 1 && only?.agRenewalDate === agRenewalDate) {
-		return;
+		return false;
 	}
 
 	await withdraw({
@@ -237,7 +238,7 @@ export async function reconcileAgRenewalNotice({
 	// `null` only if a concurrent writer inserted the live row first — which
 	// the row lock above makes impossible for callers that take it, and which
 	// is the idempotent outcome for any that do not.
-	if (!scheduled) return;
+	if (!scheduled) return false;
 
 	logSchedulerEvent("scheduler_job_scheduled", {
 		jobId: scheduled.id,
@@ -252,6 +253,8 @@ export async function reconcileAgRenewalNotice({
 			replaced_job_ids: live.map((job) => job.id),
 		},
 	});
+
+	return true;
 }
 
 async function withdraw({
@@ -370,7 +373,18 @@ export async function runAgRenewalJob(
 	}
 
 	if (!(await agRenewalNoticeEnabled(customer.waterPurveyorId))) {
-		return cancel(job, AG_RENEWAL_CANCEL_REASONS.featureDisabled);
+		const gate = await cancelRunningJobWhileFeatureOff({
+			jobId: job.id,
+			waterPurveyorId: customer.waterPurveyorId,
+			feature: "ag_renewal_notice",
+			reason: AG_RENEWAL_CANCEL_REASONS.featureDisabled,
+		});
+
+		if (gate === "superseded") return { kind: "superseded" };
+		if (gate === "cancelled") {
+			return logCancelled(job, AG_RENEWAL_CANCEL_REASONS.featureDisabled);
+		}
+		// "enabled": switched on while this job was being looked at — send it.
 	}
 
 	const settlement = await settleJobDelivery<RenderedAgRenewal>({
@@ -709,6 +723,10 @@ async function cancel(
 
 	if (!cancelled) return { kind: "superseded" };
 
+	return logCancelled(job, reason);
+}
+
+function logCancelled(job: ScheduledJob, reason: string): AgRenewalOutcome {
 	logSchedulerEvent("scheduler_job_cancelled", {
 		jobId: job.id,
 		jobType: "ag_renewal",

@@ -304,7 +304,7 @@ opened before the transition from putting the old date back. Copy in
 
 Every protected procedure and every route gate resolves the effective identity through one helper, `resolveEffectiveCaller`. It re-checks both accounts on every request, and no feature router carries impersonation code. The persistent banner and the WP list's Impersonate action now run through the server; the client-only demo store is gone. No migration ships with it.
 
-Still open in this section: feature-flag toggles, and certifier impersonation (not in this pass). Full writeup: [Super-Admin Impersonation](/docs/super-admin-impersonation).
+The ENS switch (automated notices, per WP) ships as a column in the Super-Admin purveyor list (`superAdmin.setFeatureFlag`); switching it on restores what the switch-off cancelled. The AG renewal flag has the same procedure but no switch yet. Still open in this section: certifier impersonation (not in this pass). Full writeup: [Super-Admin Impersonation](/docs/super-admin-impersonation).
 
 **Carries a new open question.** The WP list names purveyors, and the cookie has to name a profile. The shipped default targets the purveyor's **earliest-created active `wp_admin`**, the account the Contact column shows. It refuses purveyors with no active admin, and blocked purveyors. What should happen when a purveyor has several active admins is unconfirmed.
 

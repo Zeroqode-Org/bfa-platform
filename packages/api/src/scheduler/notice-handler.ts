@@ -80,6 +80,7 @@ import {
 import { type DeliveryPassKind, settleJobDelivery } from "./delivery";
 import {
 	cancelRunningJob,
+	cancelRunningJobWhileFeatureOff,
 	completeRunningJob,
 	lockAssetForChain,
 	noticeIdempotencyKey,
@@ -172,7 +173,18 @@ export async function runNoticeJob(
 	}
 
 	if (!(await automatedNoticesEnabled(asset.waterPurveyorId))) {
-		return cancel(job, stage, CANCEL_REASONS.featureDisabled);
+		const gate = await cancelRunningJobWhileFeatureOff({
+			jobId: job.id,
+			waterPurveyorId: asset.waterPurveyorId,
+			feature: "automated_notices",
+			reason: CANCEL_REASONS.featureDisabled,
+		});
+
+		if (gate === "superseded") return { kind: "superseded" };
+		if (gate === "cancelled") {
+			return logCancelled(job, stage, CANCEL_REASONS.featureDisabled);
+		}
+		// "enabled": switched on while this job was being looked at — send it.
 	}
 
 	// Everything from "is a payload frozen yet" to "the provider confirmed" is
@@ -558,6 +570,14 @@ async function cancel(
 
 	if (!cancelled) return { kind: "superseded" };
 
+	return logCancelled(job, stage, reason);
+}
+
+function logCancelled(
+	job: ScheduledJob,
+	stage: NoticeType,
+	reason: string,
+): NoticeJobOutcome {
 	logSchedulerEvent("scheduler_job_cancelled", {
 		jobId: job.id,
 		jobType: stage,

@@ -29,6 +29,7 @@ import { db } from "@bfa-platform/db";
 import {
 	type FrozenEmailPayload,
 	scheduledJobs,
+	wpFeatureFlags,
 } from "@bfa-platform/db/schema";
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
@@ -741,6 +742,57 @@ export async function cancelRunningJob({
 		.returning();
 
 	return row ?? null;
+}
+
+/**
+ * Cancels a running job because its feature is switched off — but only if it
+ * still is, decided in a transaction that serialises with the switch.
+ *
+ * The handler reads the flag without a lock, and switching it on restores the
+ * jobs the switch-off cancelled (`feature-restore.ts`). Without this, a
+ * handler that read "off" just before the switch could cancel its job just
+ * after the restore had looked — the restore skipped it as live, the handler
+ * then made it dead, and the asset would stay silent with the flag on.
+ *
+ * `FOR SHARE` on the purveyor row conflicts with the `FOR NO KEY UPDATE`
+ * the switch takes (and with nothing else that writes the row's children), so
+ * the two run one after the other: either this commits first and the restore
+ * sees the cancellation, or the switch commits first and this re-reads the
+ * flag as on and leaves the job running for the handler to send.
+ */
+export async function cancelRunningJobWhileFeatureOff({
+	jobId,
+	waterPurveyorId,
+	feature,
+	reason,
+}: {
+	jobId: string;
+	waterPurveyorId: string;
+	feature: "automated_notices" | "ag_renewal_notice";
+	reason: string;
+}): Promise<"cancelled" | "enabled" | "superseded"> {
+	return db.transaction(async (tx) => {
+		await tx.execute(
+			sql`select 1 from water_purveyors where id = ${waterPurveyorId} for share`,
+		);
+
+		const [flag] = await tx
+			.select({ isEnabled: wpFeatureFlags.isEnabled })
+			.from(wpFeatureFlags)
+			.where(
+				and(
+					eq(wpFeatureFlags.waterPurveyorId, waterPurveyorId),
+					eq(wpFeatureFlags.feature, feature),
+				),
+			)
+			.limit(1);
+
+		if (flag?.isEnabled === true) return "enabled";
+
+		const cancelled = await cancelRunningJob({ executor: tx, jobId, reason });
+
+		return cancelled ? "cancelled" : "superseded";
+	});
 }
 
 /**
