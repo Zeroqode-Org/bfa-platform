@@ -18,7 +18,7 @@ the [build plan](/docs/build-plan) and PRD § 6.6.4.
 | `name` | yes | Trimmed; a name of only spaces is empty, not valid |
 | `email` | yes | Lowercased and trimmed, so one address has one spelling. Several customers may share one — see [Shared email addresses](#shared-email-addresses) |
 | BIN (`attachBin`) | yes, while the customer holds no asset | Not a column — the BIN of an asset to attach the customer to on save. See [The BIN](#the-bin) |
-| Account number (`attachAccountNumber`) | no | Not a column of the customer since 0025 — the account number belongs to the BIN (`bfa_assets.account_number`). Asked for beside the BIN being attached and saved onto that asset; blank leaves the asset's number as it is. An attached BIN's number is changed on the asset's own form |
+| Account number (`attachAccountNumber`) | no | Not a column of the customer since 0025 (the old column was dropped in 0026) — the account number belongs to the BIN (`bfa_assets.account_number`). Asked for beside the BIN being attached and saved onto that asset; blank leaves the asset's number as it is. An attached BIN's number is changed on the asset's own form |
 | `address` | yes | Trimmed; required on every save (WP/Admin feedback). The column stays nullable, so a row saved before the rule still reads — editing it means filling it in |
 | `rate_category` | yes | `standard` or `agricultural`; agricultural gets the purple badge |
 | `ag_renewal_date` | agricultural only | Required on the agricultural rate, refused on the standard one |

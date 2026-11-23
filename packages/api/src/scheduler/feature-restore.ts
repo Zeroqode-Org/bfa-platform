@@ -33,14 +33,10 @@ import { bfaAssets, customers, scheduledJobs } from "@bfa-platform/db/schema";
 import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 
 import type { AuditActor } from "../lib/audit-actor";
-import {
-	type CalendarDay,
-	compareCalendarDays,
-	honoluluToday,
-} from "../lib/honolulu-dates";
+import { honoluluToday } from "../lib/honolulu-dates";
 import type { NoticeType } from "../lib/notice-defaults";
 import {
-	NOTICE_STAGES,
+	currentStageFrom,
 	noticeDueDay,
 	noticeRunAt,
 } from "../lib/notice-schedule";
@@ -79,31 +75,6 @@ export function noticeStageToRestore(
 	if (latest.lastError !== CANCEL_REASONS.featureDisabled) return null;
 
 	return isNoticeJobType(latest.jobType) ? latest.jobType : null;
-}
-
-/**
- * Which stage a restored chain sends next: the cancelled stage when it is not
- * due yet, otherwise the latest stage at or after it whose day has come.
- *
- * Pure — `today` is the Hawaii calendar day — so the "one email for where the
- * calendar is now" rule is checkable without a clock or a database.
- */
-export function currentStageFrom(
-	cancelledStage: NoticeType,
-	annualTestDate: CalendarDay,
-	today: CalendarDay,
-): NoticeType {
-	const from = NOTICE_STAGES.indexOf(cancelledStage);
-	let current = cancelledStage;
-
-	for (const stage of NOTICE_STAGES.slice(from)) {
-		if (compareCalendarDays(noticeDueDay(annualTestDate, stage), today) > 0) {
-			break;
-		}
-		current = stage;
-	}
-
-	return current;
 }
 
 /** Whether a customer's newest AG renewal job was cancelled by the flag. */

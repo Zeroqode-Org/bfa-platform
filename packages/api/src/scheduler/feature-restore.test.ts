@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@bfa-platform/db", () => ({ db: {} }));
 
-const { agRenewalNeedsRestore, currentStageFrom, noticeStageToRestore } =
-	await import("./feature-restore");
+const { agRenewalNeedsRestore, noticeStageToRestore } = await import(
+	"./feature-restore"
+);
+const { currentStageFrom } = await import("../lib/notice-schedule");
 const { CANCEL_REASONS } = await import("./notice-chain");
 const { AG_RENEWAL_CANCEL_REASONS } = await import("./ag-renewal");
 

@@ -123,6 +123,37 @@ export function noticeRunAt(
  * date or a switched-off feature flag all have to remember to cancel, and one
  * row that does not exist yet cannot be forgotten.
  */
+/**
+ * Which stage a chain sends next when it starts — or restarts — on `today`:
+ * `from` when its day has not come yet, otherwise the latest stage at or
+ * after `from` whose day has.
+ *
+ * One email for where the calendar is now. A chain started for an assembly
+ * whose deadline passed long ago would otherwise send the reminder on the next
+ * tick and every late notice on the ticks after it — four emails in a quarter
+ * of an hour about one valve. Starting at the stage already due sends one, and
+ * its successor then waits for its own, future day. Never earlier than
+ * `from`: a restored chain's earlier stages were already sent.
+ *
+ * Pure; `today` is the Hawaii calendar day.
+ */
+export function currentStageFrom(
+	from: NoticeType,
+	annualTestDate: CalendarDay,
+	today: CalendarDay,
+): NoticeType {
+	let current = from;
+
+	for (const stage of NOTICE_STAGES.slice(NOTICE_STAGES.indexOf(from))) {
+		if (compareCalendarDays(noticeDueDay(annualTestDate, stage), today) > 0) {
+			break;
+		}
+		current = stage;
+	}
+
+	return current;
+}
+
 export function nextNoticeStage(stage: NoticeType): NoticeType | null {
 	const index = NOTICE_STAGES.indexOf(stage);
 

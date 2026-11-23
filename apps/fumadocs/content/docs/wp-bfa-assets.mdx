@@ -136,8 +136,9 @@ redundant reconciliation writes nothing, moves no `updated_at` and emits no
 scheduling line. Same rule as [a save that changes
 nothing](#a-save-that-changes-nothing-writes-nothing).
 
-A date already in the past still schedules a reminder, which is what lets a
-long-overdue assembly catch up through the escalation rather than stay silent.
+A date already in the past still schedules a notice: the stage already due
+(the late or final notice), sent once on the next tick, rather than silence or a
+reminder followed by every late notice at once.
 
 ### Why the status is not on the form
 

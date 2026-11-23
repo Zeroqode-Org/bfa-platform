@@ -122,6 +122,14 @@ const customerIds = {
 /** Today, six months ago, and a year out — in Hawaii, which is what schedules. */
 const today = honoluluToday();
 const longOverdueDate = addCalendarMonths(today, -6);
+/**
+ * What a fixture asset is due on unless a test says otherwise: ten days out.
+ * The reminder's day (two months earlier) has passed and late notice 1's has
+ * not, so a new asset's chain starts at the reminder — the stage the
+ * escalation tests walk from. A long-overdue asset starts at the stage
+ * already due instead (`currentStageFrom`), which has its own test.
+ */
+const defaultDueDate = addCalendarDays(today, 10);
 const futureDate = addCalendarMonths(today, 12);
 
 const CUSTOM_REMINDER_SUBJECT = "Test due {{due_date}} at {{service_address}}";
@@ -205,7 +213,7 @@ function newAsset(overrides: Partial<CreateAssetInput> = {}): CreateAssetInput {
 		model: "909",
 		serialNumber: "SN-1",
 		size: "2 in",
-		annualTestDate: longOverdueDate,
+		annualTestDate: defaultDueDate,
 		...overrides,
 	} as CreateAssetInput;
 }
@@ -655,15 +663,32 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			});
 		});
 
-		it("schedules the reminder for a past-due asset too, so the escalation can catch up", async () => {
+		it("starts a long-overdue asset at the stage already due: one email, not a burst", async () => {
+			// Six months overdue: every stage's day has passed, so the chain is
+			// the final notice alone, due on the next tick.
 			const asset = await callerFor(ids.adminA).assets.createAsset(
 				newAsset({ annualTestDate: longOverdueDate }),
 			);
 
 			const rows = await jobsFor(asset.id);
 
-			expect(rows).toHaveLength(1);
+			expect(rows.map((row) => row.job_type)).toEqual(["final_notice"]);
+			expect(rows[0]?.run_at.toISOString()).toBe(
+				noticeRunAt(longOverdueDate, "final_notice").toISOString(),
+			);
 			expect(rows[0]?.run_at.getTime()).toBeLessThan(Date.now());
+		});
+
+		it("starts a recently overdue asset at the late notice now due", async () => {
+			// Five days past due: late notice 1 (due + 1) has come, late notice 2
+			// (due + 32) has not.
+			const asset = await callerFor(ids.adminA).assets.createAsset(
+				newAsset({ annualTestDate: addCalendarDays(today, -5) }),
+			);
+
+			const rows = await jobsFor(asset.id);
+
+			expect(rows.map((row) => row.job_type)).toEqual(["late_notice_1"]);
 		});
 
 		it("does not pre-create the rest of the chain", async () => {
@@ -1317,10 +1342,10 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			const sent = deliveries(lines)[0];
 			const html = String(sent?.html);
 
-			expect(sent?.subject).toBe(`Test due ${longOverdueDate} at 7 Reef Lane`);
+			expect(sent?.subject).toBe(`Test due ${defaultDueDate} at 7 Reef Lane`);
 			expect(html).toContain("Aloha Marta Ellison,");
 			expect(html).toContain(`Your PVB assembly, BIN ${asset.bin}`);
-			expect(html).toContain(longOverdueDate);
+			expect(html).toContain(defaultDueDate);
 			expect(html).toContain("Kalani Water Works");
 			// Nothing left unresolved.
 			expect(html).not.toContain("{{");
@@ -1407,7 +1432,7 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 					expect(live).toHaveLength(1);
 					expect(live[0]?.run_at.toISOString()).toBe(
 						noticeRunAt(
-							longOverdueDate,
+							defaultDueDate,
 							live[0]?.job_type as NoticeType,
 						).toISOString(),
 					);
@@ -1429,15 +1454,15 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			const asset = await callerFor(ids.adminA).assets.createAsset(
 				newAsset({
 					currentCustomerId: customerIds.primary,
-					annualTestDate: longOverdueDate,
+					annualTestDate: defaultDueDate,
 				}),
 			);
 
 			const dueDays = [
-				addCalendarMonths(longOverdueDate, -2),
-				addCalendarDays(longOverdueDate, 1),
-				addCalendarDays(longOverdueDate, 32),
-				addCalendarDays(longOverdueDate, 63),
+				addCalendarMonths(defaultDueDate, -2),
+				addCalendarDays(defaultDueDate, 1),
+				addCalendarDays(defaultDueDate, 32),
+				addCalendarDays(defaultDueDate, 63),
 			];
 
 			for (const dueDay of dueDays) {
@@ -1484,11 +1509,11 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 		/**
 		 * What a linked pass leaves behind now: the assembly moved to its next
 		 * cycle (WP/Admin feedback) and exactly one pending reminder for it.
-		 * Every asset here is due `longOverdueDate`, six months ago, and every
+		 * Every asset here is due `defaultDueDate`, ten days out, and every
 		 * test is dated today — so the next cycle is a year after the old date.
 		 */
 		async function expectNextCycle(assetId: string) {
-			const nextDate = addCalendarYears(longOverdueDate, 1);
+			const nextDate = addCalendarYears(defaultDueDate, 1);
 			const { rows } = await pool.query<{ annual_test_date: string }>(
 				"select annual_test_date::text from bfa_assets where id = $1",
 				[assetId],
@@ -1623,7 +1648,7 @@ describeDb("Workflow 1 — reminder and escalating late notices", () => {
 			await expect(
 				caller.assets.updateAsset({
 					...openedForm,
-					annualTestDate: addCalendarDays(longOverdueDate, 5),
+					annualTestDate: addCalendarDays(defaultDueDate, 5),
 				}),
 			).rejects.toMatchObject({
 				code: "CONFLICT",
