@@ -183,6 +183,13 @@
 			"when": 1793200000000,
 			"tag": "0025_asset_account_number",
 			"breakpoints": true
+		},
+		{
+			"idx": 26,
+			"version": "7",
+			"when": 1793300000000,
+			"tag": "0026_drop_customer_account_number",
+			"breakpoints": true
 		}
 	]
 }

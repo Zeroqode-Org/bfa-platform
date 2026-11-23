@@ -31,7 +31,11 @@ import {
 	compareCalendarDays,
 	honoluluToday,
 } from "../lib/honolulu-dates";
-import { noticeDueDay, noticeRunAt } from "../lib/notice-schedule";
+import {
+	currentStageFrom,
+	noticeDueDay,
+	noticeRunAt,
+} from "../lib/notice-schedule";
 import {
 	cancelAssetNoticeJobs,
 	insertNoticeJob,
@@ -91,23 +95,28 @@ type ChainContext = {
  *    complete it and no successor is scheduled from the old date. Rewriting the
  *    reminder's `run_at` in place cannot do that, because a running row is
  *    deliberately never rewritten.
- * 2. Exactly one replacement reminder is inserted, for the new date. It is a
- *    fresh row with a fresh id, and therefore a fresh provider idempotency key,
- *    so it can never be confused with an attempt made for the old date.
+ * 2. Exactly one replacement stage is inserted, for the new date — the
+ *    reminder, or for an overdue date the stage already due (see below). It
+ *    is a fresh row with a fresh id, and therefore a fresh provider
+ *    idempotency key, so it can never be confused with an attempt made for
+ *    the old date.
  * 3. The asset lock (`lockAssetForChain`) is what keeps this atomic against a
  *    handler finishing a stage at the same moment: the two serialise, so either
  *    the handler's successor is committed before this runs and is cancelled by
  *    step 1, or this commits first and the handler finds its row cancelled.
  *
- * The reminder is scheduled even when its day is already in the past. That is
- * what makes a purveyor who registers a long-overdue assembly get the
- * escalation rather than silence: the stage fires on the next tick, its
- * successor is scheduled immediately after, and the chain catches up in order.
- * It is also the build plan's acceptance criterion — "the full escalation fires
- * in order against a seeded past-due asset".
+ * A long-overdue assembly is not left silent, and is not flooded either. The
+ * chain starts at the stage the calendar says is current (`currentStageFrom`):
+ * the reminder while the due date is ahead; once it has passed, the latest
+ * stage already due — which goes out on the next tick, its successor then
+ * waiting for its own, future day. Until November 2026 it started at the
+ * reminder and caught up in order, so registering an assembly a year overdue
+ * mailed its customer four notices within a quarter of an hour (client data,
+ * 2026-11-20); the escalation still runs to the end, one email at a time.
  *
- * A chain already in the target state — one live reminder at exactly this
- * `run_at` and nothing else — is left alone: no cancel, no insert, no log line.
+ * A chain already in the target state — one live job of that stage at exactly
+ * this `run_at` and nothing else — is left alone: no cancel, no insert, no log
+ * line.
  * Callers guard on the date actually changing as well, so the ordinary save
  * does not reach this function at all.
  */
@@ -117,6 +126,7 @@ export async function reconcileAssetNoticeChain({
 	waterPurveyorId,
 	annualTestDate,
 	actor = null,
+	now = new Date(),
 	trigger,
 }: ChainContext & {
 	annualTestDate: CalendarDay | null;
@@ -147,7 +157,15 @@ export async function reconcileAssetNoticeChain({
 		return;
 	}
 
-	const runAt = noticeRunAt(annualTestDate, "reminder");
+	// The stage the calendar says is current — the reminder for anything not
+	// yet overdue, the latest stage already due for anything that is. See
+	// `currentStageFrom`: one email for an overdue assembly, not four.
+	const stage = currentStageFrom(
+		"reminder",
+		annualTestDate,
+		honoluluToday(now),
+	);
+	const runAt = noticeRunAt(annualTestDate, stage);
 	const live = await liveNoticeJobsForAsset({ executor, assetId });
 
 	// Already exactly right: nothing to write, and nothing to log. The same rule
@@ -155,7 +173,7 @@ export async function reconcileAssetNoticeChain({
 	const [only] = live;
 	if (
 		live.length === 1 &&
-		only?.jobType === "reminder" &&
+		only?.jobType === stage &&
 		only.runAt.getTime() === runAt.getTime()
 	) {
 		return;
@@ -174,7 +192,7 @@ export async function reconcileAssetNoticeChain({
 		executor,
 		assetId,
 		waterPurveyorId,
-		stage: "reminder",
+		stage,
 		runAt,
 	});
 
@@ -187,7 +205,7 @@ export async function reconcileAssetNoticeChain({
 		extra: {
 			trigger,
 			annual_test_date: annualTestDate,
-			due_day: noticeDueDay(annualTestDate, "reminder"),
+			due_day: noticeDueDay(annualTestDate, stage),
 			run_at: runAt.toISOString(),
 			replaced_job_ids: live.map((job) => job.id),
 		},

@@ -19,10 +19,6 @@ export const customers = pgTable(
 		waterPurveyorId: uuid("water_purveyor_id")
 			.notNull()
 			.references(() => waterPurveyors.id),
-		// Deprecated (0025): the account number moved to `bfa_assets`, one per
-		// BIN. Nothing reads or writes this column; a later migration copies any
-		// value left here onto the assets and drops it.
-		accountNumber: text("account_number"),
 		name: text("name").notNull(),
 		address: text("address"),
 		email: text("email").notNull(),

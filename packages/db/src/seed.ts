@@ -287,15 +287,17 @@ async function seedDatabase(authUserIds: SeedUserIds) {
 				dates.agRenewal,
 			],
 		] as const;
-		for (const customer of customers) {
+		// The third value is the customer's WP account number. Since 0025 it
+		// belongs to the BIN, so it is handed to the assets they occupy below.
+		for (const [id, wp, , ...rest] of customers) {
 			await client.query(
-				`insert into customers (id, water_purveyor_id, account_number, name, address, email, rate_category, ag_renewal_date, status)
-				 values ($1, $2, $3, $4, $5, $6, $7::rate_category, $8, 'active')
+				`insert into customers (id, water_purveyor_id, name, address, email, rate_category, ag_renewal_date, status)
+				 values ($1, $2, $3, $4, $5, $6::rate_category, $7, 'active')
 				 on conflict (id) do update set water_purveyor_id = excluded.water_purveyor_id,
-				 account_number = excluded.account_number, name = excluded.name, address = excluded.address,
+				 name = excluded.name, address = excluded.address,
 				 email = excluded.email, rate_category = excluded.rate_category,
 				 ag_renewal_date = excluded.ag_renewal_date, status = excluded.status`,
-				[...customer],
+				[id, wp, ...rest],
 			);
 		}
 
@@ -404,17 +406,16 @@ async function seedDatabase(authUserIds: SeedUserIds) {
 			);
 		}
 
-		// The account number belongs to the BIN since 0025. The seed keeps one per
-		// customer above for readability and hands it to the assets they occupy,
-		// the same carry-over the migration did.
-		await client.query(
-			`update bfa_assets as asset set account_number = customer.account_number
-			 from customers as customer
-			 where customer.id = asset.current_customer_id
-			   and asset.account_number is null
-			   and asset.water_purveyor_id = any($1::uuid[])`,
-			[[ids.wpHarbor, ids.wpRidge]],
-		);
+		// Each customer's account number onto the assets they occupy, unless
+		// an asset already has its own (a reseed must not overwrite one).
+		for (const [customerId, wp, accountNumber] of customers) {
+			await client.query(
+				`update bfa_assets set account_number = $3
+				 where current_customer_id = $1 and water_purveyor_id = $2
+				   and account_number is null`,
+				[customerId, wp, accountNumber],
+			);
+		}
 
 		const assignments = [
 			[

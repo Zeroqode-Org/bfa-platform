@@ -600,12 +600,15 @@ A date change and a handler finishing a stage serialise on the asset's row lock
 commit while a handler's successor insert was still invisible to it, and that
 successor would survive, computed from the old date.
 
-The reminder is scheduled **even when its day is already in the past**. That is
-what makes a purveyor who registers a long-overdue assembly get the escalation
-rather than silence: the stage fires on the next tick, its successor is scheduled
-immediately after, and the chain catches up in order. It is also the build plan's
-acceptance criterion — *the full escalation fires in order against a seeded
-past-due asset*.
+A long-overdue assembly gets **one email for where the calendar is now**, not
+silence and not a burst. The chain starts at the stage that is current
+(`currentStageFrom` in `lib/notice-schedule.ts`): the reminder while the due
+date is ahead, otherwise the latest stage already due, which goes out on the next
+tick; its successor then waits for its own, future day. Until November 2026 the
+chain started at the reminder and caught up in order, so registering an assembly
+long past its date sent the reminder and three late notices within a quarter of
+an hour (seen on client data, 2026-11-20). The same rule decides where a chain
+restarts when automated notices are switched back on.
 
 ### Nothing is written when nothing changed
 
